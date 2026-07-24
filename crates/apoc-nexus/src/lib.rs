@@ -20,10 +20,12 @@
 
 pub mod api;
 pub mod protocol;
+pub mod sso;
 pub mod url;
 
 pub use api::{DownloadLink, NexusClient, NexusError, RateLimits, UserInfo};
 pub use protocol::{register, status as protocol_status, unregister, Registration};
+pub use sso::{sign_in, SsoError, SsoObserver, SsoResult};
 pub use url::{parse as parse_nxm, NxmError, NxmLink, NxmTarget};
 
 use serde::{Deserialize, Serialize};

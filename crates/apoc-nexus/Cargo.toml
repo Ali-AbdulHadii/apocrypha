@@ -12,3 +12,5 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 # rustls rather than native-tls so the build does not depend on system OpenSSL.
 ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
+# Browser sign-in speaks websocket. rustls so no system OpenSSL is needed.
+tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }

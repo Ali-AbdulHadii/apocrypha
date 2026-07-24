@@ -25,6 +25,8 @@ const KEY_SOURCE: &str = "download_source";
 const KEY_USER: &str = "nexus_user_name";
 const KEY_PREMIUM: &str = "nexus_is_premium";
 const KEY_USER_ID: &str = "nexus_user_id";
+const KEY_SSO_SLUG: &str = "nexus_sso_application";
+const KEY_SSO_TOKEN: &str = "nexus_sso_token";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +41,9 @@ pub struct NexusStatusView {
     pub handler_is_default: bool,
     pub current_handler: Option<String>,
     pub desktop_file: String,
+    /// Nexus-issued application id. Browser sign-in cannot work without one.
+    pub sso_application: String,
+    pub can_sign_in: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -87,6 +92,8 @@ pub fn nexus_status(state: State<AppState>) -> CmdResult<NexusStatusView> {
         handler_is_default: reg.is_default,
         current_handler: reg.current_handler,
         desktop_file: reg.desktop_file.display().to_string(),
+        sso_application: get(KEY_SSO_SLUG).unwrap_or_default(),
+        can_sign_in: get(KEY_SSO_SLUG).is_some_and(|s| !s.trim().is_empty()),
     })
 }
 
@@ -113,7 +120,7 @@ pub fn set_nexus_api_key(state: State<AppState>, api_key: String) -> CmdResult<N
 
     if trimmed.is_empty() {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
-        for k in [KEY_API, KEY_USER, KEY_PREMIUM, KEY_USER_ID] {
+        for k in [KEY_API, KEY_USER, KEY_PREMIUM, KEY_USER_ID, KEY_SSO_TOKEN] {
             store.set_setting(k, "").map_err(|e| e.to_string())?;
         }
         drop(store);
@@ -132,6 +139,81 @@ pub fn set_nexus_api_key(state: State<AppState>, api_key: String) -> CmdResult<N
             .map_err(|e| e.to_string())?;
         store
             .set_setting(KEY_USER_ID, &user.user_id.to_string())
+            .map_err(|e| e.to_string())?;
+    }
+    nexus_status(state)
+}
+
+/// Sign in through the browser instead of pasting a key.
+///
+/// Nexus issues the application id that this flow needs, and only Nexus can
+/// issue it. Until Apocrypha has one, this returns a clear error rather than
+/// failing obscurely, and pasting a personal key remains available.
+#[tauri::command]
+pub fn nexus_sign_in(app: tauri::AppHandle, state: State<AppState>) -> CmdResult<NexusStatusView> {
+    let slug = {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .get_setting(KEY_SSO_SLUG)
+            .map_err(|e| e.to_string())?
+            .unwrap_or_default()
+    };
+
+    let previous = {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .get_setting(KEY_SSO_TOKEN)
+            .map_err(|e| e.to_string())?
+            .filter(|t| !t.is_empty())
+    };
+
+    // The browser step happens partway through, so the observer opens the page
+    // and tells the interface what is going on while the socket stays open.
+    struct Opener(tauri::AppHandle);
+    impl apoc_nexus::SsoObserver for Opener {
+        fn awaiting_approval(&self, url: &str) {
+            use tauri::Emitter;
+            let _ = self.0.emit("nexus-sso-awaiting", url.to_string());
+            let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+        }
+    }
+
+    let result = apoc_nexus::sign_in(&slug, previous.as_deref(), &Opener(app))
+        .map_err(|e| e.to_string())?;
+
+    // Validate straight away so the stored account details are real rather than
+    // assumed from a successful handshake.
+    let probe = NexusClient::new(result.api_key.clone(), APP_NAME, APP_VERSION);
+    let (user, _) = probe.validate().map_err(|e| e.to_string())?;
+
+    {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .set_setting(KEY_API, &result.api_key)
+            .map_err(|e| e.to_string())?;
+        store.set_setting(KEY_USER, &user.name).map_err(|e| e.to_string())?;
+        store
+            .set_setting(KEY_PREMIUM, if user.is_premium { "true" } else { "false" })
+            .map_err(|e| e.to_string())?;
+        store
+            .set_setting(KEY_USER_ID, &user.user_id.to_string())
+            .map_err(|e| e.to_string())?;
+        if let Some(token) = result.connection_token {
+            store
+                .set_setting(KEY_SSO_TOKEN, &token)
+                .map_err(|e| e.to_string())?;
+        }
+    }
+    nexus_status(state)
+}
+
+/// Set the Nexus-issued application id used for browser sign-in.
+#[tauri::command]
+pub fn set_sso_application(state: State<AppState>, slug: String) -> CmdResult<NexusStatusView> {
+    {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .set_setting(KEY_SSO_SLUG, slug.trim())
             .map_err(|e| e.to_string())?;
     }
     nexus_status(state)

@@ -112,6 +112,9 @@ export interface NexusStatusView {
   handlerIsDefault: boolean;
   currentHandler: string | null;
   desktopFile: string;
+  /** Nexus-issued application id. Browser sign-in needs one. */
+  ssoApplication: string;
+  canSignIn: boolean;
 }
 
 export interface NxmLinkView {
@@ -214,6 +217,9 @@ export const api = {
     call<string>("open_mod_page", { domain, modId, fileId }),
   downloadFromNxm: (url: string) =>
     call<DownloadResultView>("download_from_nxm", { url }),
+  nexusSignIn: () => call<NexusStatusView>("nexus_sign_in"),
+  setSsoApplication: (slug: string) =>
+    call<NexusStatusView>("set_sso_application", { slug }),
 
   /** Open a URL in the user's browser. */
   openUrl: async (url: string) => {

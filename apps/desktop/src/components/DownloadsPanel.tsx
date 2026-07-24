@@ -158,46 +158,117 @@ export function DownloadsPanel({
         ) : (
           <>
             <div className="row">
-              <input
-                className="input"
-                style={{ flex: 1 }}
-                type="password"
-                placeholder="Paste your personal API key"
-                value={key}
-                onChange={(e) => setKey(e.target.value)}
-              />
               <button
                 className="btn primary"
-                disabled={busy || !key.trim()}
+                disabled={busy || !status.canSignIn}
                 onClick={async () => {
+                  onInfo("Approve the sign-in in your browser", "info");
                   const next = await run(
-                    () => api.setNexusApiKey(key.trim()),
-                    "Nexus Mods account connected",
+                    () => api.nexusSignIn(),
+                    "Signed in to Nexus Mods",
                   );
-                  if (next) {
-                    setStatus(next);
-                    setKey("");
-                  }
+                  if (next) setStatus(next);
                 }}
               >
-                Connect
+                Sign in with Nexus Mods
               </button>
+              <span className="card-hint">
+                Opens your browser, no key to copy.
+              </span>
             </div>
-            <div className="card-hint">
-              Get a key from your Nexus Mods account settings. It is kept on this
-              computer and only ever sent to Nexus Mods.
-              <button
-                className="btn sm ghost"
-                style={{ marginLeft: "var(--sp-3)" }}
-                onClick={() =>
-                  api
-                    .openUrl("https://next.nexusmods.com/settings/api-keys")
-                    .catch(onError)
-                }
+
+            {!status.canSignIn && (
+              <div className="notice">
+                <span style={{ flexShrink: 0 }}>
+                  <Icon.info />
+                </span>
+                <div>
+                  <div className="notice-title">Browser sign-in is not available yet</div>
+                  <div className="notice-body">
+                    Nexus Mods only issues the application id this needs to
+                    developers who ask for one, and Apocrypha does not have one
+                    yet. Paste a personal API key below in the meantime. If you
+                    have been given an application id, enter it under Advanced.
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <div className="divider" />
+
+            <div className="field">
+              <label>Or paste a personal API key</label>
+              <div className="row">
+                <input
+                  className="input"
+                  style={{ flex: 1 }}
+                  type="password"
+                  placeholder="Personal API key"
+                  value={key}
+                  onChange={(e) => setKey(e.target.value)}
+                />
+                <button
+                  className="btn"
+                  disabled={busy || !key.trim()}
+                  onClick={async () => {
+                    const next = await run(
+                      () => api.setNexusApiKey(key.trim()),
+                      "Nexus Mods account connected",
+                    );
+                    if (next) {
+                      setStatus(next);
+                      setKey("");
+                    }
+                  }}
+                >
+                  Connect
+                </button>
+              </div>
+              <div className="card-hint">
+                Kept on this computer and only ever sent to Nexus Mods.
+                <button
+                  className="btn sm ghost"
+                  style={{ marginLeft: "var(--sp-3)" }}
+                  onClick={() =>
+                    api
+                      .openUrl("https://next.nexusmods.com/settings/api-keys")
+                      .catch(onError)
+                  }
+                >
+                  Get a key
+                </button>
+              </div>
+            </div>
+
+            <details>
+              <summary
+                className="card-hint"
+                style={{ cursor: "pointer", userSelect: "none" }}
               >
-                Open key settings
-              </button>
-            </div>
+                Advanced
+              </summary>
+              <div className="field" style={{ marginTop: "var(--sp-3)" }}>
+                <label>Nexus Mods application id</label>
+                <div className="row">
+                  <input
+                    className="input"
+                    style={{ flex: 1 }}
+                    placeholder="Issued by Nexus Mods"
+                    defaultValue={status.ssoApplication}
+                    onBlur={async (e) => {
+                      const v = e.target.value.trim();
+                      if (v === status.ssoApplication) return;
+                      const next = await run(() => api.setSsoApplication(v));
+                      if (next) setStatus(next);
+                    }}
+                  />
+                </div>
+                <div className="card-hint">
+                  Enables the sign-in button above. Only Nexus Mods staff can
+                  issue one.
+                </div>
+              </div>
+            </details>
           </>
         )}
       </div>

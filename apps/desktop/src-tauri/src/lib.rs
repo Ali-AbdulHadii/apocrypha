@@ -70,6 +70,8 @@ pub fn run() {
             nexus_cmds::parse_nxm_link,
             nexus_cmds::open_mod_page,
             nexus_cmds::download_from_nxm,
+            nexus_cmds::nexus_sign_in,
+            nexus_cmds::set_sso_application,
         ])
         .setup(|app| {
             use tauri::{Emitter, Manager};
