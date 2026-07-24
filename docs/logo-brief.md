@@ -4,6 +4,9 @@ A brief for designing the real Apocrypha mark, to hand to a designer or to an AI
 design assistant. The current mark in `apps/desktop/src/components/icons.tsx` is
 a placeholder drawn to keep the app coherent, not a finished identity.
 
+For a plain language description of the product to hand a designer before the
+constraints, see [about-for-designers.md](./about-for-designers.md).
+
 For designing screens rather than the mark, use
 [design-brief-paste.md](./design-brief-paste.md), which is a single file you can
 paste or attach. The full reference is [design-system.md](./design-system.md).
