@@ -4,10 +4,10 @@ A brief for designing the real Apocrypha mark, to hand to a designer or to an AI
 design assistant. The current mark in `apps/desktop/src/components/icons.tsx` is
 a placeholder drawn to keep the app coherent, not a finished identity.
 
-For the broader visual system (colour, type, spacing, components) see
-[design-system.md](./design-system.md). Section 10 of that document explains how
-to work with an AI design assistant in general. This brief is only about the
-mark.
+For designing screens rather than the mark, use
+[design-brief-paste.md](./design-brief-paste.md), which is a single file you can
+paste or attach. The full reference is [design-system.md](./design-system.md).
+This brief is only about the mark.
 
 ---
 
@@ -69,6 +69,12 @@ harder than choosing between several.
 > Restrained, precise, a little archival. It should look like it belongs beside
 > developer tools, not beside a game launcher. Think of the marks used by
 > version control tools and terminal emulators rather than by storefronts.
+>
+> The reference is Apple's iconography, specifically SF Symbols: one consistent
+> stroke weight, geometric construction, round caps and joins, optically
+> balanced rather than mathematically centred, and legible at very small sizes
+> because that is where it usually appears. Simple enough that you could
+> describe it over the phone.
 >
 > **Ideas worth exploring, not prescriptions**
 >

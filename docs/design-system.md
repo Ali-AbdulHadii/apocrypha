@@ -43,6 +43,14 @@ section 10, which explains exactly what to paste and what to ask for.
 
 ## 1. Design principles
 
+The reference is Apple's desktop design language: macOS System Settings, Finder,
+and the Human Interface Guidelines. In practice that means deference (quiet chrome,
+loud content), inset grouped sections rather than loose controls, hierarchy from
+typography rather than borders, one accent used sparingly, standard controls, and
+short physical motion. Apocrypha departs from it in four deliberate ways: it is dark
+first, it is denser because mod lists are long, it draws its own window chrome
+because Linux desktops disagree about titlebars, and its accent is green.
+
 Five rules. Everything else in this document is a consequence of one of them.
 
 ### 1.1 Content over chrome
@@ -1576,6 +1584,11 @@ component that is not in section 6 will be reinvented by the next contributor.
 ---
 
 ## 10. Using this document with an AI design tool
+
+> For day to day work use [design-brief-paste.md](./design-brief-paste.md). It is a
+> single self-contained file holding the tokens, the component vocabulary, the
+> constraints and the prompt, so you can attach it in one go instead of collecting
+> sections from this document. Read on for the reasoning behind it.
 
 If you have never handed a design system to an AI before, this section is the whole
 procedure. It works with Claude (including Artifacts and Claude Code), and the same shape
