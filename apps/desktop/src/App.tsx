@@ -20,6 +20,7 @@ import {
   pickDirectory,
   onDownloadChanged,
   onNxmLink,
+  subscribe,
   truncatePath,
   type DownloadView,
   type DryRunView,
@@ -145,51 +146,37 @@ export default function App() {
   // that has not arrived yet.
   useEffect(() => {
     if (!IS_TAURI) return;
-    let dispose: (() => void) | undefined;
-
-    onNxmLink(async (url) => {
-      try {
-        const started = await api.startNxmDownload(url);
-        setDownloads((prev) => [started, ...prev.filter((d) => d.id !== started.id)]);
-        setScreen("downloads");
-        push(`Downloading ${started.fileName}`, "info");
-      } catch (e) {
-        fail(e);
-      }
-    })
-      .then((un) => {
-        dispose = un;
-      })
-      .catch(() => {
-        /* Outside Tauri there are no OS events to listen for. */
-      });
-
-    return () => dispose?.();
+    return subscribe(() =>
+      onNxmLink(async (url) => {
+        try {
+          const started = await api.startNxmDownload(url);
+          setDownloads((prev) => [
+            started,
+            ...prev.filter((d) => d.id !== started.id),
+          ]);
+          setScreen("downloads");
+          push(`Downloading ${started.fileName}`, "info");
+        } catch (e) {
+          fail(e);
+        }
+      }),
+    );
   }, [push, fail]);
 
   // Progress carries the whole entry, so the list is updated by replacement.
   useEffect(() => {
     if (!IS_TAURI) return;
-    let dispose: (() => void) | undefined;
-
-    onDownloadChanged((d) => {
-      setDownloads((prev) => {
-        const next = prev.some((x) => x.id === d.id)
-          ? prev.map((x) => (x.id === d.id ? d : x))
-          : [d, ...prev];
-        return next;
-      });
-      if (d.state === "ready") push(`${d.fileName} is ready to install`, "ok");
-      if (d.state === "failed") push(`${d.fileName} did not finish`, "bad");
-    })
-      .then((un) => {
-        dispose = un;
-      })
-      .catch(() => {
-        /* No Tauri, no events. */
-      });
-
-    return () => dispose?.();
+    return subscribe(() =>
+      onDownloadChanged((d) => {
+        setDownloads((prev) =>
+          prev.some((x) => x.id === d.id)
+            ? prev.map((x) => (x.id === d.id ? d : x))
+            : [d, ...prev],
+        );
+        if (d.state === "ready") push(`${d.fileName} is ready to install`, "ok");
+        if (d.state === "failed") push(`${d.fileName} did not finish`, "bad");
+      }),
+    );
   }, [push]);
 
   /* ---------------------------------------------------------- actions --- */

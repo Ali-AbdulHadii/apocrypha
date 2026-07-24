@@ -247,6 +247,41 @@ export const api = {
   },
 };
 
+/**
+ * Attach an async event listener from inside `useEffect`.
+ *
+ * The obvious spelling leaks:
+ *
+ *     let dispose;
+ *     listen(...).then((un) => { dispose = un; });
+ *     return () => dispose?.();
+ *
+ * React can run the cleanup before the promise resolves, and StrictMode does
+ * exactly that on every mount in development. `dispose` is still undefined, so
+ * the listener is never removed and the next mount adds a second one. With the
+ * nxm listener that meant one download link started two transfers writing the
+ * same file. Recording the cancellation up front means a late arrival is
+ * disposed immediately instead of outliving the effect.
+ */
+export function subscribe(start: () => Promise<() => void>): () => void {
+  let cancelled = false;
+  let stop: (() => void) | undefined;
+
+  start()
+    .then((un) => {
+      if (cancelled) un();
+      else stop = un;
+    })
+    .catch(() => {
+      /* Outside Tauri there are no OS events to listen for. */
+    });
+
+  return () => {
+    cancelled = true;
+    stop?.();
+  };
+}
+
 /** Subscribe to nxm:// links delivered by the OS. Returns an unsubscribe fn. */
 export async function onNxmLink(
   handler: (url: string) => void,

@@ -368,7 +368,11 @@ pub fn start_nxm_download(
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
     let dest = dest_dir.join(downloads::safe_name(&file_name));
 
-    let entry = state.downloads.begin(&file_name, &dest, "Nexus Mods");
+    // A link delivered twice must not start a second writer for the same file.
+    let entry = match state.downloads.begin(&file_name, &dest, "Nexus Mods") {
+        downloads::Begin::Started(d) => d,
+        downloads::Begin::AlreadyRunning(d) => return Ok(d),
+    };
     let queue = state.downloads.clone();
     let id = entry.id.clone();
     let uri = cdn.uri.clone();

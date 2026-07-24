@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
+import { subscribe } from "./api";
 
 export async function appWindow() {
   const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -16,35 +17,26 @@ export async function appWindow() {
 export function useMaximized(): boolean {
   const [maximized, setMaximized] = useState(false);
 
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    let alive = true;
-
-    (async () => {
-      const w = await appWindow();
-      const sync = async () => {
-        const v = await w.isMaximized();
-        if (!alive) return;
-        setMaximized(v);
-        // Mirrored onto the root element so CSS can square the corners without
-        // waiting on a React render. The two must never disagree, or the
-        // window shows rounded corners over a square backdrop.
-        document.documentElement.setAttribute(
-          "data-window",
-          v ? "maximized" : "normal",
-        );
-      };
-      await sync();
-      unlisten = await w.onResized(sync);
-    })().catch(() => {
-      /* Outside Tauri there is no window to track. */
-    });
-
-    return () => {
-      alive = false;
-      unlisten?.();
-    };
-  }, []);
+  useEffect(
+    () =>
+      subscribe(async () => {
+        const w = await appWindow();
+        const sync = async () => {
+          const v = await w.isMaximized();
+          setMaximized(v);
+          // Mirrored onto the root element so CSS can square the corners
+          // without waiting on a React render. The two must never disagree, or
+          // the window shows rounded corners over a square backdrop.
+          document.documentElement.setAttribute(
+            "data-window",
+            v ? "maximized" : "normal",
+          );
+        };
+        await sync();
+        return w.onResized(sync);
+      }),
+    [],
+  );
 
   return maximized;
 }
