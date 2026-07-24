@@ -115,6 +115,14 @@ export const Icon = {
   folder: make(
     <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />,
   ),
+  trash: make(
+    <>
+      <path d="M4 7h16" />
+      <path d="M10 4h4" />
+      <path d="M6 7v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7" />
+      <path d="M10 11v6M14 11v6" />
+    </>,
+  ),
   grip: make(
     <>
       <path d="M9 6h.01M9 12h.01M9 18h.01" />

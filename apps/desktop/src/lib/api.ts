@@ -179,6 +179,8 @@ export const api = {
     call<string[]>("set_mod_selection", { gameId, modId, selection }),
   setModOrder: (gameId: string, orderedIds: string[]) =>
     call<void>("set_mod_order", { gameId, orderedIds }),
+  removeMod: (gameId: string, modId: string) =>
+    call<void>("remove_mod", { gameId, modId }),
 
   /** Previews every enabled mod in the active profile. */
   previewDeploy: (gameId: string) => call<DryRunView>("preview_deploy", { gameId }),

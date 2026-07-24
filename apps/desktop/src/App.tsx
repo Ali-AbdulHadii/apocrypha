@@ -3,6 +3,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApplyDialog, type ApplyState } from "./components/ApplyDialog";
+import { ConfirmDialog, type Confirm } from "./components/ConfirmDialog";
 import { Icon, type IconName } from "./components/icons";
 import { InstallWizard } from "./components/InstallWizard";
 import { ModsScreen } from "./components/ModsScreen";
@@ -53,6 +54,7 @@ export default function App() {
   const [preview, setPreview] = useState<DryRunView | null>(null);
   const [dirty, setDirty] = useState(false);
   const [apply, setApply] = useState<ApplyState | null>(null);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
 
   const { push } = useToast();
   const maximized = useMaximized();
@@ -269,6 +271,34 @@ export default function App() {
     [activeGameId, refreshMods, fail],
   );
 
+  const removeMod = useCallback(
+    (mod: ModView) => {
+      setConfirm({
+        title: `Remove ${mod.name}?`,
+        body:
+          "This deletes Apocrypha's copy of the mod. Your original download is " +
+          "not touched, and the game folder is left exactly as it is now.",
+        confirmLabel: "Remove",
+        onConfirm: async () => {
+          if (!activeGameId) return;
+          setBusy(true);
+          try {
+            await api.removeMod(activeGameId, mod.id);
+            await refreshMods(activeGameId);
+            push(`Removed ${mod.name}`, "ok");
+            setConfirm(null);
+          } catch (e) {
+            fail(e);
+            setConfirm(null);
+          } finally {
+            setBusy(false);
+          }
+        },
+      });
+    },
+    [activeGameId, refreshMods, push, fail],
+  );
+
   const runPreview = useCallback(async () => {
     if (!activeGameId) return;
     if (!mods.some((m) => m.enabled)) {
@@ -398,6 +428,7 @@ export default function App() {
                       setWizardMod(m);
                     }}
                     onReorder={reorderMods}
+                    onRemove={removeMod}
                     onImport={startImport}
                   />
                 ) : screen === "profiles" ? (
@@ -452,6 +483,16 @@ export default function App() {
 
       <AnimatePresence>
         {apply && <ApplyDialog state={apply} onClose={() => setApply(null)} />}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {confirm && (
+          <ConfirmDialog
+            confirm={confirm}
+            busy={busy}
+            onCancel={() => setConfirm(null)}
+          />
+        )}
       </AnimatePresence>
 
       <AnimatePresence>{booting && <Splash />}</AnimatePresence>

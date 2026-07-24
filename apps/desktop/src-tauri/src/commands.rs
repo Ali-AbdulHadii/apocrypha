@@ -472,6 +472,38 @@ pub fn preview_deploy(state: State<AppState>, game_id: String) -> CmdResult<DryR
     })
 }
 
+/// Remove a mod from the library and delete its staged files.
+///
+/// Refuses while the mod's files are still in the game folder. Deleting the
+/// staging copy first would leave those files orphaned with nothing left to
+/// remove them, so the user is asked to undo the deployment first.
+#[tauri::command]
+pub fn remove_mod(state: State<AppState>, game_id: String, mod_id: String) -> CmdResult<()> {
+    {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        if store
+            .applied_mod_ids(&game_id)
+            .map_err(err)?
+            .contains(&mod_id)
+        {
+            return Err(
+                "This mod's files are still in the game. Use Undo all first, then remove it."
+                    .to_string(),
+            );
+        }
+    }
+
+    // Delete the staged payload before the record, so a failure here leaves the
+    // mod visible and removable rather than orphaning files with no owner.
+    let staging = staging_for(&state.paths, &game_id, &mod_id);
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging).map_err(err)?;
+    }
+
+    let store = state.store.lock().map_err(|_| "state poisoned")?;
+    store.delete_mod(&mod_id).map_err(err)
+}
+
 /// Set load order for the active profile from an ordered list of mod ids.
 #[tauri::command]
 pub fn set_mod_order(

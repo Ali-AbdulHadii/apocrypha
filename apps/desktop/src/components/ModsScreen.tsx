@@ -24,6 +24,7 @@ export interface ModsScreenProps {
   onToggle: (mod: ModView, enabled: boolean) => void;
   onConfigure: (mod: ModView) => void;
   onReorder: (orderedIds: string[]) => void;
+  onRemove: (mod: ModView) => void;
   onImport: () => void;
 }
 
@@ -67,6 +68,7 @@ export function ModsScreen({
   onToggle,
   onConfigure,
   onReorder,
+  onRemove,
   onImport,
 }: ModsScreenProps) {
   const [query, setQuery] = useState("");
@@ -271,6 +273,7 @@ export function ModsScreen({
                             applied={appliedIds.has(m.id)}
                             onToggle={onToggle}
                             onConfigure={onConfigure}
+                            onRemove={onRemove}
                           />
                         ))}
                       </Reorder.Group>
@@ -284,6 +287,7 @@ export function ModsScreen({
                             dirty={dirty}
                             onToggle={onToggle}
                             onConfigure={onConfigure}
+                            onRemove={onRemove}
                           />
                         ))}
                       </div>
@@ -325,12 +329,14 @@ function RowBody({
   handle,
   onToggle,
   onConfigure,
+  onRemove,
 }: {
   mod: ModView;
   applied: boolean;
   handle: React.ReactNode;
   onToggle: (m: ModView, enabled: boolean) => void;
   onConfigure: (m: ModView) => void;
+  onRemove: (m: ModView) => void;
 }) {
   return (
     <>
@@ -359,6 +365,14 @@ function RowBody({
       <button className="btn sm" onClick={() => onConfigure(mod)}>
         Configure
       </button>
+      <button
+        className="btn sm icon ghost"
+        onClick={() => onRemove(mod)}
+        aria-label={`Remove ${mod.name}`}
+        title="Remove from library"
+      >
+        <Icon.trash size={14} />
+      </button>
     </>
   );
 }
@@ -368,12 +382,14 @@ function ModRow({
   applied,
   onToggle,
   onConfigure,
+  onRemove,
 }: {
   mod: ModView;
   applied: boolean;
   dirty: boolean;
   onToggle: (m: ModView, enabled: boolean) => void;
   onConfigure: (m: ModView) => void;
+  onRemove: (m: ModView) => void;
 }) {
   return (
     <div className={`mod-row ${mod.enabled ? "" : "disabled"}`}>
@@ -383,6 +399,7 @@ function ModRow({
         handle={<span className="mod-order">{mod.priority}</span>}
         onToggle={onToggle}
         onConfigure={onConfigure}
+        onRemove={onRemove}
       />
     </div>
   );
@@ -401,11 +418,13 @@ function DraggableModRow({
   applied,
   onToggle,
   onConfigure,
+  onRemove,
 }: {
   mod: ModView;
   applied: boolean;
   onToggle: (m: ModView, enabled: boolean) => void;
   onConfigure: (m: ModView) => void;
+  onRemove: (m: ModView) => void;
 }) {
   const controls = useDragControls();
 
@@ -441,6 +460,7 @@ function DraggableModRow({
         }
         onToggle={onToggle}
         onConfigure={onConfigure}
+        onRemove={onRemove}
       />
     </Reorder.Item>
   );

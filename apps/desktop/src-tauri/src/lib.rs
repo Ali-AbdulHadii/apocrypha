@@ -59,6 +59,7 @@ pub fn run() {
             commands::create_profile,
             commands::switch_profile,
             commands::set_mod_order,
+            commands::remove_mod,
             commands::preview_from_archive,
             commands::preview_from_mod,
             commands::steam_diagnostics,
