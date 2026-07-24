@@ -13,6 +13,9 @@ use std::sync::Mutex;
 pub struct AppState {
     pub store: Mutex<Store>,
     pub paths: Paths,
+    /// In-flight and finished downloads. Not persisted: a transfer cannot
+    /// survive a restart anyway, and finished files are found by scanning.
+    pub downloads: std::sync::Arc<crate::downloads::Queue>,
 }
 
 impl AppState {
@@ -22,6 +25,7 @@ impl AppState {
         Ok(AppState {
             store: Mutex::new(store),
             paths,
+            downloads: Default::default(),
         })
     }
 }

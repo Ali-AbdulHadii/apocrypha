@@ -48,7 +48,7 @@ export function DownloadsPanel({
 
   return (
     <div className="card stack">
-      <div className="card-title">Downloads</div>
+      <div className="card-title">Mod sources</div>
 
       <div className="field">
         <label>Get mods from</label>

@@ -750,7 +750,7 @@ empty-state illustrations. Larger icons drop the stroke weight so they do not lo
 Current set, grouped as in the file:
 
 ```
-navigation  library  mods  profiles  conflicts  settings
+navigation  library  mods  downloads  profiles  conflicts  settings
 actions     plus  check  search  refresh  apply  undo  preview  folder  grip
 state       info  warning  sun  moon  chevronRight  chevronDown  close
             minimize  maximize  restore  package
@@ -831,8 +831,8 @@ with the OS frame during development. Set it to `false` to ship the intended chr
 **Anatomy.** A 224px column on `--bg-sunken` with a 1px right border. Top: `.rail-brand`,
 a 32px accent-coloured logo next to a two-line stack (`.rail-title` 16px / 600 /
 `-0.02em`, `.rail-sub` 12px `--text-tertiary`), both at `--leading-tight`. Then the nav
-list: five items (Library, Mods, Profiles, Conflicts, Settings), each an 18px icon in a
-16px box, a 14px / 500 label, and an optional right-aligned `.nav-badge` count. Then
+list: six items (Library, Mods, Downloads, Profiles, Changes, Settings), each an 18px icon
+in a 16px box, a 14px / 500 label, and an optional right-aligned `.nav-badge` count. Then
 `.rail-spacer` (`flex: 1`) pushes the theme toggle to the bottom, which is itself a
 `.nav-item`.
 
@@ -1257,6 +1257,13 @@ the previous set", "Copying files into the game", "Saving a record so this can b
 Because the backend applies a deployment as one blocking call, progress is expressed as
 discrete phases, never as a fake byte counter.
 
+**Indeterminate variant.** `.progress-track.indeterminate` drops the fill and slides a 32%
+wide `--accent-gradient` block across the track on a 1.4s `--ease-in-out` loop. It is used
+in exactly one situation: a download whose server sent no `Content-Length`, so the total
+is genuinely unknown. It says "working" without claiming a percentage that would be
+invented. Under `prefers-reduced-motion` the animation stops and the bar becomes a static
+40% opacity fill. Never reach for it as decoration on something whose size is known.
+
 ---
 
 ### 6.18 Toast
@@ -1375,7 +1382,44 @@ unknown, use the `.spinner` (14px, 2px `--border-strong` ring with an `--accent`
 
 ---
 
-### 6.24 Also in the sheet
+### 6.24 Download row
+
+**Class:** `.download-row`, `.download-row.active`, `.download-icon` (+ `.ready`,
+`.failed`, `.cancelled`), `.download-main`, `.download-actions`, `.section-head`,
+`.section-title`, `.section-count`
+**Component:** `DownloadsScreen.tsx`
+
+**Anatomy.** Left to right, gap `--sp-4`, on the same shell as `.mod-row` (`--bg-raised`,
+1px `--border`, `--radius-sm`, padding `--sp-4`):
+
+1. `.download-icon`, a 32px `--radius-xs` tile on `--bg-sunken` holding a `Spinner` while
+   running, `Icon.package` when ready, `Icon.warning` otherwise. Its colour is the whole
+   state signal: `--success` ready, `--danger` failed, `--warning` stopped.
+2. `.download-main`, `flex: 1; min-width: 0`, column at gap `--sp-2`: a `.mod-name` that
+   truncates, an optional `Chip`, then `.mod-meta` in `tabular-nums`, then the
+   `.progress-track` while running.
+3. `.download-actions`: Stop while running; otherwise Install (`.btn.sm.primary`) when
+   ready, plus a `.btn.sm.icon` trash.
+
+**Grouping.** Rows are bucketed under `.section-head` labels in a fixed order:
+Downloading, Ready to install, Did not finish. Empty groups are not rendered. This puts
+what needs an action above what is already settled.
+
+**Meta line.** Running: received of total, rate, time left, middot separated, with any
+unknown part omitted rather than shown as a placeholder. Failed: the actual error text.
+Ready: size and where it came from.
+
+**States.** `.download-row.active` takes `--accent-border`. Rows animate with `layout` so
+a finished download slides from one group to the next rather than disappearing and
+reappearing.
+
+**Rule.** A finished download never opens a dialog by itself. It waits with an Install
+button. Fetching a file and choosing to install it are separate decisions, and a transfer
+that completes in the background must not take the window.
+
+---
+
+### 6.25 Also in the sheet
 
 Smaller pieces that follow directly from the tokens:
 

@@ -8,12 +8,12 @@
 //! flow is: open the mod page, let the user press the button, and handle the
 //! link that comes back.
 
+use crate::downloads::{self, Download, DownloadState};
 use crate::state::AppState;
 use apoc_nexus::{DownloadSource, NexusClient, NxmTarget};
 use serde::{Deserialize, Serialize};
-use std::io::Read;
 use std::path::PathBuf;
-use tauri::State;
+use tauri::{Emitter, State};
 
 type CmdResult<T> = Result<T, String>;
 
@@ -56,14 +56,6 @@ pub struct NxmLinkView {
     pub view_only: bool,
     /// Page to open when a token is needed.
     pub mod_page_url: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct DownloadResultView {
-    pub path: String,
-    pub file_name: String,
-    pub bytes: u64,
 }
 
 fn client(state: &AppState) -> CmdResult<NexusClient> {
@@ -269,11 +261,63 @@ fn open_external(url: &str) -> CmdResult<()> {
         .map_err(|e| format!("could not open the browser: {e}"))
 }
 
-/// Resolve an `nxm://` link and download the archive into the downloads folder.
-///
-/// Returns the path so the caller can hand it straight to the importer.
+/// Everything in the download queue, newest first.
 #[tauri::command]
-pub fn download_from_nxm(state: State<AppState>, url: String) -> CmdResult<DownloadResultView> {
+pub fn list_downloads(state: State<AppState>) -> CmdResult<Vec<Download>> {
+    Ok(state.downloads.list(&downloads_dir(&state)))
+}
+
+/// Ask a running transfer to stop. The partial file is discarded.
+#[tauri::command]
+pub fn cancel_download(state: State<AppState>, id: String) -> CmdResult<()> {
+    state.downloads.request_cancel(&id);
+    Ok(())
+}
+
+/// Drop an entry from the queue, deleting the archive if it is on disk.
+///
+/// This is the same action whether the file was downloaded here or found in the
+/// folder, because from the user's side there is no difference between the two.
+#[tauri::command]
+pub fn remove_download(state: State<AppState>, id: String) -> CmdResult<()> {
+    let dir = downloads_dir(&state);
+    let path = state
+        .downloads
+        .get(&id)
+        .map(|d| PathBuf::from(d.path))
+        .or_else(|| {
+            state
+                .downloads
+                .list(&dir)
+                .into_iter()
+                .find(|d| d.id == id)
+                .map(|d| PathBuf::from(d.path))
+        });
+
+    state.downloads.request_cancel(&id);
+    state.downloads.forget(&id);
+
+    if let Some(p) = path {
+        // Only ever delete inside our own folder, never wherever a path happens
+        // to point.
+        if p.starts_with(&dir) && p.is_file() {
+            std::fs::remove_file(&p).map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(())
+}
+
+/// Resolve an `nxm://` link and start downloading it in the background.
+///
+/// Returns as soon as the transfer is queued rather than when it finishes, so
+/// the interface stays usable during a large file. Progress arrives as
+/// `download-changed` events carrying the whole updated entry.
+#[tauri::command]
+pub fn start_nxm_download(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    url: String,
+) -> CmdResult<Download> {
     let link = apoc_nexus::parse_nxm(&url).map_err(|e| e.to_string())?;
     let (mod_id, file_id) = link
         .mod_ids()
@@ -322,74 +366,44 @@ pub fn download_from_nxm(state: State<AppState>, url: String) -> CmdResult<Downl
 
     let dest_dir = downloads_dir(&state);
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
-    let dest = dest_dir.join(sanitize_file_name(&file_name));
+    let dest = dest_dir.join(downloads::safe_name(&file_name));
 
-    let bytes = fetch_to_file(&cdn.uri, &dest)?;
+    let entry = state.downloads.begin(&file_name, &dest, "Nexus Mods");
+    let queue = state.downloads.clone();
+    let id = entry.id.clone();
+    let uri = cdn.uri.clone();
 
-    Ok(DownloadResultView {
-        path: dest.display().to_string(),
-        file_name,
-        bytes,
-    })
+    // A dedicated thread rather than the async runtime: `ureq` is blocking, and
+    // this keeps the transfer off every pool the rest of the app shares.
+    std::thread::spawn(move || {
+        let emit = {
+            let app = app.clone();
+            Box::new(move |d: &Download| {
+                let _ = app.emit("download-changed", d.clone());
+            }) as downloads::OnProgress
+        };
+
+        match downloads::fetch(&queue, &id, &uri, &dest, &emit) {
+            Ok(_) => {}
+            Err(e) => {
+                let cancelled = e == "cancelled";
+                if let Some(d) = queue.update(&id, |d| {
+                    d.state = if cancelled {
+                        DownloadState::Cancelled
+                    } else {
+                        DownloadState::Failed
+                    };
+                    d.error = (!cancelled).then(|| e.clone());
+                }) {
+                    let _ = app.emit("download-changed", d);
+                }
+            }
+        }
+    });
+
+    Ok(entry)
 }
 
 fn downloads_dir(state: &AppState) -> PathBuf {
     state.paths.root().join("downloads")
-}
-
-/// Keep a server-supplied name to one safe path segment.
-fn sanitize_file_name(name: &str) -> String {
-    let cleaned: String = name
-        .chars()
-        .map(|c| match c {
-            '/' | '\\' | '\0' => '_',
-            c => c,
-        })
-        .collect();
-    let trimmed = cleaned.trim_matches(|c: char| c == '.' || c.is_whitespace());
-    if trimmed.is_empty() {
-        "download.bin".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Download to a temporary file and rename on success, so a failed transfer
-/// never leaves a half-written archive that looks importable.
-fn fetch_to_file(url: &str, dest: &std::path::Path) -> CmdResult<u64> {
-    let res = ureq::get(url)
-        .call()
-        .map_err(|e| format!("download failed: {e}"))?;
-
-    let tmp = dest.with_extension("part");
-    let mut file = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-    let mut reader = res.into_reader();
-    let mut buf = [0u8; 64 * 1024];
-    let mut total = 0u64;
-
-    loop {
-        let n = reader.read(&mut buf).map_err(|e| e.to_string())?;
-        if n == 0 {
-            break;
-        }
-        use std::io::Write;
-        file.write_all(&buf[..n]).map_err(|e| e.to_string())?;
-        total += n as u64;
-    }
-    drop(file);
-    std::fs::rename(&tmp, dest).map_err(|e| e.to_string())?;
-    Ok(total)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn server_supplied_names_cannot_escape_the_downloads_folder() {
-        assert_eq!(sanitize_file_name("../../etc/passwd"), "etc_passwd");
-        assert_eq!(sanitize_file_name("a/b.zip"), "a_b.zip");
-        assert_eq!(sanitize_file_name("   "), "download.bin");
-        assert_eq!(sanitize_file_name("Mod-1-2.zip"), "Mod-1-2.zip");
-    }
 }
