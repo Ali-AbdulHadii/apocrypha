@@ -10,6 +10,7 @@ import { ModsScreen } from "./components/ModsScreen";
 import { Splash } from "./components/Splash";
 import { TitleBar } from "./components/TitleBar";
 import { DownloadsPanel } from "./components/DownloadsPanel";
+import { DownloadsScreen } from "./components/DownloadsScreen";
 import { Chip, Segmented, Spinner, pageMotion, useToast } from "./components/ui";
 import {
   api,
@@ -17,8 +18,10 @@ import {
   IS_TAURI,
   pickArchive,
   pickDirectory,
+  onDownloadChanged,
   onNxmLink,
   truncatePath,
+  type DownloadView,
   type DryRunView,
   type GameView,
   type ModView,
@@ -30,11 +33,18 @@ import { AppearancePanel, useAppearance } from "./lib/appearance";
 import { useMaximized } from "./lib/window";
 import { useTheme } from "./lib/theme";
 
-type Screen = "library" | "mods" | "profiles" | "conflicts" | "settings";
+type Screen =
+  | "library"
+  | "mods"
+  | "downloads"
+  | "profiles"
+  | "conflicts"
+  | "settings";
 
 const NAV: { id: Screen; label: string; icon: IconName }[] = [
   { id: "library", label: "Library", icon: "library" },
   { id: "mods", label: "Mods", icon: "mods" },
+  { id: "downloads", label: "Downloads", icon: "downloads" },
   { id: "profiles", label: "Profiles", icon: "profiles" },
   { id: "conflicts", label: "Changes", icon: "conflicts" },
   { id: "settings", label: "Settings", icon: "settings" },
@@ -55,6 +65,8 @@ export default function App() {
   const [dirty, setDirty] = useState(false);
   const [apply, setApply] = useState<ApplyState | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [downloads, setDownloads] = useState<DownloadView[]>([]);
+  const [installingId, setInstallingId] = useState<string | null>(null);
 
   const { push } = useToast();
   const maximized = useMaximized();
@@ -82,6 +94,10 @@ export default function App() {
     setProfiles(await api.listProfiles(gameId));
   }, []);
 
+  const refreshDownloads = useCallback(async () => {
+    setDownloads(await api.listDownloads());
+  }, []);
+
   useEffect(() => {
     if (!IS_TAURI) {
       setBooting(false);
@@ -92,6 +108,7 @@ export default function App() {
       try {
         await refreshGames();
         setSettings(await api.getSettings());
+        await refreshDownloads();
       } catch (e) {
         fail(e);
       } finally {
@@ -100,7 +117,7 @@ export default function App() {
         setTimeout(() => setBooting(false), Math.max(0, 620 - elapsed));
       }
     })();
-  }, [refreshGames, fail]);
+  }, [refreshGames, refreshDownloads, fail]);
 
   useEffect(() => {
     if (!IS_TAURI || !activeGameId) return;
@@ -113,33 +130,31 @@ export default function App() {
     })();
   }, [activeGameId, refreshMods, refreshProfiles, fail]);
 
+  // Re-scan on arrival, so a file saved from a browser while the app was open
+  // is already listed by the time the user looks.
+  useEffect(() => {
+    if (!IS_TAURI || screen !== "downloads") return;
+    refreshDownloads().catch(fail);
+  }, [screen, refreshDownloads, fail]);
+
   /* ------------------------------------------------- nexus download link --- */
 
   // Links arrive from the OS when the user presses "Mod Manager Download" on
-  // the website. The archive is fetched, then handed to the normal import
-  // wizard, so a downloaded mod goes through exactly the same path as one
-  // picked from disk.
+  // the website. The transfer is queued and the user is sent to Downloads to
+  // watch it, rather than the window being taken over by a wizard for a file
+  // that has not arrived yet.
   useEffect(() => {
     if (!IS_TAURI) return;
     let dispose: (() => void) | undefined;
 
     onNxmLink(async (url) => {
-      if (!activeGameId) {
-        push("Select a game before downloading a mod", "bad");
-        return;
-      }
-      setBusy(true);
       try {
-        push("Downloading from Nexus Mods", "info");
-        const dl = await api.downloadFromNxm(url);
-        const analyzed = await api.analyzeArchive(activeGameId, dl.path);
-        setPendingArchive(dl.path);
-        setWizardMod(analyzed);
-        push(`Downloaded ${dl.fileName}`, "ok");
+        const started = await api.startNxmDownload(url);
+        setDownloads((prev) => [started, ...prev.filter((d) => d.id !== started.id)]);
+        setScreen("downloads");
+        push(`Downloading ${started.fileName}`, "info");
       } catch (e) {
         fail(e);
-      } finally {
-        setBusy(false);
       }
     })
       .then((un) => {
@@ -150,7 +165,32 @@ export default function App() {
       });
 
     return () => dispose?.();
-  }, [activeGameId, push, fail]);
+  }, [push, fail]);
+
+  // Progress carries the whole entry, so the list is updated by replacement.
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let dispose: (() => void) | undefined;
+
+    onDownloadChanged((d) => {
+      setDownloads((prev) => {
+        const next = prev.some((x) => x.id === d.id)
+          ? prev.map((x) => (x.id === d.id ? d : x))
+          : [d, ...prev];
+        return next;
+      });
+      if (d.state === "ready") push(`${d.fileName} is ready to install`, "ok");
+      if (d.state === "failed") push(`${d.fileName} did not finish`, "bad");
+    })
+      .then((un) => {
+        dispose = un;
+      })
+      .catch(() => {
+        /* No Tauri, no events. */
+      });
+
+    return () => dispose?.();
+  }, [push]);
 
   /* ---------------------------------------------------------- actions --- */
 
@@ -210,6 +250,73 @@ export default function App() {
       setBusy(false);
     }
   }, [activeGameId, push, fail]);
+
+  // Installing from Downloads joins the same path as Add mod: analyze, then the
+  // wizard. Nothing about the archive is treated differently for having been
+  // fetched here rather than picked from disk.
+  const installDownload = useCallback(
+    async (d: DownloadView) => {
+      if (!activeGameId) {
+        push("Select a game first", "bad");
+        return;
+      }
+      setInstallingId(d.id);
+      setBusy(true);
+      try {
+        const analyzed = await api.analyzeArchive(activeGameId, d.path);
+        if (analyzed.totalFiles === 0) {
+          push(
+            `${analyzed.name} has no files this game can install. It may be packed in an unusual way.`,
+            "bad",
+          );
+        }
+        setPendingArchive(d.path);
+        setWizardMod(analyzed);
+      } catch (e) {
+        fail(e);
+      } finally {
+        setInstallingId(null);
+        setBusy(false);
+      }
+    },
+    [activeGameId, push, fail],
+  );
+
+  const cancelDownload = useCallback(
+    async (d: DownloadView) => {
+      try {
+        await api.cancelDownload(d.id);
+      } catch (e) {
+        fail(e);
+      }
+    },
+    [fail],
+  );
+
+  const removeDownload = useCallback(
+    (d: DownloadView) => {
+      setConfirm({
+        title: `Delete ${d.fileName}?`,
+        body:
+          "This deletes the downloaded file. Mods you have already added to " +
+          "your library keep working, because they hold their own copy.",
+        confirmLabel: "Delete",
+        onConfirm: async () => {
+          setBusy(true);
+          try {
+            await api.removeDownload(d.id);
+            setDownloads((prev) => prev.filter((x) => x.id !== d.id));
+          } catch (e) {
+            fail(e);
+          } finally {
+            setBusy(false);
+            setConfirm(null);
+          }
+        },
+      });
+    },
+    [fail],
+  );
 
   const confirmWizard = useCallback(
     async (selection: string[]) => {
@@ -370,6 +477,14 @@ export default function App() {
   }, [activeGameId, push, refreshGames, fail]);
 
   const enabledCount = useMemo(() => mods.filter((m) => m.enabled).length, [mods]);
+  // Only counts what still wants attention. A failed entry the user has seen
+  // should not keep a badge lit forever.
+  const downloadBadge = useMemo(
+    () =>
+      downloads.filter((d) => d.state === "downloading" || d.state === "ready")
+        .length,
+    [downloads],
+  );
   const appliedIds = useMemo(
     () => new Set(mods.filter((m) => m.applied).map((m) => m.id)),
     [mods],
@@ -391,7 +506,12 @@ export default function App() {
       <TitleBar subtitle={activeGame?.name} />
 
       <div className="app-body">
-        <Rail screen={screen} setScreen={setScreen} modCount={mods.length} />
+        <Rail
+          screen={screen}
+          setScreen={setScreen}
+          modCount={mods.length}
+          downloadCount={downloadBadge}
+        />
 
         <div className="content">
           <TopBar
@@ -430,6 +550,16 @@ export default function App() {
                     onReorder={reorderMods}
                     onRemove={removeMod}
                     onImport={startImport}
+                  />
+                ) : screen === "downloads" ? (
+                  <DownloadsScreen
+                    downloads={downloads}
+                    busy={busy}
+                    installingId={installingId}
+                    onInstall={installDownload}
+                    onCancel={cancelDownload}
+                    onRemove={removeDownload}
+                    onRefresh={() => refreshDownloads().catch(fail)}
                   />
                 ) : screen === "profiles" ? (
                   <ProfilesScreen
@@ -506,10 +636,13 @@ function Rail({
   screen,
   setScreen,
   modCount,
+  downloadCount,
 }: {
   screen: Screen;
   setScreen: (s: Screen) => void;
   modCount: number;
+  /** Downloads running or waiting to be installed. */
+  downloadCount: number;
 }) {
   return (
     <aside className="rail">
@@ -537,6 +670,9 @@ function Rail({
               <span>{item.label}</span>
               {item.id === "mods" && modCount > 0 && (
                 <span className="nav-badge">{modCount}</span>
+              )}
+              {item.id === "downloads" && downloadCount > 0 && (
+                <span className="nav-badge">{downloadCount}</span>
               )}
             </button>
           );
@@ -588,6 +724,7 @@ function TopBar({
   const titles: Record<Screen, string> = {
     library: "Library",
     mods: "Mods",
+    downloads: "Downloads",
     profiles: "Profiles",
     conflicts: "Changes",
     settings: "Settings",

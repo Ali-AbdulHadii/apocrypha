@@ -126,10 +126,23 @@ export interface NxmLinkView {
   modPageUrl: string;
 }
 
-export interface DownloadResultView {
-  path: string;
+export type DownloadState = "downloading" | "ready" | "failed" | "cancelled";
+
+export interface DownloadView {
+  id: string;
   fileName: string;
-  bytes: number;
+  path: string;
+  /** Null until the server reports a size, which some mirrors never do. */
+  totalBytes: number | null;
+  receivedBytes: number;
+  state: DownloadState;
+  error: string | null;
+  /** "Nexus Mods", or "Downloads folder" for a file found rather than fetched. */
+  source: string;
+  startedAt: number;
+  bytesPerSecond: number;
+  /** False for an archive format the engine cannot open yet, such as 7z. */
+  installable: boolean;
 }
 
 export interface SettingsView {
@@ -217,8 +230,12 @@ export const api = {
   parseNxmLink: (url: string) => call<NxmLinkView>("parse_nxm_link", { url }),
   openModPage: (domain: string, modId: number, fileId?: number) =>
     call<string>("open_mod_page", { domain, modId, fileId }),
-  downloadFromNxm: (url: string) =>
-    call<DownloadResultView>("download_from_nxm", { url }),
+  /** Queues a download and returns immediately; progress arrives as events. */
+  startNxmDownload: (url: string) =>
+    call<DownloadView>("start_nxm_download", { url }),
+  listDownloads: () => call<DownloadView[]>("list_downloads"),
+  cancelDownload: (id: string) => call<void>("cancel_download", { id }),
+  removeDownload: (id: string) => call<void>("remove_download", { id }),
   nexusSignIn: () => call<NexusStatusView>("nexus_sign_in"),
   setSsoApplication: (slug: string) =>
     call<NexusStatusView>("set_sso_application", { slug }),
@@ -236,6 +253,37 @@ export async function onNxmLink(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<string>("nxm-url", (e) => handler(e.payload));
+}
+
+/**
+ * Subscribe to download progress. The whole entry is sent on each change, so the
+ * receiver replaces rather than patches and cannot drift out of sync.
+ */
+export async function onDownloadChanged(
+  handler: (d: DownloadView) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<DownloadView>("download-changed", (e) => handler(e.payload));
+}
+
+/** "4.2 MB/s", or empty while the rate is not yet meaningful. */
+export function formatRate(bytesPerSecond: number): string {
+  return bytesPerSecond > 0 ? `${formatBytes(bytesPerSecond)}/s` : "";
+}
+
+/** Rough time left, in the coarse units people actually read. */
+export function formatEta(
+  totalBytes: number | null,
+  receivedBytes: number,
+  bytesPerSecond: number,
+): string {
+  if (!totalBytes || bytesPerSecond <= 0) return "";
+  const seconds = Math.round((totalBytes - receivedBytes) / bytesPerSecond);
+  if (seconds <= 1) return "almost done";
+  if (seconds < 60) return `${seconds}s left`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min left`;
+  return `${Math.round(minutes / 60)} hr left`;
 }
 
 /**

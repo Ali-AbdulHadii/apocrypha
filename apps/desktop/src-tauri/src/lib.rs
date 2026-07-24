@@ -4,6 +4,7 @@
 //! UI layer can be replaced without touching the engines.
 
 mod commands;
+mod downloads;
 mod nexus_cmds;
 mod state;
 
@@ -70,7 +71,10 @@ pub fn run() {
             nexus_cmds::unregister_nxm_handler,
             nexus_cmds::parse_nxm_link,
             nexus_cmds::open_mod_page,
-            nexus_cmds::download_from_nxm,
+            nexus_cmds::start_nxm_download,
+            nexus_cmds::list_downloads,
+            nexus_cmds::cancel_download,
+            nexus_cmds::remove_download,
             nexus_cmds::nexus_sign_in,
             nexus_cmds::set_sso_application,
         ])
