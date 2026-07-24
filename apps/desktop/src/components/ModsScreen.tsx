@@ -31,6 +31,35 @@ function categoryOf(m: ModView): string {
   return m.category?.trim() || "Uncategorised";
 }
 
+/**
+ * Rebuild the whole load order after one category was reordered.
+ *
+ * The reordered mods go back into the exact positions that category already
+ * occupied, so moving a mod inside "Armor" cannot shuffle every other category
+ * to the end of the list.
+ */
+export function spliceOrder(
+  all: ModView[],
+  category: string,
+  reorderedIds: string[],
+): string[] {
+  const full = [...all].sort((a, b) => a.priority - b.priority).map((m) => m.id);
+  const byId = new Map(all.map((m) => [m.id, m]));
+
+  const slots: number[] = [];
+  full.forEach((id, i) => {
+    const m = byId.get(id);
+    if (m && categoryOf(m) === category) slots.push(i);
+  });
+
+  const out = [...full];
+  slots.forEach((slot, i) => {
+    const id = reorderedIds[i];
+    if (id !== undefined) out[slot] = id;
+  });
+  return out;
+}
+
 export function ModsScreen({
   mods,
   appliedIds,
@@ -45,6 +74,8 @@ export function ModsScreen({
   const [status, setStatus] = useState<"all" | "enabled" | "disabled">("all");
   const [category, setCategory] = useState("all");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  /** Groups whose open animation has finished, so their clip can be dropped. */
+  const [settled, setSettled] = useState<Set<string>>(new Set());
 
   const categories = useMemo(() => {
     const set = new Set(mods.map(categoryOf));
@@ -208,31 +239,36 @@ export function ModsScreen({
                     animate={{ height: "auto", opacity: 1 }}
                     exit={{ height: 0, opacity: 0 }}
                     transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                    style={{ overflow: "hidden" }}
+                    // Clipped while the height animates, then released, so a
+                    // row being dragged is not cut off at the group edge.
+                    style={{ overflow: settled.has(name) ? "visible" : "hidden" }}
+                    onAnimationComplete={() =>
+                      setSettled((prev) => new Set(prev).add(name))
+                    }
+                    onAnimationStart={() =>
+                      setSettled((prev) => {
+                        const next = new Set(prev);
+                        next.delete(name);
+                        return next;
+                      })
+                    }
                   >
                     {reorderable ? (
                       <Reorder.Group
                         axis="y"
-                        values={items}
-                        onReorder={(next) => {
-                          // Splice the reordered category back into the full order.
-                          const ids = next.map((m) => m.id);
-                          const rest = mods
-                            .filter((m) => categoryOf(m) !== name)
-                            .sort((a, b) => a.priority - b.priority)
-                            .map((m) => m.id);
-                          onReorder([...ids, ...rest]);
-                        }}
+                        // Ids, not mod objects. Reorder tracks values by
+                        // identity, and every state update rebuilds the mod
+                        // objects, so object values would break mid drag.
+                        values={items.map((m) => m.id)}
+                        onReorder={(nextIds) => onReorder(spliceOrder(mods, name, nextIds))}
                         className="mod-group-body"
                         as="div"
                       >
                         {items.map((m) => (
-                          <ModRow
+                          <DraggableModRow
                             key={m.id}
                             mod={m}
                             applied={appliedIds.has(m.id)}
-                            dirty={dirty}
-                            draggable
                             onToggle={onToggle}
                             onConfigure={onConfigure}
                           />
@@ -282,36 +318,23 @@ function StatusChip({
   );
 }
 
-function ModRow({
+/** Shared row content, used by both the static and draggable variants. */
+function RowBody({
   mod,
   applied,
-  draggable,
+  handle,
   onToggle,
   onConfigure,
 }: {
   mod: ModView;
   applied: boolean;
-  dirty: boolean;
-  draggable?: boolean;
+  handle: React.ReactNode;
   onToggle: (m: ModView, enabled: boolean) => void;
   onConfigure: (m: ModView) => void;
 }) {
-  const controls = useDragControls();
-
-  const body = (
+  return (
     <>
-      {draggable ? (
-        <span
-          className="drag-handle"
-          onPointerDown={(e) => controls.start(e)}
-          aria-label={`Reorder ${mod.name}`}
-          title="Drag to change load order"
-        >
-          <Icon.grip size={14} />
-        </span>
-      ) : (
-        <span className="mod-order">{mod.priority}</span>
-      )}
+      {handle}
 
       <Switch
         checked={mod.enabled}
@@ -326,10 +349,10 @@ function ModRow({
           <StatusChip mod={mod} applied={applied} />
         </div>
         <div className="mod-meta">
-          {mod.author ? `${mod.author} · ` : ""}
+          {mod.author ? `${mod.author} \u00b7 ` : ""}
           {mod.selection.length} of{" "}
-          {mod.groups.reduce((n, g) => n + g.options.length, 0)} options ·{" "}
-          {mod.totalFiles} files · {formatBytes(mod.totalBytes)}
+          {mod.groups.reduce((n, g) => n + g.options.length, 0)} options \u00b7{" "}
+          {mod.totalFiles} files \u00b7 {formatBytes(mod.totalBytes)}
         </div>
       </div>
 
@@ -338,21 +361,87 @@ function ModRow({
       </button>
     </>
   );
+}
 
-  if (!draggable) {
-    return <div className={`mod-row ${mod.enabled ? "" : "disabled"}`}>{body}</div>;
-  }
+function ModRow({
+  mod,
+  applied,
+  onToggle,
+  onConfigure,
+}: {
+  mod: ModView;
+  applied: boolean;
+  dirty: boolean;
+  onToggle: (m: ModView, enabled: boolean) => void;
+  onConfigure: (m: ModView) => void;
+}) {
+  return (
+    <div className={`mod-row ${mod.enabled ? "" : "disabled"}`}>
+      <RowBody
+        mod={mod}
+        applied={applied}
+        handle={<span className="mod-order">{mod.priority}</span>}
+        onToggle={onToggle}
+        onConfigure={onConfigure}
+      />
+    </div>
+  );
+}
+
+/**
+ * A row that can be dragged by its grip.
+ *
+ * The item value is the mod id rather than the mod object, because Reorder
+ * matches values by identity and the mod objects are rebuilt on every state
+ * update. Dragging only starts from the grip, so the toggle and the Configure
+ * button stay clickable.
+ */
+function DraggableModRow({
+  mod,
+  applied,
+  onToggle,
+  onConfigure,
+}: {
+  mod: ModView;
+  applied: boolean;
+  onToggle: (m: ModView, enabled: boolean) => void;
+  onConfigure: (m: ModView) => void;
+}) {
+  const controls = useDragControls();
 
   return (
     <Reorder.Item
-      value={mod}
+      value={mod.id}
       dragListener={false}
       dragControls={controls}
       className={`mod-row ${mod.enabled ? "" : "disabled"}`}
-      whileDrag={{ scale: 1.01 }}
+      whileDrag={{ scale: 1.01, zIndex: 2 }}
+      transition={{ type: "spring", stiffness: 600, damping: 40 }}
       as="div"
     >
-      {body}
+      <RowBody
+        mod={mod}
+        applied={applied}
+        handle={
+          <span
+            className="drag-handle"
+            // touch-action is none in CSS so the browser does not claim the
+            // gesture for scrolling before the drag can start.
+            onPointerDown={(e) => {
+              e.preventDefault();
+              controls.start(e);
+            }}
+            role="button"
+            tabIndex={-1}
+            aria-label={`Reorder ${mod.name}`}
+            title="Drag to change load order"
+          >
+            <Icon.grip size={14} />
+          </span>
+        }
+        onToggle={onToggle}
+        onConfigure={onConfigure}
+      />
     </Reorder.Item>
   );
 }
