@@ -111,30 +111,63 @@ fn is_installable(p: &Path) -> bool {
     has_ext(p, INSTALLABLE_EXT)
 }
 
+/// Outcome of registering a download.
+pub enum Begin {
+    /// Registered. The caller owns driving the transfer.
+    Started(Download),
+    /// A transfer for this file was already running. Nothing was registered.
+    AlreadyRunning(Download),
+}
+
 impl Queue {
     /// Register a download before its thread starts, so the interface can show
     /// it immediately rather than after the first byte arrives.
-    pub fn begin(&self, file_name: &str, path: &Path, source: &str) -> Download {
-        let d = Download {
-            id: new_id(),
-            file_name: file_name.to_string(),
-            path: path.display().to_string(),
-            total_bytes: None,
-            received_bytes: 0,
-            state: DownloadState::Downloading,
-            error: None,
-            source: source.to_string(),
-            started_at: now(),
-            bytes_per_second: 0,
-            installable: is_installable(path),
-        };
-        if let Ok(mut items) = self.items.lock() {
+    ///
+    /// Refuses to register a second transfer for a destination one is already
+    /// writing. That is a correctness guard, not tidiness: two threads sharing
+    /// a path truncate each other's part file, and whichever renames first
+    /// leaves the loser appending into the finished archive. Two ways in hit
+    /// this, a duplicated event listener and a double press of Mod Manager
+    /// Download, so it is enforced here where the lock is held once rather
+    /// than by checking before calling.
+    pub fn begin(&self, file_name: &str, path: &Path, source: &str) -> Begin {
+        let dest = path.display().to_string();
+
+        // Check and insert under one guard. Splitting them would leave a window
+        // where two callers both see nothing running and both proceed, which is
+        // the exact race this exists to prevent.
+        let d = {
+            // Poisoning only means some other thread panicked; the map itself
+            // is still a valid map, and refusing every future download because
+            // of it would be worse than carrying on.
+            let mut items = self.items.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(running) = items
+                .values()
+                .find(|d| d.state == DownloadState::Downloading && d.path == dest)
+            {
+                return Begin::AlreadyRunning(running.clone());
+            }
+            let d = Download {
+                id: new_id(),
+                file_name: file_name.to_string(),
+                path: dest,
+                total_bytes: None,
+                received_bytes: 0,
+                state: DownloadState::Downloading,
+                error: None,
+                source: source.to_string(),
+                started_at: now(),
+                bytes_per_second: 0,
+                installable: is_installable(path),
+            };
             items.insert(d.id.clone(), d.clone());
-        }
+            d
+        };
+
         if let Ok(mut c) = self.cancels.lock() {
             c.insert(d.id.clone(), Arc::new(AtomicBool::new(false)));
         }
-        d
+        Begin::Started(d)
     }
 
     pub fn cancel_flag(&self, id: &str) -> Option<Arc<AtomicBool>> {
@@ -314,6 +347,14 @@ pub fn fetch(
 mod tests {
     use super::*;
 
+    /// Register a transfer, asserting it was actually new.
+    fn started(q: &Queue, name: &str, path: &Path) -> Download {
+        match q.begin(name, path, "test") {
+            Begin::Started(d) => d,
+            Begin::AlreadyRunning(_) => panic!("expected a fresh registration"),
+        }
+    }
+
     #[test]
     fn server_names_cannot_escape_the_folder() {
         // The invariant is that the result is one path segment, so joining it
@@ -353,7 +394,7 @@ mod tests {
     #[test]
     fn a_new_entry_has_no_size_until_the_server_reports_one() {
         let q = Queue::default();
-        let d = q.begin("x.zip", Path::new("/tmp/x.zip"), "test");
+        let d = started(&q, "x.zip", Path::new("/tmp/x.zip"));
         assert_eq!(d.total_bytes, None);
         assert_eq!(d.state, DownloadState::Downloading);
         let d = q.update(&d.id, |d| d.total_bytes = Some(200)).unwrap();
@@ -364,7 +405,7 @@ mod tests {
     #[test]
     fn cancelling_sets_the_flag_the_transfer_watches() {
         let q = Queue::default();
-        let d = q.begin("x.zip", Path::new("/tmp/x.zip"), "test");
+        let d = started(&q, "x.zip", Path::new("/tmp/x.zip"));
         assert!(!q.cancel_flag(&d.id).unwrap().load(Ordering::Relaxed));
         q.request_cancel(&d.id);
         assert!(q.cancel_flag(&d.id).unwrap().load(Ordering::Relaxed));
@@ -388,12 +429,32 @@ mod tests {
     }
 
     #[test]
+    fn a_second_transfer_for_the_same_file_is_refused() {
+        let q = Queue::default();
+        let path = Path::new("/tmp/Mod.zip");
+        let first = started(&q, "Mod.zip", path);
+
+        // Two threads writing one path would truncate each other's part file,
+        // so the second caller is handed the running entry instead.
+        match q.begin("Mod.zip", path, "test") {
+            Begin::AlreadyRunning(d) => assert_eq!(d.id, first.id),
+            Begin::Started(_) => panic!("started a second writer for one file"),
+        }
+        assert_eq!(q.list(Path::new("/nonexistent")).len(), 1);
+
+        // Once it is no longer running the file may be fetched again, which is
+        // what re-downloading a broken archive needs.
+        q.update(&first.id, |d| d.state = DownloadState::Failed);
+        started(&q, "Mod.zip", path);
+    }
+
+    #[test]
     fn tracked_downloads_are_not_duplicated_by_the_scan() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("Tracked.zip");
         std::fs::write(&path, b"x").unwrap();
         let q = Queue::default();
-        q.begin("Tracked.zip", &path, "Nexus Mods");
+        started(&q, "Tracked.zip", &path);
         assert_eq!(q.list(dir.path()).len(), 1);
     }
 }
