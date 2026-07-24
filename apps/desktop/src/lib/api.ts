@@ -103,6 +103,32 @@ export interface ProfileView {
   active: boolean;
 }
 
+export interface NexusStatusView {
+  source: string;
+  hasApiKey: boolean;
+  userName: string | null;
+  isPremium: boolean;
+  handlerRegistered: boolean;
+  handlerIsDefault: boolean;
+  currentHandler: string | null;
+  desktopFile: string;
+}
+
+export interface NxmLinkView {
+  domain: string;
+  modId: number;
+  fileId: number;
+  hasToken: boolean;
+  viewOnly: boolean;
+  modPageUrl: string;
+}
+
+export interface DownloadResultView {
+  path: string;
+  fileName: string;
+  bytes: number;
+}
+
 export interface SettingsView {
   gameDbSource: string;
   dataRoot: string;
@@ -174,7 +200,35 @@ export const api = {
     call<string | null>("preview_from_mod", { gameId, modId, optionId }),
 
   steamDiagnostics: () => call<unknown>("steam_diagnostics"),
+
+  /* Nexus Mods */
+  nexusStatus: () => call<NexusStatusView>("nexus_status"),
+  setDownloadSource: (source: string) =>
+    call<NexusStatusView>("set_download_source", { source }),
+  setNexusApiKey: (apiKey: string) =>
+    call<NexusStatusView>("set_nexus_api_key", { apiKey }),
+  registerNxmHandler: () => call<NexusStatusView>("register_nxm_handler"),
+  unregisterNxmHandler: () => call<NexusStatusView>("unregister_nxm_handler"),
+  parseNxmLink: (url: string) => call<NxmLinkView>("parse_nxm_link", { url }),
+  openModPage: (domain: string, modId: number, fileId?: number) =>
+    call<string>("open_mod_page", { domain, modId, fileId }),
+  downloadFromNxm: (url: string) =>
+    call<DownloadResultView>("download_from_nxm", { url }),
+
+  /** Open a URL in the user's browser. */
+  openUrl: async (url: string) => {
+    const { openUrl } = await import("@tauri-apps/plugin-opener");
+    return openUrl(url);
+  },
 };
+
+/** Subscribe to nxm:// links delivered by the OS. Returns an unsubscribe fn. */
+export async function onNxmLink(
+  handler: (url: string) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("nxm-url", (e) => handler(e.payload));
+}
 
 /**
  * Where an option's preview image should be fetched from. The wizard runs both

@@ -212,11 +212,28 @@ body,
 }
 
 /* The window is transparent and undecorated so the app can round its own
-   corners. The page itself must therefore paint nothing outside .app, or the
-   rounding would be covered by an opaque backdrop. */
+   corners. Every element above .app must therefore paint nothing, or an opaque
+   square would sit behind the rounding. #root also clips, so no descendant can
+   paint into the corners. */
 html,
-body {
+body,
+#root {
   background: transparent;
+}
+
+#root {
+  border-radius: var(--window-radius, 12px);
+  overflow: hidden;
+  /* `contain: paint` makes #root a containing block for fixed-position
+     descendants and clips their painting to its rounded box. Without it the
+     splash, toasts, wizard and lightbox (all position: fixed) escape the clip
+     and paint square corners over the window, which is why the rounding
+     appeared to come and go. */
+  contain: paint;
+}
+
+:root[data-window="maximized"] #root {
+  border-radius: 0;
 }
 
 body {
@@ -307,9 +324,11 @@ button {
   border: 0;
 }
 
-/* Ambient radial wash behind the app. Two very soft lobes, no hard edges. */
+/* Ambient radial wash behind the app. Two very soft lobes, no hard edges.
+   Absolute, not fixed: a fixed layer escapes the rounded overflow clip of
+   .app and paints a square block outside the window's corners. */
 .ambient {
-  position: fixed;
+  position: absolute;
   inset: 0;
   pointer-events: none;
   z-index: 0;

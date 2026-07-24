@@ -24,7 +24,15 @@ export function useMaximized(): boolean {
       const w = await appWindow();
       const sync = async () => {
         const v = await w.isMaximized();
-        if (alive) setMaximized(v);
+        if (!alive) return;
+        setMaximized(v);
+        // Mirrored onto the root element so CSS can square the corners without
+        // waiting on a React render. The two must never disagree, or the
+        // window shows rounded corners over a square backdrop.
+        document.documentElement.setAttribute(
+          "data-window",
+          v ? "maximized" : "normal",
+        );
       };
       await sync();
       unlisten = await w.onResized(sync);

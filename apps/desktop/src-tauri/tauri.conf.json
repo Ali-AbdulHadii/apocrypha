@@ -43,5 +43,14 @@
         "depends": []
       }
     }
+  },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": [
+          "nxm"
+        ]
+      }
+    }
   }
 }

@@ -2,7 +2,9 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Permissions for the main Apocrypha window. Scoped deliberately: the UI needs native file pickers, external links, and control of its own window because the OS title bar is replaced by a custom one. All filesystem work happens in Rust, not through the JS bridge.",
-  "windows": ["main"],
+  "windows": [
+    "main"
+  ],
   "permissions": [
     "core:default",
     "core:window:allow-start-dragging",
@@ -15,6 +17,7 @@
     "core:window:allow-set-focus",
     "dialog:allow-open",
     "dialog:allow-message",
-    "opener:allow-open-url"
+    "opener:allow-open-url",
+    "deep-link:default"
   ]
 }

@@ -20,9 +20,13 @@ apoc-modengine = { path = "../../../crates/apoc-modengine" }
 apoc-steam = { path = "../../../crates/apoc-steam" }
 apoc-deploy = { path = "../../../crates/apoc-deploy" }
 apoc-storage = { path = "../../../crates/apoc-storage" }
+apoc-nexus = { path = "../../../crates/apoc-nexus" }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-deep-link = "2"
+tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }

@@ -8,6 +8,7 @@ import { InstallWizard } from "./components/InstallWizard";
 import { ModsScreen } from "./components/ModsScreen";
 import { Splash } from "./components/Splash";
 import { TitleBar } from "./components/TitleBar";
+import { DownloadsPanel } from "./components/DownloadsPanel";
 import { Chip, Segmented, Spinner, pageMotion, useToast } from "./components/ui";
 import {
   api,
@@ -15,6 +16,7 @@ import {
   IS_TAURI,
   pickArchive,
   pickDirectory,
+  onNxmLink,
   truncatePath,
   type DryRunView,
   type GameView,
@@ -108,6 +110,45 @@ export default function App() {
       }
     })();
   }, [activeGameId, refreshMods, refreshProfiles, fail]);
+
+  /* ------------------------------------------------- nexus download link --- */
+
+  // Links arrive from the OS when the user presses "Mod Manager Download" on
+  // the website. The archive is fetched, then handed to the normal import
+  // wizard, so a downloaded mod goes through exactly the same path as one
+  // picked from disk.
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    let dispose: (() => void) | undefined;
+
+    onNxmLink(async (url) => {
+      if (!activeGameId) {
+        push("Select a game before downloading a mod", "bad");
+        return;
+      }
+      setBusy(true);
+      try {
+        push("Downloading from Nexus Mods", "info");
+        const dl = await api.downloadFromNxm(url);
+        const analyzed = await api.analyzeArchive(activeGameId, dl.path);
+        setPendingArchive(dl.path);
+        setWizardMod(analyzed);
+        push(`Downloaded ${dl.fileName}`, "ok");
+      } catch (e) {
+        fail(e);
+      } finally {
+        setBusy(false);
+      }
+    })
+      .then((un) => {
+        dispose = un;
+      })
+      .catch(() => {
+        /* Outside Tauri there are no OS events to listen for. */
+      });
+
+    return () => dispose?.();
+  }, [activeGameId, push, fail]);
 
   /* ---------------------------------------------------------- actions --- */
 
@@ -374,6 +415,7 @@ export default function App() {
                     onSettings={setSettings}
                     game={activeGame}
                     onError={fail}
+                    onInfo={push}
                   />
                 )}
               </motion.div>
@@ -906,11 +948,13 @@ function SettingsScreen({
   onSettings,
   game,
   onError,
+  onInfo,
 }: {
   settings: SettingsView | null;
   onSettings: (s: SettingsView) => void;
   game: GameView | null;
   onError: (e: unknown) => void;
+  onInfo: (msg: string, kind?: "ok" | "bad" | "info") => void;
 }) {
   const appearance = useAppearance();
   if (!settings) return <div className="empty">Loading settings.</div>;
@@ -918,6 +962,8 @@ function SettingsScreen({
   return (
     <div className="stack">
       <AppearancePanel {...appearance} />
+
+      <DownloadsPanel onError={onError} onInfo={onInfo} />
 
       <div className="card stack">
         <div className="card-title">Where game information comes from</div>

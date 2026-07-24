@@ -1,0 +1,14 @@
+[package]
+name = "apoc-nexus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Nexus Mods integration: nxm:// links, the download API, and Linux protocol registration."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# rustls rather than native-tls so the build does not depend on system OpenSSL.
+ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
