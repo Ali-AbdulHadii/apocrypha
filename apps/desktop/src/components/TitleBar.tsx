@@ -28,7 +28,11 @@ export function TitleBar({ subtitle }: { subtitle?: string }) {
         }}
       >
         <span
-          style={{ color: "var(--accent)", display: "grid", placeItems: "center" }}
+          style={{
+            color: "var(--text-primary)",
+            display: "grid",
+            placeItems: "center",
+          }}
         >
           <Logo size={18} />
         </span>

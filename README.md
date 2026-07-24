@@ -1,3 +1,6 @@
+<img src="docs/images/logo-white.png#gh-dark-mode-only" alt="Apocrypha" width="88">
+<img src="docs/images/logo-black.png#gh-light-mode-only" alt="Apocrypha" width="88">
+
 # Apocrypha
 
 A native Linux desktop mod manager for games, built Linux-first rather than ported to it. First target: **Monster Hunter Wilds**.

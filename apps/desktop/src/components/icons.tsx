@@ -172,31 +172,51 @@ export const Icon = {
 export type IconName = keyof typeof Icon;
 
 /**
- * The Apocrypha mark: a closed codex with a single seal line.
+ * The Apocrypha mark.
  *
- * "Apocrypha" means hidden or set-aside writings, so the mark is a sealed book.
- * Geometric, monoline, one colour, and legible down to 16px.
+ * Three bars in the arrangement of an impossible triangle: a form that reads as
+ * a whole but cannot actually exist. A modded game is the same thing, no longer
+ * the object that shipped, and "apocrypha" means writings set aside from the
+ * accepted canon.
+ *
+ * Unlike the icons above it is solid rather than monoline, because a brand mark
+ * and a toolbar icon do different jobs. It is one colour, inherits from context,
+ * and is centred on the 32 grid to three decimal places with equal margins and
+ * three identical 1.58 unit gaps. Those numbers are why it reads evenly at 16px.
  */
+const MARK = [
+  "M7.32 27.16 25.18 27.16 28.28 21.80 10.42 21.80Z",
+  "M12.13 5.13 3.20 20.60 6.29 25.96 15.22 10.49Z",
+  "M28.80 20.31 19.87 4.84 13.68 4.84 22.61 20.31Z",
+];
+
 export function Logo({ size = 32 }: { size?: number }) {
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 32 32"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.75"
-      strokeLinecap="round"
-      strokeLinejoin="round"
+      fill="currentColor"
       aria-hidden="true"
       focusable="false"
     >
-      {/* codex body */}
-      <path d="M7 5.5h13.5A3.5 3.5 0 0 1 24 9v17.5H10.5A3.5 3.5 0 0 1 7 23V5.5Z" />
-      {/* spine fold */}
-      <path d="M7 23a3.5 3.5 0 0 1 3.5-3.5H24" />
-      {/* seal */}
-      <path d="M14 11h4" />
+      {MARK.map((d) => (
+        <path key={d} d={d} />
+      ))}
     </svg>
+  );
+}
+
+/**
+ * The mark stacked above the name, for the splash and anywhere the brand leads
+ * rather than labels. The word is letterspaced and set lighter so the mark
+ * carries the weight.
+ */
+export function Lockup({ size = 64 }: { size?: number }) {
+  return (
+    <span className="lockup" style={{ ["--lockup-size" as string]: `${size}px` }}>
+      <Logo size={size} />
+      <span className="lockup-word">Apocrypha</span>
+    </span>
   );
 }

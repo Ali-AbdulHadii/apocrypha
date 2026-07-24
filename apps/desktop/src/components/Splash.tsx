@@ -2,12 +2,12 @@
  * Startup screen.
  *
  * Shown while the first game and settings queries resolve. Deliberately quiet:
- * the mark, the name, and a single indeterminate bar. It fades out rather than
- * cutting, so the app does not flash.
+ * the lockup, and a single indeterminate bar. It fades out rather than cutting,
+ * so the app does not flash.
  */
 
 import { motion } from "framer-motion";
-import { Logo } from "./icons";
+import { Lockup } from "./icons";
 
 export function Splash() {
   return (
@@ -24,23 +24,14 @@ export function Splash() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease: [0.16, 1, 0.3, 1] }}
         >
-          <Logo size={48} />
-        </motion.span>
-
-        <motion.span
-          className="splash-name"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.08 }}
-        >
-          Apocrypha
+          <Lockup size={64} />
         </motion.span>
 
         <motion.div
           className="splash-bar"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
-          transition={{ delay: 0.16 }}
+          transition={{ delay: 0.2 }}
         >
           <motion.span
             initial={{ x: "-100%" }}

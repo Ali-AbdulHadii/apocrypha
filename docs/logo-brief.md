@@ -1,8 +1,9 @@
 # Logo brief
 
-A brief for designing the real Apocrypha mark, to hand to a designer or to an AI
-design assistant. The current mark in `apps/desktop/src/components/icons.tsx` is
-a placeholder drawn to keep the app coherent, not a finished identity.
+> **The mark is now chosen.** See [brand.md](./brand.md) for the final
+> geometry, the rules for using it, and the files. This brief is kept as a
+> record of the constraints it was designed against, and as a starting point if
+> the mark is ever revisited.
 
 For a plain language description of the product to hand a designer before the
 constraints, see [about-for-designers.md](./about-for-designers.md).
