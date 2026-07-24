@@ -1,0 +1,9 @@
+[package]
+name = "apoc-steam"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Steam and Proton discovery on Linux: roots, libraries, install dirs, compatdata prefixes."
+
+[dependencies]

@@ -1,0 +1,329 @@
+/* ============================================================================
+   Apocrypha design system
+   ----------------------------------------------------------------------------
+   Every value here is a token. Components never hard-code a colour, size, or
+   radius, which is what makes the Appearance settings able to retheme the whole
+   app by overriding a handful of custom properties at :root.
+
+   Scales are deliberate:
+     spacing / radius  powers of two (2 4 8 16 32 64 128)
+     type              even sizes on a 1.2 ratio, no fractional pixels
+     colour            green on black (dark) / green on white (light)
+   ========================================================================== */
+
+/* SF Pro Display, loaded from the user's installed fonts. Nothing is
+   redistributed with the app. Only three upright faces exist (Regular, Medium,
+   Bold), so weights are mapped explicitly and the app uses only those three. */
+@font-face {
+  font-family: "Apocrypha Display";
+  src: local("SF Pro Display Regular"), local("SFProDisplay-Regular"),
+    local("SF Pro Display"), local("Inter Regular");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Apocrypha Display";
+  src: local("SF Pro Display Medium"), local("SFProDisplay-Medium"),
+    local("Inter Medium");
+  font-weight: 500 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Apocrypha Display";
+  src: local("SF Pro Display Bold"), local("SFProDisplay-Bold"),
+    local("Inter Bold");
+  font-weight: 700 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  /* ---- typography ------------------------------------------------------ */
+  --font-display: "Apocrypha Display", "SF Pro Display", -apple-system,
+    BlinkMacSystemFont, "Inter", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "SF Mono", "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo,
+    monospace;
+
+  /* Even sizes only. --text-base is the knob Appearance scales from. */
+  --text-base: 14px;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+
+  --leading-tight: 1.25;
+  --leading: 1.5;
+
+  /* ---- spacing: powers of two ------------------------------------------ */
+  --sp-1: 2px;
+  --sp-2: 4px;
+  --sp-3: 8px;
+  --sp-4: 16px;
+  --sp-5: 32px;
+  --sp-6: 64px;
+  --sp-7: 128px;
+
+  /* ---- radius: powers of two ------------------------------------------- */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius: 8px;
+  --radius-lg: 16px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  /* ---- motion ---------------------------------------------------------- */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --dur-fast: 120ms;
+  --dur: 200ms;
+  --dur-slow: 360ms;
+
+  /* ---- layout ---------------------------------------------------------- */
+  --titlebar-h: 40px;
+  --rail-w: 224px;
+
+  /* ---- accent (overridable from Appearance settings) ------------------- */
+  /* Deep, desaturated green. The gradient runs from a cooler pine to a warmer
+     moss so accent surfaces have depth without turning neon. */
+  --accent-h: 158;
+  --accent-s: 38%;
+  --accent-h2: 138;
+}
+
+/* ------------------------------------------------------------------ dark -- */
+:root,
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg-base: hsl(190 12% 5%);
+  --bg-sunken: hsl(190 14% 3%);
+  --bg-surface: hsl(190 12% 8%);
+  --bg-raised: hsl(190 11% 11%);
+  --bg-overlay: hsl(190 11% 13%);
+  --bg-hover: hsl(190 11% 15%);
+  --bg-active: hsl(190 11% 18%);
+
+  --border: hsl(190 10% 17%);
+  --border-strong: hsl(190 10% 26%);
+
+  --text-primary: hsl(160 14% 94%);
+  --text-secondary: hsl(165 8% 68%);
+  --text-tertiary: hsl(165 7% 48%);
+
+  --accent: hsl(var(--accent-h) var(--accent-s) 48%);
+  --accent-hover: hsl(var(--accent-h) var(--accent-s) 55%);
+  --accent-muted: hsl(var(--accent-h) 28% 13%);
+  --accent-contrast: hsl(160 30% 96%);
+  --accent-border: hsl(var(--accent-h) 26% 28%);
+  --accent-gradient: linear-gradient(
+    135deg,
+    hsl(var(--accent-h) var(--accent-s) 44%) 0%,
+    hsl(var(--accent-h2) calc(var(--accent-s) - 4%) 38%) 100%
+  );
+
+  --success: hsl(152 58% 55%);
+  --success-bg: hsl(152 40% 12%);
+  --warning: hsl(38 82% 60%);
+  --warning-bg: hsl(38 45% 12%);
+  --danger: hsl(2 70% 62%);
+  --danger-bg: hsl(2 42% 13%);
+  --info: hsl(198 70% 60%);
+
+  --shadow-sm: 0 1px 2px hsl(190 30% 1% / 0.5);
+  --shadow: 0 2px 8px hsl(190 30% 1% / 0.5);
+  --shadow-lg: 0 8px 32px hsl(190 30% 1% / 0.6);
+
+  --scrim: hsl(190 30% 2% / 0.72);
+
+  /* Ambient depth. Kept very low so it reads as atmosphere, not decoration. */
+  --glow-a: hsl(var(--accent-h) 50% 30% / 0.16);
+  --glow-b: hsl(190 40% 30% / 0.1);
+}
+
+/* ----------------------------------------------------------------- light -- */
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bg-base: hsl(0 0% 100%);
+  --bg-sunken: hsl(160 12% 97%);
+  --bg-surface: hsl(0 0% 100%);
+  --bg-raised: hsl(0 0% 100%);
+  --bg-overlay: hsl(0 0% 100%);
+  --bg-hover: hsl(160 14% 96%);
+  --bg-active: hsl(160 14% 93%);
+
+  --border: hsl(160 12% 90%);
+  --border-strong: hsl(160 10% 78%);
+
+  --text-primary: hsl(190 20% 8%);
+  --text-secondary: hsl(185 8% 36%);
+  --text-tertiary: hsl(185 7% 52%);
+
+  --accent: hsl(var(--accent-h) 46% 30%);
+  --accent-hover: hsl(var(--accent-h) 46% 24%);
+  --accent-muted: hsl(var(--accent-h) 34% 95%);
+  --accent-contrast: hsl(0 0% 100%);
+  --accent-border: hsl(var(--accent-h) 26% 78%);
+  --accent-gradient: linear-gradient(
+    135deg,
+    hsl(var(--accent-h) 46% 30%) 0%,
+    hsl(var(--accent-h2) 42% 26%) 100%
+  );
+
+  --success: hsl(152 60% 28%);
+  --success-bg: hsl(152 50% 94%);
+  --warning: hsl(32 80% 36%);
+  --warning-bg: hsl(38 86% 94%);
+  --danger: hsl(2 66% 44%);
+  --danger-bg: hsl(2 78% 96%);
+  --info: hsl(200 72% 38%);
+
+  --shadow-sm: 0 1px 2px hsl(190 16% 40% / 0.08);
+  --shadow: 0 2px 8px hsl(190 16% 40% / 0.08);
+  --shadow-lg: 0 8px 32px hsl(190 16% 30% / 0.14);
+
+  --scrim: hsl(190 16% 20% / 0.32);
+
+  --glow-a: hsl(var(--accent-h) 60% 60% / 0.1);
+  --glow-b: hsl(200 50% 60% / 0.07);
+}
+
+/* ------------------------------------------------------------------ reset -- */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+/* The window is transparent and undecorated so the app can round its own
+   corners. The page itself must therefore paint nothing outside .app, or the
+   rounding would be covered by an opaque backdrop. */
+html,
+body {
+  background: transparent;
+}
+
+body {
+  font-family: var(--font-display);
+  font-size: var(--text-base);
+  line-height: var(--leading);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  transition:
+    background-color var(--dur) var(--ease-out),
+    color var(--dur) var(--ease-out);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+button {
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+::selection {
+  background: var(--accent-muted);
+  color: var(--text-primary);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--text-tertiary);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
+
+/* -------------------------------------------------------------- utilities -- */
+.mono {
+  font-family: var(--font-mono);
+  font-size: 0.92em;
+  letter-spacing: -0.01em;
+}
+
+.truncate {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Ambient radial wash behind the app. Two very soft lobes, no hard edges. */
+.ambient {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(
+      60% 50% at 12% 0%,
+      var(--glow-a) 0%,
+      transparent 70%
+    ),
+    radial-gradient(
+      50% 45% at 100% 100%,
+      var(--glow-b) 0%,
+      transparent 72%
+    );
+  opacity: var(--ambient-opacity, 1);
+  transition: opacity var(--dur) var(--ease-out);
+}

@@ -1,0 +1,17 @@
+[package]
+name = "apoc-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Persistent state: SQLite schema, XDG paths, installed mods, profiles, and per-profile selections."
+
+[dependencies]
+apoc-domain = { path = "../apoc-domain" }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

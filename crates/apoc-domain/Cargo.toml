@@ -1,0 +1,10 @@
+[package]
+name = "apoc-domain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Pure domain types for Apocrypha (zero I/O): games, mods, options, payloads, load order, conflicts."
+
+[dependencies]
+serde = { workspace = true }

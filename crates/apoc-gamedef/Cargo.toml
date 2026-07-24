@@ -1,0 +1,13 @@
+[package]
+name = "apoc-gamedef"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Game-definition plugin system: builtin GameProfiles + the GameDatabaseSource port."
+
+[dependencies]
+apoc-domain = { path = "../apoc-domain" }
+serde = { workspace = true }
+toml = { workspace = true }
+thiserror = { workspace = true }

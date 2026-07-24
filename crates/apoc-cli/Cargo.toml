@@ -1,0 +1,23 @@
+[package]
+name = "apoc-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Developer CLI to exercise the Apocrypha core before the UI exists: inspect games, analyze mods, deploy and roll back."
+
+[[bin]]
+name = "apoc"
+path = "src/main.rs"
+
+[dependencies]
+apoc-domain = { path = "../apoc-domain" }
+apoc-gamedef = { path = "../apoc-gamedef" }
+apoc-modengine = { path = "../apoc-modengine" }
+apoc-steam = { path = "../apoc-steam" }
+apoc-deploy = { path = "../apoc-deploy" }
+apoc-storage = { path = "../apoc-storage" }
+
+[dev-dependencies]
+tempfile = "3"
+zip = { workspace = true }

@@ -1,0 +1,73 @@
+# Monster Hunter Wilds: declarative game definition.
+#
+# This file is the ENTIRE game-specific footprint for MHW Wilds. No engine crate
+# contains `if game == "mhwilds"`. Adding a game means adding a document like this.
+
+id = "monster-hunter-wilds"
+name = "Monster Hunter Wilds"
+engine = "re-engine"
+load_order = "priority"
+conflict_scope = "per-relative-path"
+case_sensitive = true
+
+[detection]
+steam_app_id = 2246340
+executable = "MonsterHunterWilds.exe"
+
+# Payload roots inside a normalized mod -> destination relative to the game dir.
+[[deploy_targets]]
+source = "natives"
+target = "natives"
+
+[[deploy_targets]]
+source = "reframework"
+target = "reframework"
+
+# Format detectors this game accepts, in priority order.
+formats = ["fluffy-aio", "fluffy-single", "loose-natives", "reframework-only", "pak"]
+
+# Standalone `.pak` mods must join the engine's patch chain to be seen by the
+# game. Wilds uses the "sub" scheme; the index is assigned at deploy time above
+# whatever already exists in the game directory.
+[pak_chain]
+pattern = "re_chunk_000.pak.sub_000.pak.patch_{n}.pak"
+digits = 3
+start_index = 1
+
+[loader]
+name = "REFramework"
+kind = "dll-proxy"
+proxy_dll = "dinput8.dll"
+data_dirs = ["reframework/data"]
+
+[loader.proton]
+wine_dll_overrides = "dinput8=n,b"
+steam_launch_options = 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
+requires_prefix_write = true
+
+# RE Engine resolves loose files under `natives/STM` with that exact casing.
+# Windows-authored archives ship every variant, and Linux is case-sensitive, so
+# these components are forced to canonical casing at import time.
+canonical_case = ["STM"]
+
+# Archives packed from the inside out: a bare `autorun/` really means
+# `reframework/autorun/`. Without these a valid mod imports as zero files.
+[[rewrap]]
+folder = "autorun"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "plugins"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "fonts"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "images"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "STM"
+prefix = "natives"

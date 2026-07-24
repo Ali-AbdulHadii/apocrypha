@@ -1,0 +1,28 @@
+[package]
+name = "apocrypha-desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Apocrypha — Linux-first desktop mod manager."
+
+[lib]
+name = "apocrypha_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+apoc-domain = { path = "../../../crates/apoc-domain" }
+apoc-gamedef = { path = "../../../crates/apoc-gamedef" }
+apoc-modengine = { path = "../../../crates/apoc-modengine" }
+apoc-steam = { path = "../../../crates/apoc-steam" }
+apoc-deploy = { path = "../../../crates/apoc-deploy" }
+apoc-storage = { path = "../../../crates/apoc-storage" }
+
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+serde = { workspace = true }
+serde_json = { workspace = true }
