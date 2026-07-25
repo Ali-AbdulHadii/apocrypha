@@ -18,13 +18,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Extensions worth listing. A `.7z` or `.rar` is a mod archive even though the
-/// engine cannot open one yet, so it is shown and marked rather than hidden:
-/// a file the user just downloaded should never silently fail to appear.
+/// Extensions worth listing. The engine reads all three, and identifies the
+/// real format from the file's leading bytes rather than trusting the name, so
+/// this is only a filter for what to show, never a claim about contents.
 const ARCHIVE_EXT: &[&str] = &["zip", "7z", "rar"];
-
-/// Extensions the mod engine can actually read today.
-const INSTALLABLE_EXT: &[&str] = &["zip"];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
@@ -53,9 +50,6 @@ pub struct Download {
     pub started_at: u64,
     /// Bytes per second, averaged over the transfer so far.
     pub bytes_per_second: u64,
-    /// False for an archive format the engine cannot open yet, so the interface
-    /// can say why instead of offering an Install button that fails.
-    pub installable: bool,
 }
 
 #[derive(Default)]
@@ -96,19 +90,11 @@ pub fn safe_name(name: &str) -> String {
     }
 }
 
-fn has_ext(p: &Path, set: &[&str]) -> bool {
+fn is_archive(p: &Path) -> bool {
     p.extension()
         .and_then(|e| e.to_str())
-        .map(|e| set.iter().any(|a| a.eq_ignore_ascii_case(e)))
+        .map(|e| ARCHIVE_EXT.iter().any(|a| a.eq_ignore_ascii_case(e)))
         .unwrap_or(false)
-}
-
-fn is_archive(p: &Path) -> bool {
-    has_ext(p, ARCHIVE_EXT)
-}
-
-fn is_installable(p: &Path) -> bool {
-    has_ext(p, INSTALLABLE_EXT)
 }
 
 /// Outcome of registering a download.
@@ -158,7 +144,6 @@ impl Queue {
                 source: source.to_string(),
                 started_at: now(),
                 bytes_per_second: 0,
-                installable: is_installable(path),
             };
             items.insert(d.id.clone(), d.clone());
             d
@@ -246,7 +231,6 @@ impl Queue {
                     source: "Downloads folder".into(),
                     started_at: mtime,
                     bytes_per_second: 0,
-                    installable: is_installable(&p),
                 });
             }
         }
@@ -379,16 +363,6 @@ mod tests {
         assert!(is_archive(Path::new("A.RAR")));
         assert!(!is_archive(Path::new("notes.txt")));
         assert!(!is_archive(Path::new("half.zip.part")));
-    }
-
-    #[test]
-    fn formats_the_engine_cannot_read_are_listed_but_not_installable() {
-        assert!(is_installable(Path::new("a.zip")));
-        assert!(is_installable(Path::new("A.ZIP")));
-        // Listed above, so the user sees the file, but the interface must not
-        // offer to install it.
-        assert!(!is_installable(Path::new("a.7z")));
-        assert!(!is_installable(Path::new("a.rar")));
     }
 
     #[test]

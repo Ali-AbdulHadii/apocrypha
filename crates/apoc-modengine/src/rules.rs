@@ -103,7 +103,9 @@ impl GameRules {
     }
 
     pub fn is_payload_root(&self, name: &str) -> bool {
-        self.payload_roots.iter().any(|r| r.eq_ignore_ascii_case(name))
+        self.payload_roots
+            .iter()
+            .any(|r| r.eq_ignore_ascii_case(name))
     }
 
     pub fn is_root_file(&self, name: &str) -> bool {
@@ -165,9 +167,15 @@ mod tests {
     fn rules_come_from_the_game_definition() {
         let r = GameRules::from_profile(&profile());
         assert!(r.is_payload_root("natives"));
-        assert!(!r.is_payload_root("reframework"), "not declared by this profile");
+        assert!(
+            !r.is_payload_root("reframework"),
+            "not declared by this profile"
+        );
         assert!(r.is_root_file("dinput8.dll"));
-        assert!(r.is_root_file("DINPUT8.DLL"), "matching is case-insensitive");
+        assert!(
+            r.is_root_file("DINPUT8.DLL"),
+            "matching is case-insensitive"
+        );
         assert!(!r.is_root_file("readme.txt"));
         assert!(r.is_pak_file("VerRBodyTextures-0-basic.pak"));
         assert!(!r.is_pak_file("notes.txt"));

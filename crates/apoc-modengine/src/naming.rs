@@ -160,7 +160,17 @@ mod tests {
 
     #[test]
     fn cover_and_warning() {
-        assert_eq!(n("Ver.R Hirabami F-M -0- 0- cover -0").slot_token.as_deref(), Some("cover"));
-        assert_eq!(n("Ver.R Hirabami F-M -0- 0- warning -0").slot_token.as_deref(), Some("warning"));
+        assert_eq!(
+            n("Ver.R Hirabami F-M -0- 0- cover -0")
+                .slot_token
+                .as_deref(),
+            Some("cover")
+        );
+        assert_eq!(
+            n("Ver.R Hirabami F-M -0- 0- warning -0")
+                .slot_token
+                .as_deref(),
+            Some("warning")
+        );
     }
 }

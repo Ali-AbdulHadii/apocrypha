@@ -62,7 +62,9 @@ fn analyzes_real_fluffy_aio_sample() {
         .collect();
     assert!(!forced.is_empty(), "must have a forced basic option");
     assert!(
-        forced.iter().any(|o| o.name.to_lowercase().contains("must install")),
+        forced
+            .iter()
+            .any(|o| o.name.to_lowercase().contains("must install")),
         "forced option should be the 'must install' basics"
     );
 
@@ -71,7 +73,10 @@ fn analyzes_real_fluffy_aio_sample() {
         .options()
         .filter(|o| o.select_mode == SelectMode::Exclusive)
         .count();
-    assert!(exclusive >= 5, "expected several exclusive variants, got {exclusive}");
+    assert!(
+        exclusive >= 5,
+        "expected several exclusive variants, got {exclusive}"
+    );
 
     // 6. Info-only notices (cover/warning) exist and are NOT deployable.
     let info: Vec<_> = bundle
@@ -102,7 +107,10 @@ fn analyzes_real_fluffy_aio_sample() {
     assert!(has_reframework, "expected reframework/ payloads");
 
     // 9. Archive hash was computed.
-    assert!(bundle.archive_sha256.as_ref().is_some_and(|h| h.len() == 64));
+    assert!(bundle
+        .archive_sha256
+        .as_ref()
+        .is_some_and(|h| h.len() == 64));
 
     // 10. `archive_path` must stay resolvable inside the real zip even though
     //     the wrapper directory is stripped from the game-relative path.
@@ -130,7 +138,10 @@ fn analyzes_real_fluffy_aio_sample() {
 
     // 11. Preview images referenced by `screenshot=` resolve to real entries,
     //     including the info-only cover/warning cards that carry no payload.
-    let with_screenshot: Vec<_> = bundle.options().filter(|o| o.screenshot.is_some()).collect();
+    let with_screenshot: Vec<_> = bundle
+        .options()
+        .filter(|o| o.screenshot.is_some())
+        .collect();
     assert!(
         with_screenshot.len() >= 20,
         "expected many options to declare a screenshot, got {}",
@@ -167,12 +178,8 @@ fn analyzes_real_fluffy_aio_sample() {
         .find(|o| o.screenshot.is_some())
         .expect("an info option with a screenshot");
     assert!(
-        apoc_modengine::staged_preview(
-            tmp.path(),
-            &cover.id,
-            cover.screenshot.as_ref().unwrap()
-        )
-        .is_some(),
+        apoc_modengine::staged_preview(tmp.path(), &cover.id, cover.screenshot.as_ref().unwrap())
+            .is_some(),
         "cover preview should be readable from the staging dir"
     );
 
