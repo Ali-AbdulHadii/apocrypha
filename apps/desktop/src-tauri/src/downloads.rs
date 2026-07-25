@@ -50,6 +50,13 @@ pub struct Download {
     pub started_at: u64,
     /// Bytes per second, averaged over the transfer so far.
     pub bytes_per_second: u64,
+    /// Name of the mod this archive was imported as, when it has been.
+    ///
+    /// Filled in by the command layer rather than the queue, which knows
+    /// nothing about the library. Absent on a progress event, where the
+    /// question cannot yet apply.
+    #[serde(default)]
+    pub installed_as: Option<String>,
 }
 
 #[derive(Default)]
@@ -144,6 +151,7 @@ impl Queue {
                 source: source.to_string(),
                 started_at: now(),
                 bytes_per_second: 0,
+                installed_as: None,
             };
             items.insert(d.id.clone(), d.clone());
             d
@@ -231,6 +239,7 @@ impl Queue {
                     source: "Downloads folder".into(),
                     started_at: mtime,
                     bytes_per_second: 0,
+                    installed_as: None,
                 });
             }
         }

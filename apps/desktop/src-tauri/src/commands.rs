@@ -693,12 +693,52 @@ pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String
 /// Read the persisted settings.
 #[tauri::command]
 pub fn get_settings(state: State<AppState>) -> CmdResult<SettingsView> {
+    // Resolved before the lock is taken, because it takes the lock itself.
+    let downloads = state.downloads_dir();
+    let is_default = downloads == state.default_downloads_dir();
+
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     Ok(SettingsView {
         game_db_source: store.game_db_source().map_err(err)?.as_str().to_string(),
         data_root: state.paths.root().display().to_string(),
         deploy_method_preference: "adaptive".to_string(),
+        downloads_dir: downloads.display().to_string(),
+        downloads_dir_is_default: is_default,
     })
+}
+
+/// Choose where downloads are kept. An empty path restores the default.
+///
+/// Files already downloaded are left where they are rather than moved. Moving
+/// tens of gigabytes as a side effect of a settings change is not something to
+/// do without asking, and the new folder is scanned on arrival anyway, so
+/// pointing this at an existing collection is how you adopt one.
+#[tauri::command(async)]
+pub fn set_downloads_dir(state: State<AppState>, path: String) -> CmdResult<SettingsView> {
+    let trimmed = path.trim().to_string();
+
+    if !trimmed.is_empty() {
+        let dir = PathBuf::from(&trimmed);
+        if !dir.is_absolute() {
+            return Err("Choose a full path for the downloads folder.".into());
+        }
+        // Fail here, where the message can name the folder, rather than at the
+        // start of a download the user has already committed to.
+        std::fs::create_dir_all(&dir)
+            .map_err(|e| format!("Could not use {}: {e}", dir.display()))?;
+        let probe = dir.join(".apocrypha-write-test");
+        std::fs::write(&probe, b"")
+            .map_err(|e| format!("Apocrypha cannot write to {}: {e}", dir.display()))?;
+        let _ = std::fs::remove_file(&probe);
+    }
+
+    {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .set_setting(crate::state::KEY_DOWNLOADS_DIR, &trimmed)
+            .map_err(err)?;
+    }
+    get_settings(state)
 }
 
 /// Switch the "Game Database Source" between the built-in DB and the Apocrypha API.

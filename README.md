@@ -38,6 +38,7 @@ What works today:
 - **Dry run preview.** The full plan (every file, every destination, the placement method chosen) without touching the game directory.
 - **Journaled deployment with hash-guarded rollback.** Every operation is flushed to an append-only JSONL journal as it happens. Undo replays in reverse and refuses to delete a file whose bytes changed since deploy.
 - **REFramework loader setup for Proton.** Writes the `dinput8=n,b` DLL override into the prefix's `user.reg` atomically, captures the previous value for rollback, and refuses to touch the prefix while Steam is running.
+- **Downloads.** Nexus `nxm://` links download in the background with live progress, and wait on a Downloads screen until you choose to install them. The folder is configurable, and anything already in it is listed and installable, so archives saved from a browser or brought from another manager work the same way. Rows show which files are already in your library.
 - **Light and dark themes.** Every colour, size and radius is a CSS custom property, so the Appearance panel can retheme the whole app at runtime.
 
 ## Screenshots
@@ -224,12 +225,21 @@ If your game needs a behaviour the schema cannot express, that is a gap in the s
 
 ## Roadmap
 
-Short and honest. No dates.
+Phases, not dates. Phase 1 is done: a mod manager that works end to end for one
+game, with the safety machinery built first.
 
-- **More games.** Other RE Engine titles first, since the profile schema already fits them, then wider.
-- **Online game database.** A hosted `GameDatabaseSource` so profiles arrive without an app update. The port already exists; the client does not.
-- **Mod updates.** Detecting that an installed mod has a newer version and re-deploying it cleanly.
-- **Windows build.** The core is portable and the Windows-specific parts are stubs. It is not a priority, but it is not ruled out.
+- **Phase 2, trustworthy at scale.** Apply progress and cancellation, mod
+  updates, verify-and-repair against the journal, per-file conflict overrides,
+  and a mod list that stays usable at two hundred mods.
+- **Phase 3, more games.** Other RE Engine titles first, then an engine
+  different enough to test whether the game profile schema is really general.
+  Online game database and FOMOD support land here.
+- **Phase 4, the Apocrypha service.** Apocrypha as a download source, shareable
+  reproducible collections, and preservation of mods that vanish from their host.
+- **Phase 5, beyond one machine.** Windows and macOS, packaging, headless apply.
+
+[docs/roadmap.md](docs/roadmap.md) has the reasoning, and the list of things
+deliberately not planned.
 
 ## Contributing
 

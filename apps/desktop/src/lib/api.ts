@@ -141,12 +141,17 @@ export interface DownloadView {
   source: string;
   startedAt: number;
   bytesPerSecond: number;
+  /** Name of the mod this archive was imported as, when it has been. */
+  installedAs: string | null;
 }
 
 export interface SettingsView {
   gameDbSource: string;
   dataRoot: string;
   deployMethodPreference: string;
+  downloadsDir: string;
+  /** False once the user has chosen their own folder. */
+  downloadsDirIsDefault: boolean;
 }
 
 /** True when running inside the Tauri shell (as opposed to a plain browser). */
@@ -203,6 +208,9 @@ export const api = {
   getSettings: () => call<SettingsView>("get_settings"),
   setGameDbSource: (source: string) =>
     call<SettingsView>("set_game_db_source", { source }),
+  /** An empty path restores the default downloads folder. */
+  setDownloadsDir: (path: string) =>
+    call<SettingsView>("set_downloads_dir", { path }),
 
   listProfiles: (gameId: string) => call<ProfileView[]>("list_profiles", { gameId }),
   createProfile: (gameId: string, name: string) =>

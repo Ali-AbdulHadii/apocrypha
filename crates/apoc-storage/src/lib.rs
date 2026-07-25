@@ -344,6 +344,20 @@ impl Store {
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
+    /// Every archive an installed mod was imported from, as `(path, mod name)`.
+    ///
+    /// The downloads list uses this to show which files are already in the
+    /// library. Matched on path because that is exactly what import records and
+    /// it costs nothing to compare, where matching on content would mean
+    /// re-hashing every archive in the folder on every listing. A file moved or
+    /// renamed since import therefore reads as "not installed", which is a
+    /// conservative answer rather than a wrong one.
+    pub fn installed_archives(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare("SELECT archive_path, name FROM mods")?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn delete_mod(&self, id: &str) -> Result<()> {
         self.conn.execute("DELETE FROM mods WHERE id=?1", params![id])?;
         Ok(())
@@ -646,6 +660,40 @@ mod tests {
         assert_eq!(got.name, "Ver.R Hirabami F-M Armor");
         assert_eq!(got.bundle.version.as_deref(), Some("v1"));
         assert_eq!(s.list_mods("monster-hunter-wilds").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn installed_archives_report_where_each_mod_came_from() {
+        let s = seeded();
+        for (id, name, archive) in [
+            ("mod-1", "Body Sliders", "/downloads/sliders.rar"),
+            ("mod-2", "Ebony Armor", "/downloads/ebony.zip"),
+        ] {
+            s.insert_mod(&ModRecord {
+                id: id.into(),
+                game_id: "monster-hunter-wilds".into(),
+                name: name.into(),
+                version: None,
+                author: None,
+                archive_path: archive.into(),
+                archive_sha256: None,
+                installer_model: "fluffy-aio".into(),
+                imported_at: 0,
+                bundle: empty_bundle(name),
+            })
+            .unwrap();
+        }
+
+        let map: std::collections::HashMap<String, String> =
+            s.installed_archives().unwrap().into_iter().collect();
+        assert_eq!(map.len(), 2);
+        assert_eq!(
+            map.get("/downloads/sliders.rar").map(String::as_str),
+            Some("Body Sliders"),
+        );
+        // A file that was never imported must not appear, or the downloads list
+        // would claim something is installed when it is not.
+        assert!(!map.contains_key("/downloads/never-installed.zip"));
     }
 
     #[test]
