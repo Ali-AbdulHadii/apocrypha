@@ -2,6 +2,25 @@
 //!
 //! Every command is a thin adapter: validate input, call an engine, map the
 //! result into a view DTO. No mod-management logic lives here.
+//!
+//! # Why the `(async)` on most of these
+//!
+//! A plain `#[tauri::command]` on a non-async function runs **on the main
+//! thread**. On Linux that is the GTK loop driving the webview, so a command
+//! that blocks for a second stops the window repainting and the desktop puts up
+//! an "is not responding" dialog over a perfectly healthy application. Staging a
+//! few hundred files, hashing an archive, or waiting on a Nexus request all take
+//! long enough to trigger it.
+//!
+//! `#[tauri::command(async)]` on a synchronous function moves it to a worker
+//! thread instead. The rule here is: anything that touches the disk, the
+//! network, or spawns a process gets it. What is left is a handful of
+//! single-row sqlite calls and pure computation, where the thread hop would cost
+//! more than the work.
+//!
+//! `AppState` holds its `Store` behind a `Mutex`, so commands running
+//! concurrently is safe. If you add a command that does real work, add the
+//! `(async)` with it.
 
 use crate::state::*;
 use apoc_deploy::{place::Ladder, DeployContext};
@@ -41,7 +60,7 @@ fn rules_for(game_id: &str) -> apoc_modengine::GameRules {
 }
 
 /// List all known games, merged with detection and stored configuration.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
     let profiles = LocalBuiltin::new().all().map_err(err)?;
     let store = state.store.lock().map_err(|_| "state poisoned")?;
@@ -102,7 +121,7 @@ pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
 }
 
 /// Re-run Steam/Proton detection for one game and persist what was found.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn detect_game(state: State<AppState>, game_id: String) -> CmdResult<GameView> {
     let p = builtin_profile(&game_id)?;
     let detected = apoc_steam::find_game(p.detection.steam_app_id);
@@ -129,7 +148,7 @@ pub fn detect_game(state: State<AppState>, game_id: String) -> CmdResult<GameVie
 }
 
 /// Manually point a game at an install directory (custom/non-Steam installs).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_game_path(
     state: State<AppState>,
     game_id: String,
@@ -161,7 +180,7 @@ pub fn set_game_path(
 }
 
 /// Analyze an archive without importing it: powers the wizard preview.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn analyze_archive(game_id: String, path: String) -> CmdResult<ModView> {
     let bundle =
         apoc_modengine::analyze_archive_with(Path::new(&path), &rules_for(&game_id)).map_err(err)?;
@@ -185,7 +204,7 @@ pub fn analyze_archive(game_id: String, path: String) -> CmdResult<ModView> {
 }
 
 /// Import a mod: analyze, stage its payloads, and register it in the active profile.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_mod(
     state: State<AppState>,
     game_id: String,
@@ -264,7 +283,7 @@ pub fn import_mod(
 }
 
 /// List installed mods for a game, with their state in the active profile.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModView>> {
     let profile_id = profile_of(&state, &game_id)?;
     let store = state.store.lock().map_err(|_| "state poisoned")?;
@@ -447,7 +466,7 @@ fn revert_current(state: &AppState, game_id: &str, ctx: &DeployContext) -> CmdRe
 
 /// Preview the deployment of every enabled mod: what would be created,
 /// replaced, or is missing.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_deploy(state: State<AppState>, game_id: String) -> CmdResult<DryRunView> {
     let plan = plan_for_profile(&state, &game_id)?;
     let ctx = build_context(&state, &game_id)?;
@@ -477,7 +496,7 @@ pub fn preview_deploy(state: State<AppState>, game_id: String) -> CmdResult<DryR
 /// Refuses while the mod's files are still in the game folder. Deleting the
 /// staging copy first would leave those files orphaned with nothing left to
 /// remove them, so the user is asked to undo the deployment first.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_mod(state: State<AppState>, game_id: String, mod_id: String) -> CmdResult<()> {
     {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
@@ -533,7 +552,7 @@ fn enabled_mod_ids(state: &AppState, game_id: &str) -> CmdResult<Vec<String>> {
 ///
 /// Any previous deployment is reverted first, so the game directory ends up
 /// matching the current profile exactly instead of accumulating stale files.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn deploy(state: State<AppState>, game_id: String) -> CmdResult<DeployResultView> {
     let plan = plan_for_profile(&state, &game_id)?;
     let deployed_ids = enabled_mod_ids(&state, &game_id)?;
@@ -569,7 +588,7 @@ pub fn deploy(state: State<AppState>, game_id: String) -> CmdResult<DeployResult
 
 /// Undeploy: revert every outstanding deployment, returning the game directory
 /// to its unmodded state.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rollback_last(state: State<AppState>, game_id: String) -> CmdResult<RollbackView> {
     let outstanding = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
@@ -636,7 +655,7 @@ pub fn rollback_last(state: State<AppState>, game_id: String) -> CmdResult<Rollb
 }
 
 /// Register the loader's DLL override in the Proton prefix.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String> {
     if apoc_deploy::loader::steam_is_running() {
         return Err("Close Steam before changing the Proton prefix.".into());
@@ -773,7 +792,7 @@ fn base64_encode(input: &[u8]) -> String {
 }
 
 /// Preview image for one option of a not-yet-imported archive (import wizard).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_from_archive(
     game_id: String,
     archive_path: String,
@@ -793,7 +812,7 @@ pub fn preview_from_archive(
 }
 
 /// Preview image for one option of an imported mod (served from staging).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preview_from_mod(
     state: State<AppState>,
     game_id: String,
@@ -829,7 +848,7 @@ pub fn preview_from_mod(
 }
 
 /// Steam roots and libraries found on this machine (diagnostics panel).
-#[tauri::command]
+#[tauri::command(async)]
 pub fn steam_diagnostics() -> CmdResult<serde_json::Value> {
     let roots: Vec<_> = apoc_steam::discover_steam_roots()
         .into_iter()

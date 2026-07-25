@@ -69,7 +69,7 @@ fn client(state: &AppState) -> CmdResult<NexusClient> {
 }
 
 /// Current Nexus configuration and handler registration.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn nexus_status(state: State<AppState>) -> CmdResult<NexusStatusView> {
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     let get = |k: &str| store.get_setting(k).ok().flatten();
@@ -106,7 +106,7 @@ pub fn set_download_source(state: State<AppState>, source: String) -> CmdResult<
 /// The key is stored locally and never sent anywhere but Nexus. Validation also
 /// tells us whether the account is premium, which decides whether downloads can
 /// start without a browser round trip.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_nexus_api_key(state: State<AppState>, api_key: String) -> CmdResult<NexusStatusView> {
     let trimmed = api_key.trim().to_string();
 
@@ -141,7 +141,7 @@ pub fn set_nexus_api_key(state: State<AppState>, api_key: String) -> CmdResult<N
 /// Nexus issues the application id that this flow needs, and only Nexus can
 /// issue it. Until Apocrypha has one, this returns a clear error rather than
 /// failing obscurely, and pasting a personal key remains available.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn nexus_sign_in(app: tauri::AppHandle, state: State<AppState>) -> CmdResult<NexusStatusView> {
     let slug = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
@@ -212,14 +212,14 @@ pub fn set_sso_application(state: State<AppState>, slug: String) -> CmdResult<Ne
 }
 
 /// Register this application as the system handler for `nxm://` links.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn register_nxm_handler(state: State<AppState>) -> CmdResult<NexusStatusView> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
     apoc_nexus::register(&exe).map_err(|e| e.to_string())?;
     nexus_status(state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn unregister_nxm_handler(state: State<AppState>) -> CmdResult<NexusStatusView> {
     apoc_nexus::unregister().map_err(|e| e.to_string())?;
     nexus_status(state)
@@ -246,7 +246,7 @@ pub fn parse_nxm_link(url: String) -> CmdResult<NxmLinkView> {
 }
 
 /// Open a mod page in the browser so the user can press "Mod Manager Download".
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_mod_page(domain: String, mod_id: u64, file_id: Option<u64>) -> CmdResult<String> {
     let url = apoc_nexus::mod_page_url(&domain, mod_id, file_id);
     open_external(&url)?;
@@ -262,7 +262,7 @@ fn open_external(url: &str) -> CmdResult<()> {
 }
 
 /// Everything in the download queue, newest first.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_downloads(state: State<AppState>) -> CmdResult<Vec<Download>> {
     Ok(state.downloads.list(&downloads_dir(&state)))
 }
@@ -278,7 +278,7 @@ pub fn cancel_download(state: State<AppState>, id: String) -> CmdResult<()> {
 ///
 /// This is the same action whether the file was downloaded here or found in the
 /// folder, because from the user's side there is no difference between the two.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_download(state: State<AppState>, id: String) -> CmdResult<()> {
     let dir = downloads_dir(&state);
     let path = state
@@ -312,7 +312,7 @@ pub fn remove_download(state: State<AppState>, id: String) -> CmdResult<()> {
 /// Returns as soon as the transfer is queued rather than when it finishes, so
 /// the interface stays usable during a large file. Progress arrives as
 /// `download-changed` events carrying the whole updated entry.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_nxm_download(
     app: tauri::AppHandle,
     state: State<AppState>,
