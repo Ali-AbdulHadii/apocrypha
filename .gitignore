@@ -13,3 +13,6 @@ apps/desktop/src-tauri/gen/schemas/
 # Local
 *.log
 .DS_Store
+
+# Working notes kept alongside the repo but not part of it.
+notes/

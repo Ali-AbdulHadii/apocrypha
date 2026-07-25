@@ -56,6 +56,7 @@ pub fn run() {
             commands::setup_loader,
             commands::get_settings,
             commands::set_game_db_source,
+            commands::set_downloads_dir,
             commands::list_profiles,
             commands::create_profile,
             commands::switch_profile,

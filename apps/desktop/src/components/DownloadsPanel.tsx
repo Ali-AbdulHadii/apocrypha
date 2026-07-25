@@ -10,14 +10,23 @@
  */
 
 import { useEffect, useState } from "react";
-import { api, type NexusStatusView } from "../lib/api";
+import {
+  api,
+  pickDirectory,
+  type NexusStatusView,
+  type SettingsView,
+} from "../lib/api";
 import { Icon } from "./icons";
 import { Chip, Segmented } from "./ui";
 
 export function DownloadsPanel({
+  settings,
+  onSettings,
   onError,
   onInfo,
 }: {
+  settings: SettingsView;
+  onSettings: (s: SettingsView) => void;
   onError: (e: unknown) => void;
   onInfo: (msg: string, kind?: "ok" | "bad" | "info") => void;
 }) {
@@ -49,6 +58,52 @@ export function DownloadsPanel({
   return (
     <div className="card stack">
       <div className="card-title">Mod sources</div>
+
+      <div className="field">
+        <label>Keep downloads in</label>
+        <div className="row">
+          <span className="mono" style={{ flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+            {settings.downloadsDir}
+          </span>
+          <button
+            className="btn sm"
+            disabled={busy}
+            onClick={async () => {
+              const dir = await pickDirectory();
+              if (!dir) return;
+              const next = await run(
+                () => api.setDownloadsDir(dir),
+                "Downloads folder changed",
+              );
+              if (next) onSettings(next);
+            }}
+          >
+            <Icon.folder size={14} /> Choose folder
+          </button>
+          {!settings.downloadsDirIsDefault && (
+            <button
+              className="btn sm"
+              disabled={busy}
+              onClick={async () => {
+                const next = await run(
+                  () => api.setDownloadsDir(""),
+                  "Back to the default folder",
+                );
+                if (next) onSettings(next);
+              }}
+            >
+              Use default
+            </button>
+          )}
+        </div>
+        <div className="card-hint">
+          Files already downloaded stay where they are. Point this at a folder
+          you already have and Apocrypha will list what is in it, so downloads
+          from another manager can be installed from here.
+        </div>
+      </div>
+
+      <div className="divider" />
 
       <div className="field">
         <label>Get mods from</label>

@@ -142,7 +142,11 @@ function DownloadRow({
         {active ? (
           <Spinner />
         ) : d.state === "ready" ? (
-          <Icon.package size={18} />
+          d.installedAs ? (
+            <Icon.check size={18} />
+          ) : (
+            <Icon.package size={18} />
+          )
         ) : (
           <Icon.warning size={18} />
         )}
@@ -154,6 +158,7 @@ function DownloadRow({
           {d.state === "ready" && d.source === "Downloads folder" && (
             <Chip>found on disk</Chip>
           )}
+          {d.installedAs && <Chip kind="ok">in your library</Chip>}
           {d.state === "cancelled" && <Chip kind="warn">stopped</Chip>}
           {d.state === "failed" && <Chip kind="bad">failed</Chip>}
         </div>
@@ -181,12 +186,22 @@ function DownloadRow({
         ) : (
           <>
             {d.state === "ready" && (
+              // Once it is in the library the row stops leading with a primary
+              // action, but stays installable: re-importing the same archive
+              // replaces the existing mod rather than duplicating it, which is
+              // how you change the options you picked.
               <button
-                className="btn sm primary"
+                className={`btn sm ${d.installedAs ? "" : "primary"}`}
                 onClick={() => onInstall(d)}
                 disabled={busy}
+                title={
+                  d.installedAs
+                    ? `Already added as ${d.installedAs}. Installing again reopens the options.`
+                    : undefined
+                }
               >
-                {installing ? <Spinner /> : <Icon.plus size={14} />} Install
+                {installing ? <Spinner /> : <Icon.plus size={14} />}
+                {d.installedAs ? "Install again" : "Install"}
               </button>
             )}
             <button
@@ -221,5 +236,8 @@ function metaLine(d: DownloadView): string {
   }
   if (d.state === "failed") return d.error ?? "The download did not complete";
   if (d.state === "cancelled") return "You stopped this download";
+  if (d.installedAs) {
+    return `${formatBytes(d.receivedBytes)} · added as ${d.installedAs}`;
+  }
   return `${formatBytes(d.receivedBytes)} · from ${d.source}`;
 }

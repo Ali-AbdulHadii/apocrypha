@@ -1413,9 +1413,19 @@ Ready: size and where it came from.
 a finished download slides from one group to the next rather than disappearing and
 reappearing.
 
+**Installed state.** A download whose archive path matches an imported mod shows an `ok`
+chip reading "in your library", swaps its icon to a check, and drops the button from
+`.primary` to plain with the label "Install again". It stays clickable on purpose:
+re-importing the same archive replaces the existing mod rather than duplicating it,
+because the mod id is derived from the archive hash, so this is also how the user reopens
+the option wizard.
+
 **Rule.** A finished download never opens a dialog by itself. It waits with an Install
 button. Fetching a file and choosing to install it are separate decisions, and a transfer
 that completes in the background must not take the window.
+
+**Rule.** A row states what is true of the file on disk, never what the app would prefer
+to show. If it is installed it says so, and it says what it was installed as.
 
 ---
 

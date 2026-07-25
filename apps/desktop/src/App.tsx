@@ -313,6 +313,9 @@ export default function App() {
         if (pendingArchive) {
           await api.importMod(activeGameId, pendingArchive, selection);
           push("Mod added to your library", "ok");
+          // So the Downloads row stops offering to install what is now in the
+          // library. Failing to refresh is not worth reporting as an error.
+          refreshDownloads().catch(() => {});
         } else if (wizardMod?.id) {
           await api.setModSelection(activeGameId, wizardMod.id, selection);
           push("Options saved", "ok");
@@ -327,7 +330,15 @@ export default function App() {
         setBusy(false);
       }
     },
-    [activeGameId, pendingArchive, wizardMod, push, refreshMods, fail],
+    [
+      activeGameId,
+      pendingArchive,
+      wizardMod,
+      push,
+      refreshMods,
+      refreshDownloads,
+      fail,
+    ],
   );
 
   const toggleMod = useCallback(
@@ -1128,7 +1139,12 @@ function SettingsScreen({
     <div className="stack">
       <AppearancePanel {...appearance} />
 
-      <DownloadsPanel onError={onError} onInfo={onInfo} />
+      <DownloadsPanel
+        settings={settings}
+        onSettings={onSettings}
+        onError={onError}
+        onInfo={onInfo}
+      />
 
       <div className="card stack">
         <div className="card-title">Where game information comes from</div>

@@ -262,9 +262,26 @@ fn open_external(url: &str) -> CmdResult<()> {
 }
 
 /// Everything in the download queue, newest first.
+///
+/// Each entry is marked with the mod it was imported as, if any, so a file
+/// already in the library does not keep offering to be installed.
 #[tauri::command(async)]
 pub fn list_downloads(state: State<AppState>) -> CmdResult<Vec<Download>> {
-    Ok(state.downloads.list(&downloads_dir(&state)))
+    let mut list = state.downloads.list(&state.downloads_dir());
+
+    let installed: std::collections::HashMap<String, String> = {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .installed_archives()
+            .map_err(|e| e.to_string())?
+            .into_iter()
+            .collect()
+    };
+    for d in &mut list {
+        d.installed_as = installed.get(&d.path).cloned();
+    }
+
+    Ok(list)
 }
 
 /// Ask a running transfer to stop. The partial file is discarded.
@@ -280,7 +297,7 @@ pub fn cancel_download(state: State<AppState>, id: String) -> CmdResult<()> {
 /// folder, because from the user's side there is no difference between the two.
 #[tauri::command(async)]
 pub fn remove_download(state: State<AppState>, id: String) -> CmdResult<()> {
-    let dir = downloads_dir(&state);
+    let dir = state.downloads_dir();
     let path = state
         .downloads
         .get(&id)
@@ -364,7 +381,7 @@ pub fn start_nxm_download(
         .map(|(info, _)| info.file_name)
         .unwrap_or_else(|_| format!("nexus-{mod_id}-{file_id}.zip"));
 
-    let dest_dir = downloads_dir(&state);
+    let dest_dir = state.downloads_dir();
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
     let dest = dest_dir.join(downloads::safe_name(&file_name));
 
@@ -408,6 +425,4 @@ pub fn start_nxm_download(
     Ok(entry)
 }
 
-fn downloads_dir(state: &AppState) -> PathBuf {
-    state.paths.root().join("downloads")
-}
+

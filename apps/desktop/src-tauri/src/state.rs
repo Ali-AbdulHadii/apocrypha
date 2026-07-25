@@ -18,6 +18,9 @@ pub struct AppState {
     pub downloads: std::sync::Arc<crate::downloads::Queue>,
 }
 
+/// Setting holding a user-chosen downloads folder. Unset means the default.
+pub const KEY_DOWNLOADS_DIR: &str = "downloads_dir";
+
 impl AppState {
     pub fn new() -> Result<Self, String> {
         let paths = Paths::default();
@@ -27,6 +30,27 @@ impl AppState {
             paths,
             downloads: Default::default(),
         })
+    }
+
+    /// Where downloads are kept, inside the app's data directory by default.
+    pub fn default_downloads_dir(&self) -> PathBuf {
+        self.paths.root().join("downloads")
+    }
+
+    /// Where downloads are kept right now.
+    ///
+    /// Configurable because a mod library is measured in tens of gigabytes and
+    /// often belongs on a different disk than the application data, and because
+    /// pointing it at an existing folder is the quickest way to bring downloads
+    /// from another manager across.
+    pub fn downloads_dir(&self) -> PathBuf {
+        self.store
+            .lock()
+            .ok()
+            .and_then(|s| s.get_setting(KEY_DOWNLOADS_DIR).ok().flatten())
+            .filter(|p| !p.trim().is_empty())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| self.default_downloads_dir())
     }
 }
 
@@ -159,6 +183,10 @@ pub struct SettingsView {
     pub game_db_source: String,
     pub data_root: String,
     pub deploy_method_preference: String,
+    pub downloads_dir: String,
+    /// False once the user has chosen their own folder, so the interface can
+    /// offer to put it back without having to know what the default is.
+    pub downloads_dir_is_default: bool,
 }
 
 /// Build the UI view of a bundle's groups.
