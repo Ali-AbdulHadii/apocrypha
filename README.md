@@ -19,8 +19,7 @@ Known gaps today:
 
 | Gap | Detail |
 | --- | --- |
-| Archive formats | ZIP only. 7z and RAR are common on Nexus and are not supported yet. |
-| Transactions | One mod per apply. Combining several mods into a single journaled transaction is next. |
+| Archive formats | ZIP, 7z and RAR. Encrypted and multi-volume archives are not handled. |
 | Game database | Local bundled TOML only. The online source is a stored setting, not a working client. |
 | Loader binary | Apocrypha configures REFramework for Proton but does not redistribute `dinput8.dll`. You supply it. |
 | Platform | Linux only. No Windows or macOS build. |
@@ -123,7 +122,7 @@ cargo run -p apoc-cli -- analyze "/path/to/SomeMod.zip"
 ## Usage: your first mod
 
 1. **Detect the game.** Open the Library screen. Apocrypha scans your Steam roots (native, Flatpak, Snap), matches the app ID from the game profile, and shows the install directory and the Proton prefix it found. If detection misses, you can point it at the directory yourself.
-2. **Add a mod.** Drag a `.zip` onto the Mods screen or use Add Mod. The archive is hashed, read, and normalised into a canonical bundle. Nothing is written to the game directory at this stage.
+2. **Add a mod.** Drag an archive onto the Mods screen or use Add Mod. ZIP, 7z and RAR all work, and the format is read from the file's leading bytes rather than its extension, so a mislabelled archive still opens. The archive is hashed, read, and normalised into a canonical bundle. Nothing is written to the game directory at this stage.
 3. **Choose options.** If the archive is a segmented installer, the wizard opens with the options it found. Radio sets are clustered by their real relationships, so picking a body physics variant does not deselect an unrelated leg physics variant. Single-payload mods skip the wizard.
 4. **Enable it.** The mod appears in the list with a switch. Enabling adds it to the current profile's selection and computes its place in the load order. Still nothing written.
 5. **Preview, then apply.** The apply bar shows a dry run first: every source file, every destination, the placement method (reflink, hardlink, symlink or copy) and any conflicts with mods already deployed. If it looks right, apply. Displaced originals go to the vault before they are replaced, and each operation is appended to a journal as it completes.
@@ -227,8 +226,6 @@ If your game needs a behaviour the schema cannot express, that is a gap in the s
 
 Short and honest. No dates.
 
-- **More archive formats.** 7z and RAR, because that is what half of Nexus ships.
-- **Multi-mod transactions.** One apply, one journal, many mods.
 - **More games.** Other RE Engine titles first, since the profile schema already fits them, then wider.
 - **Online game database.** A hosted `GameDatabaseSource` so profiles arrive without an app update. The port already exists; the client does not.
 - **Mod updates.** Detecting that an installed mod has a newer version and re-deploying it cleanly.
@@ -243,6 +240,13 @@ If you are filing a bug about a deployment going wrong, please include the journ
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+RAR support is provided by the `unrar` crate, which builds RARLAB's UnRAR
+sources. Those carry their own licence: free to use for extracting RAR archives,
+but the source may not be used to develop a compatible RAR compressor. Apocrypha
+only ever reads RAR files, which is within those terms, but the condition is
+worth knowing if you redistribute a build. 7z support is `sevenz-rust2`, which
+is pure Rust under the usual permissive terms.
 
 ## Acknowledgements
 

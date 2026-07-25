@@ -55,7 +55,10 @@ fn lowercase_natives_stm_is_forced_to_engine_casing() {
     // RE Engine resolves `natives/STM`. On case-sensitive Linux a lowercase
     // archive would create a second tree the game never reads.
     let b = analyze(&[("natives/stm/art/model/x.mesh.241111606", b"M")]);
-    assert_eq!(all_dests(&b), vec!["natives/STM/art/model/x.mesh.241111606"]);
+    assert_eq!(
+        all_dests(&b),
+        vec!["natives/STM/art/model/x.mesh.241111606"]
+    );
 }
 
 #[test]
@@ -129,7 +132,10 @@ fn dummy_mod_entries_are_never_installable() {
     // Fluffy's DummyMod marks a menu header that ships no files by design.
     // Presenting it as installable is exactly what produces a "0 files" install.
     let b = analyze(&[
-        ("Header/modinfo.ini", b"name=--- Section ---\nDummyMod=True\n"),
+        (
+            "Header/modinfo.ini",
+            b"name=--- Section ---\nDummyMod=True\n",
+        ),
         ("Real/modinfo.ini", b"name=Real Mod\n"),
         ("Real/natives/stm/art/x.mesh.1", b"M"),
     ]);

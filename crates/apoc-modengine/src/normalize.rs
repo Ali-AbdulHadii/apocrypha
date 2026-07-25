@@ -54,10 +54,10 @@ fn strip_wrapper(index: &mut ArchiveIndex, rules: &GameRules) {
             break;
         }
         let candidate = format!("{prefix}{only}/");
-        let has_direct_modinfo = index
-            .entries
-            .iter()
-            .any(|e| e.path.eq_ignore_ascii_case(&format!("{candidate}modinfo.ini")));
+        let has_direct_modinfo = index.entries.iter().any(|e| {
+            e.path
+                .eq_ignore_ascii_case(&format!("{candidate}modinfo.ini"))
+        });
         if has_direct_modinfo {
             break;
         }
@@ -182,12 +182,7 @@ fn payload_for(index: &ArchiveIndex, folder: &str, rules: &GameRules) -> Vec<Fil
 /// Decide how an option participates in the wizard, from its slot token, whether
 /// it carries a payload, and its `modinfo` text. Payload presence and description
 /// keywords are authoritative, never the folder name alone.
-fn classify(
-    deployable: bool,
-    slot: Option<&str>,
-    text_lower: &str,
-    is_dummy: bool,
-) -> SelectMode {
+fn classify(deployable: bool, slot: Option<&str>, text_lower: &str, is_dummy: bool) -> SelectMode {
     // Fluffy's `DummyMod=True` marks a menu organiser entry that ships no files
     // by design. Treating it as installable is what produces a "0 files" install.
     if is_dummy {
@@ -242,7 +237,10 @@ fn build_option(
     let payload = payload_for(index, folder, rules);
     let deployable = !payload.is_empty();
 
-    let display_name = mi.name().map(str::to_string).unwrap_or_else(|| folder.to_string());
+    let display_name = mi
+        .name()
+        .map(str::to_string)
+        .unwrap_or_else(|| folder.to_string());
     let description = mi.description();
     let text_lower = format!(
         "{} {}",
@@ -402,7 +400,11 @@ fn normalize_single(
                 author: None,
                 screenshot: None,
                 screenshot_archive_path: None,
-                select_mode: if deployable { SelectMode::Forced } else { SelectMode::Info },
+                select_mode: if deployable {
+                    SelectMode::Forced
+                } else {
+                    SelectMode::Info
+                },
                 deployable,
                 payload,
                 raw_modinfo: Default::default(),

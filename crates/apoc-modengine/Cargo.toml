@@ -13,7 +13,10 @@ sha2 = { workspace = true }
 thiserror = { workspace = true }
 regex = "1"
 tracing = { workspace = true }
+unrar = "0.5"
+sevenz-rust2 = "0.21"
 
 [dev-dependencies]
+sevenz-rust2 = "0.21"
 tempfile = "3"
 zip = { workspace = true }

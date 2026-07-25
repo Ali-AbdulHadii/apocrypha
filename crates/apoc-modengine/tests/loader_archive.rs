@@ -157,13 +157,11 @@ fn real_reframework_release_if_available() {
 fn real_pak_mod_if_available() {
     let dl = std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join("Downloads");
     let Some(found) = std::fs::read_dir(&dl).ok().and_then(|rd| {
-        rd.flatten()
-            .map(|e| e.path())
-            .find(|p| {
-                p.file_name()
-                    .and_then(|n| n.to_str())
-                    .is_some_and(|n| n.contains("Basic Textures") && n.ends_with(".zip"))
-            })
+        rd.flatten().map(|e| e.path()).find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains("Basic Textures") && n.ends_with(".zip"))
+        })
     }) else {
         eprintln!("SKIP: no Basic Textures archive in ~/Downloads");
         return;

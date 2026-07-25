@@ -66,7 +66,10 @@ pub fn choose_exclusive(bundle: &ModBundle, sel: &mut Selection, option_id: &str
     let Some(set) = &target.radio_set else {
         return;
     };
-    for sibling in bundle.options().filter(|o| o.radio_set.as_ref() == Some(set)) {
+    for sibling in bundle
+        .options()
+        .filter(|o| o.radio_set.as_ref() == Some(set))
+    {
         sel.remove(&sibling.id);
     }
     sel.insert(option_id.to_string());
@@ -171,7 +174,10 @@ pub fn plan(bundle: &ModBundle, sel: &Selection) -> DeploymentPlan {
             if !contenders.contains_key(&dest) {
                 order.push(dest.clone());
             }
-            contenders.entry(dest.clone()).or_default().push(opt.id.clone());
+            contenders
+                .entry(dest.clone())
+                .or_default()
+                .push(opt.id.clone());
             winners.insert(
                 dest.clone(),
                 PlannedFile {
@@ -187,7 +193,9 @@ pub fn plan(bundle: &ModBundle, sel: &Selection) -> DeploymentPlan {
     let mut files = Vec::with_capacity(order.len());
     let mut conflicts = Vec::new();
     for dest in order {
-        let file = winners.remove(&dest).expect("winner recorded for every path");
+        let file = winners
+            .remove(&dest)
+            .expect("winner recorded for every path");
         let c = contenders.remove(&dest).unwrap_or_default();
         if c.len() > 1 {
             conflicts.push(Conflict {
@@ -344,7 +352,13 @@ mod tests {
     fn forced_options_are_selected_by_default() {
         let b = bundle(vec![
             opt("basic", 0, SelectMode::Forced, None, &["natives/a"]),
-            opt("v1", 1, SelectMode::Exclusive, Some("1:helm"), &["natives/b"]),
+            opt(
+                "v1",
+                1,
+                SelectMode::Exclusive,
+                Some("1:helm"),
+                &["natives/b"],
+            ),
         ]);
         let sel = default_selection(&b);
         assert!(sel.contains("basic"));
@@ -354,8 +368,20 @@ mod tests {
     #[test]
     fn choosing_a_variant_deselects_its_siblings() {
         let b = bundle(vec![
-            opt("v1", 1, SelectMode::Exclusive, Some("1:helm"), &["natives/b"]),
-            opt("v2", 1, SelectMode::Exclusive, Some("1:helm"), &["natives/b"]),
+            opt(
+                "v1",
+                1,
+                SelectMode::Exclusive,
+                Some("1:helm"),
+                &["natives/b"],
+            ),
+            opt(
+                "v2",
+                1,
+                SelectMode::Exclusive,
+                Some("1:helm"),
+                &["natives/b"],
+            ),
         ]);
         let mut sel = Selection::new();
         choose_exclusive(&b, &mut sel, "v1");
@@ -367,7 +393,13 @@ mod tests {
 
     #[test]
     fn missing_forced_option_is_an_issue() {
-        let b = bundle(vec![opt("basic", 0, SelectMode::Forced, None, &["natives/a"])]);
+        let b = bundle(vec![opt(
+            "basic",
+            0,
+            SelectMode::Forced,
+            None,
+            &["natives/a"],
+        )]);
         let p = plan(&b, &Selection::new());
         assert!(!p.is_valid());
         assert_eq!(p.issues.len(), 1);
@@ -376,7 +408,13 @@ mod tests {
     #[test]
     fn addon_overrides_base_on_the_same_path() {
         let b = bundle(vec![
-            opt("base", 2, SelectMode::Exclusive, Some("2:body"), &["natives/x", "natives/y"]),
+            opt(
+                "base",
+                2,
+                SelectMode::Exclusive,
+                Some("2:body"),
+                &["natives/x", "natives/y"],
+            ),
             opt("addon", 2, SelectMode::Stackable, None, &["natives/x"]),
         ]);
         let mut sel = Selection::new();
@@ -385,7 +423,11 @@ mod tests {
         let p = plan(&b, &sel);
 
         assert_eq!(p.file_count(), 2, "one entry per destination path");
-        let x = p.files.iter().find(|f| f.game_rel_path == "natives/x").unwrap();
+        let x = p
+            .files
+            .iter()
+            .find(|f| f.game_rel_path == "natives/x")
+            .unwrap();
         assert_eq!(x.option_id, "addon", "addon layers over the base variant");
         assert_eq!(p.conflicts.len(), 1);
         assert_eq!(p.conflicts[0].contenders, vec!["base", "addon"]);
@@ -472,6 +514,9 @@ mod tests {
 
     #[test]
     fn staged_paths_are_namespaced_per_option() {
-        assert_eq!(staged_rel_path("Helm-01", "natives/a.mesh.1"), "Helm-01/natives/a.mesh.1");
+        assert_eq!(
+            staged_rel_path("Helm-01", "natives/a.mesh.1"),
+            "Helm-01/natives/a.mesh.1"
+        );
     }
 }

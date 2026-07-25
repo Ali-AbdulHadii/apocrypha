@@ -141,8 +141,6 @@ export interface DownloadView {
   source: string;
   startedAt: number;
   bytesPerSecond: number;
-  /** False for an archive format the engine cannot open yet, such as 7z. */
-  installable: boolean;
 }
 
 export interface SettingsView {
@@ -164,7 +162,7 @@ export async function pickArchive(): Promise<string | null> {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({
     multiple: false,
-    filters: [{ name: "Mod archive", extensions: ["zip"] }],
+    filters: [{ name: "Mod archive", extensions: ["zip", "7z", "rar"] }],
   });
   return typeof picked === "string" ? picked : null;
 }

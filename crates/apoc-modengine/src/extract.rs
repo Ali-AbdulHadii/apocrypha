@@ -17,9 +17,7 @@ use crate::plan::staged_rel_path;
 use apoc_domain::ModBundle;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
-use zip::ZipArchive;
 
 /// Outcome of staging a mod archive.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -40,7 +38,12 @@ pub fn preview_rel_path(option_id: &str, screenshot: &str) -> String {
         .extension()
         .and_then(|e| e.to_str())
         .unwrap_or("jpg");
-    format!("{}/{}.{}", PREVIEW_DIR, crate::plan::option_dir(option_id), ext)
+    format!(
+        "{}/{}.{}",
+        PREVIEW_DIR,
+        crate::plan::option_dir(option_id),
+        ext
+    )
 }
 
 /// Locate an option's staged preview image, if one was extracted.
@@ -49,23 +52,10 @@ pub fn staged_preview(staging_root: &Path, option_id: &str, screenshot: &str) ->
     p.is_file().then_some(p)
 }
 
-/// Read a single entry out of a zip archive. Used to show option previews before
+/// Read a single entry out of an archive. Used to show option previews before
 /// a mod has been imported (the wizard runs against the archive directly).
 pub fn read_archive_entry(archive_path: &Path, entry_path: &str) -> Result<Vec<u8>> {
-    let file = fs::File::open(archive_path)?;
-    let mut zip = ZipArchive::new(io::BufReader::new(file))?;
-    for i in 0..zip.len() {
-        let mut entry = zip.by_index(i)?;
-        if entry.is_dir() {
-            continue;
-        }
-        if entry.name().replace('\\', "/") == entry_path {
-            let mut buf = Vec::with_capacity(entry.size().min(16 * 1024 * 1024) as usize);
-            entry.read_to_end(&mut buf)?;
-            return Ok(buf);
-        }
-    }
-    Err(ModEngineError::EntryNotFound(entry_path.to_string()))
+    crate::archive::read_entry(archive_path, entry_path)
 }
 
 /// Reject absolute paths and `..` traversal (zip-slip) before writing anything.
@@ -92,7 +82,11 @@ fn safe_join(root: &Path, rel: &str) -> Result<PathBuf> {
 /// `dest_root`, laid out as `<dest_root>/<option_folder>/<game_rel_path>`.
 ///
 /// Existing files are overwritten, so re-staging is idempotent.
-pub fn stage_bundle(archive_path: &Path, bundle: &ModBundle, dest_root: &Path) -> Result<StageReport> {
+pub fn stage_bundle(
+    archive_path: &Path,
+    bundle: &ModBundle,
+    dest_root: &Path,
+) -> Result<StageReport> {
     // archive entry path -> staged relative path
     let mut wanted: HashMap<&str, String> = HashMap::new();
     for opt in bundle.deployable_options() {
@@ -120,28 +114,18 @@ pub fn stage_bundle(archive_path: &Path, bundle: &ModBundle, dest_root: &Path) -
     let _ = preview_count;
 
     fs::create_dir_all(dest_root)?;
-    let file = fs::File::open(archive_path)?;
-    let mut zip = ZipArchive::new(io::BufReader::new(file))?;
+
+    // Traversal is rejected here, at the moment a destination is resolved, so
+    // no format-specific extractor can be tricked into writing outside staging.
+    let written = crate::archive::extract_entries(archive_path, &wanted, &mut |rel| {
+        safe_join(dest_root, rel)
+    })?;
 
     let mut files_written = 0usize;
     let mut previews_written = 0usize;
     let mut bytes_written = 0u64;
 
-    for i in 0..zip.len() {
-        let mut entry = zip.by_index(i)?;
-        if entry.is_dir() {
-            continue;
-        }
-        let name = entry.name().replace('\\', "/");
-        let Some(rel) = wanted.get(name.as_str()) else {
-            continue;
-        };
-        let out_path = safe_join(dest_root, rel)?;
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut out = fs::File::create(&out_path)?;
-        let n = io::copy(&mut entry, &mut out)?;
+    for (rel, n) in written {
         if rel.starts_with(PREVIEW_DIR) {
             previews_written += 1;
         } else {

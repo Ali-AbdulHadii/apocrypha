@@ -154,9 +154,6 @@ function DownloadRow({
           {d.state === "ready" && d.source === "Downloads folder" && (
             <Chip>found on disk</Chip>
           )}
-          {d.state === "ready" && !d.installable && (
-            <Chip kind="warn">not supported yet</Chip>
-          )}
           {d.state === "cancelled" && <Chip kind="warn">stopped</Chip>}
           {d.state === "failed" && <Chip kind="bad">failed</Chip>}
         </div>
@@ -187,12 +184,7 @@ function DownloadRow({
               <button
                 className="btn sm primary"
                 onClick={() => onInstall(d)}
-                disabled={busy || !d.installable}
-                title={
-                  d.installable
-                    ? undefined
-                    : "Apocrypha can only open zip archives so far"
-                }
+                disabled={busy}
               >
                 {installing ? <Spinner /> : <Icon.plus size={14} />} Install
               </button>
@@ -229,8 +221,5 @@ function metaLine(d: DownloadView): string {
   }
   if (d.state === "failed") return d.error ?? "The download did not complete";
   if (d.state === "cancelled") return "You stopped this download";
-  if (!d.installable) {
-    return `${formatBytes(d.receivedBytes)} · only zip archives can be installed so far`;
-  }
   return `${formatBytes(d.receivedBytes)} · from ${d.source}`;
 }

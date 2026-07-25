@@ -73,7 +73,9 @@ impl Modinfo {
 
 /// Turn Fluffy's literal escape sequences into real line breaks.
 pub fn unescape_description(s: &str) -> String {
-    s.replace("\\r\\n", "\n").replace("\\n", "\n").replace("\\r", "\n")
+    s.replace("\\r\\n", "\n")
+        .replace("\\n", "\n")
+        .replace("\\r", "\n")
 }
 
 #[cfg(test)]
@@ -97,7 +99,10 @@ mod tests {
         assert_eq!(m.screenshot(), Some("basic.jpg"));
         assert_eq!(m.name_as_bundle(), Some("Ver.R Hirabami F-M Armor"));
         let desc = m.description().unwrap();
-        assert!(desc.contains('\n'), "literal \\n must become a real newline");
+        assert!(
+            desc.contains('\n'),
+            "literal \\n must become a real newline"
+        );
         assert!(desc.starts_with("!!! must install this..."));
     }
 
@@ -105,7 +110,11 @@ mod tests {
     fn empty_values_read_as_unset() {
         // The sample's "segment" header folders write `screenshot=` with no value.
         let m = Modinfo::parse("name=-1- Helm\nscreenshot=\ncategory=Armor\n");
-        assert_eq!(m.screenshot(), None, "empty value must not become Some(\"\")");
+        assert_eq!(
+            m.screenshot(),
+            None,
+            "empty value must not become Some(\"\")"
+        );
         assert_eq!(m.name(), Some("-1- Helm"));
         assert_eq!(m.category(), Some("Armor"));
     }
