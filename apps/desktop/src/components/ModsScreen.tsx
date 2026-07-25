@@ -355,6 +355,8 @@ function RowBody({
           <StatusChip mod={mod} applied={applied} />
         </div>
         <div className="mod-meta">
+          {/* Written as the character itself: a \u escape in JSX text is not
+              processed, it renders as the six literal characters. */}
           {mod.author ? `${mod.author} \u00b7 ` : ""}
           {mod.selection.length} of{" "}
           {mod.groups.reduce((n, g) => n + g.options.length, 0)} options \u00b7{" "}
