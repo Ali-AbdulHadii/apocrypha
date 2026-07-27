@@ -63,6 +63,7 @@ export interface GameView {
   loaderDll: string | null;
   loaderOverrideActive: boolean;
   steamLaunchOptions: string | null;
+  nexusDomain: string | null;
 }
 
 export interface ConflictView {
@@ -236,6 +237,10 @@ export async function pickDirectory(): Promise<string | null> {
 export const api = {
   listGames: () => call<GameView[]>("list_games"),
   detectGame: (gameId: string) => call<GameView>("detect_game", { gameId }),
+  // Which game a Nexus domain belongs to, so a download lands under the right
+  // one instead of whichever game happens to be on screen.
+  gameForDomain: (domain: string) =>
+    call<string | null>("game_for_domain", { domain }),
   setGamePath: (gameId: string, installDir: string, protonPrefix?: string) =>
     call<GameView>("set_game_path", { gameId, installDir, protonPrefix }),
 

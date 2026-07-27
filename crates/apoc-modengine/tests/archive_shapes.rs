@@ -12,7 +12,7 @@ use std::path::Path;
 fn wilds_rules() -> GameRules {
     GameRules {
         payload_roots: vec!["natives".into(), "reframework".into()],
-        root_files: vec!["dinput8.dll".into()],
+        root_files: vec![("dinput8.dll".into(), "dinput8.dll".into())],
         accepts_pak: true,
         rewrap: vec![
             ("autorun".into(), "reframework".into()),

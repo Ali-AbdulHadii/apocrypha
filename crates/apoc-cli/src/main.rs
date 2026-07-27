@@ -78,11 +78,15 @@ fn cmd_game(id: &str) -> Result<(), String> {
     if let Some(l) = &g.loader {
         println!("  loader        : {} ({:?})", l.name, l.kind);
         if let Some(dll) = &l.proxy_dll {
-            println!("      proxy dll : {dll} (always a real copy in game root)");
+            println!("      proxy dll : {{game}}/{dll} (always a real copy, never linked)");
         }
-        if let Some(o) = &l.proton.wine_dll_overrides {
-            println!("      proton     : WINEDLLOVERRIDES {o}, prefix-write={}", l.proton.requires_prefix_write);
+        for (name, value) in l.dll_overrides() {
+            println!("      override  : {name}={value}");
         }
+        println!(
+            "      prefix    : write={}",
+            l.proton.requires_prefix_write
+        );
     }
     Ok(())
 }

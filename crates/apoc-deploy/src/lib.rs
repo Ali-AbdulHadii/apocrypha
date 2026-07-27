@@ -376,7 +376,13 @@ pub fn provision_loader(
     })?;
 
     if let Some(reg) = user_reg {
-        let dll_stem = proxy_dll_name.trim_end_matches(".dll");
+        // Wine keys DllOverrides by module name. A proxy that lives in a
+        // subdirectory (`bin/x64/winmm.dll`) still registers as `winmm`.
+        let file_name = proxy_dll_name
+            .rsplit('/')
+            .next()
+            .unwrap_or(proxy_dll_name);
+        let dll_stem = file_name.trim_end_matches(".dll");
         let previous = loader::write_override(reg, dll_stem, override_value)?;
         journal.append(JournalOp::RegistryOverride {
             name: dll_stem.to_string(),

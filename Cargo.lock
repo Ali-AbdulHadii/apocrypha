@@ -120,6 +120,7 @@ name = "apoc-modengine"
 version = "0.2.0"
 dependencies = [
  "apoc-domain",
+ "apoc-gamedef",
  "regex",
  "sevenz-rust2",
  "sha2 0.10.9",

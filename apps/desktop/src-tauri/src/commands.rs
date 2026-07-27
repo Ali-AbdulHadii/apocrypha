@@ -90,14 +90,19 @@ pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
 
         let loader = p.loader.as_ref();
         let user_reg = proton_prefix.as_ref().map(|p| PathBuf::from(p).join("user.reg"));
+        // "Ready" means every override the loader declares is registered, not
+        // just the first: Cyberpunk needs both RED4ext's and CET's, and half a
+        // stack reported as ready is worse than reported as missing.
         let loader_override_active = match (loader, &user_reg) {
-            (Some(l), Some(reg)) => l
-                .proxy_dll
-                .as_ref()
-                .map(|dll| dll.trim_end_matches(".dll"))
-                .and_then(|stem| apoc_deploy::loader::read_override(reg, stem).ok())
-                .map(|s| s.value.is_some())
-                .unwrap_or(false),
+            (Some(l), Some(reg)) => {
+                let wanted = l.dll_overrides();
+                !wanted.is_empty()
+                    && wanted.iter().all(|(name, _)| {
+                        apoc_deploy::loader::read_override(reg, name)
+                            .map(|s| s.value.is_some())
+                            .unwrap_or(false)
+                    })
+            }
             _ => false,
         };
 
@@ -115,9 +120,29 @@ pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
             loader_dll: loader.and_then(|l| l.proxy_dll.clone()),
             loader_override_active,
             steam_launch_options: loader.and_then(|l| l.proton.steam_launch_options.clone()),
+            nexus_domain: p.nexus_domain.clone(),
         });
     }
     Ok(out)
+}
+
+/// The game a Nexus domain belongs to, if any is known.
+///
+/// An `nxm://` link names the game it came from, and now that more than one
+/// game ships, "download to whatever is on screen" would quietly file a
+/// Cyberpunk mod under Monster Hunter. Matching is case-insensitive because
+/// the domain arrives from a URL.
+#[tauri::command]
+pub fn game_for_domain(domain: String) -> CmdResult<Option<String>> {
+    let profiles = LocalBuiltin::new().all().map_err(err)?;
+    Ok(profiles
+        .into_iter()
+        .find(|p| {
+            p.nexus_domain
+                .as_deref()
+                .is_some_and(|d| d.eq_ignore_ascii_case(domain.trim()))
+        })
+        .map(|p| p.id))
 }
 
 /// Re-run Steam/Proton detection for one game and persist what was found.
@@ -641,16 +666,16 @@ pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String
         .loader
         .as_ref()
         .ok_or_else(|| "this game needs no loader".to_string())?;
-    let dll = loader
-        .proxy_dll
-        .as_deref()
-        .ok_or_else(|| "loader defines no proxy DLL".to_string())?;
-    let value = loader
-        .proton
-        .wine_dll_overrides
-        .as_deref()
-        .and_then(|s| s.split('=').nth(1))
-        .unwrap_or("native,builtin");
+    // A game can need several proxies registered (RED4ext and Cyber Engine
+    // Tweaks on Cyberpunk). Fall back to the proxy DLL's own name when the
+    // profile declares no override string.
+    let mut overrides = loader.dll_overrides();
+    if overrides.is_empty() {
+        let stem = loader
+            .proxy_dll_stem()
+            .ok_or_else(|| "loader defines no proxy DLL".to_string())?;
+        overrides.push((stem.to_string(), "native,builtin".to_string()));
+    }
 
     let prefix = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
@@ -661,9 +686,15 @@ pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String
             .ok_or_else(|| "Proton prefix not found: run the game once via Steam first.".to_string())?
     };
     let user_reg = PathBuf::from(prefix).join("user.reg");
-    let stem = dll.trim_end_matches(".dll");
-    apoc_deploy::loader::write_override(&user_reg, stem, value).map_err(err)?;
-    Ok(format!("Registered '{stem}={value}' in the Proton prefix."))
+    let mut written = Vec::new();
+    for (name, value) in &overrides {
+        apoc_deploy::loader::write_override(&user_reg, name, value).map_err(err)?;
+        written.push(format!("{name}={value}"));
+    }
+    Ok(format!(
+        "Registered '{}' in the Proton prefix.",
+        written.join("', '")
+    ))
 }
 
 /// Read the persisted settings.

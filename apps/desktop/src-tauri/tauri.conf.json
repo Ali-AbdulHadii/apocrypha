@@ -36,7 +36,7 @@
       "deb"
     ],
     "category": "Utility",
-    "shortDescription": "Linux-first mod manager for Monster Hunter Wilds",
+    "shortDescription": "Linux-first mod manager for Steam and Proton games",
     "longDescription": "Apocrypha installs and manages game mods on Linux. It finds your Steam and Proton installs, reads ZIP, 7z and RAR archives, and deploys mods through reflinks or hard links so the copy costs nothing on a filesystem that supports them. Every change to the game folder is journaled, so any deployment can be undone exactly.",
     "copyright": "Copyright (c) 2026 Apocrypha contributors",
     "publisher": "Apocrypha",
