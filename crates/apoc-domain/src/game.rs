@@ -213,7 +213,10 @@ pub struct GameProfile {
     pub case_sensitive: bool,
     /// Where each payload root lands relative to the game install directory.
     pub deploy_targets: Vec<DeployTarget>,
-    /// Format detector ids this game accepts (`fluffy-aio`, `loose-natives`, ...).
+    /// Archive shapes this game's mods come in (`fluffy-aio`, `loose-roots`,
+    /// ...). Descriptive: detection derives what it needs from the payload
+    /// roots, the rewrap rules and the loader, so this records intent for
+    /// whoever reads the profile rather than driving behaviour.
     #[serde(default)]
     pub formats: Vec<String>,
     /// Root folders to re-wrap under a payload prefix when an archive is packed
