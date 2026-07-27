@@ -1,5 +1,5 @@
-<img src="docs/images/logo-white.png#gh-dark-mode-only" alt="Apocrypha" width="88">
-<img src="docs/images/logo-black.png#gh-light-mode-only" alt="Apocrypha" width="88">
+<img src="assets/logo-white.png#gh-dark-mode-only" alt="Apocrypha" width="88">
+<img src="assets/logo-black.png#gh-light-mode-only" alt="Apocrypha" width="88">
 
 # Apocrypha
 
@@ -271,8 +271,8 @@ game, with the safety machinery built first.
   reproducible collections, and preservation of mods that vanish from their host.
 - **Phase 5, beyond one machine.** Windows and macOS, packaging, headless apply.
 
-[docs/roadmap.md](docs/roadmap.md) has the reasoning, and the list of things
-deliberately not planned.
+Each phase ends somewhere the app is coherent and usable, and the ordering
+principle is that the things which can lose someone's data or time come first.
 
 ## Contributing
 

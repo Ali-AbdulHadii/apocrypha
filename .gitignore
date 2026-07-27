@@ -14,5 +14,8 @@ apps/desktop/src-tauri/gen/schemas/
 *.log
 .DS_Store
 
-# Working notes kept alongside the repo but not part of it.
+# Working notes kept alongside the repo but not part of it. `docs/` holds
+# design briefs, brand notes and correspondence drafts: useful locally, not
+# something to publish.
 notes/
+docs/
