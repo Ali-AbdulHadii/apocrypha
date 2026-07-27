@@ -7,6 +7,10 @@ import { bootAppearance } from "./lib/appearance";
 import { ThemeProvider } from "./lib/theme";
 import "./styles/theme.css";
 import "./styles/app.css";
+// Screen-specific sheets, loaded after app.css so they can build on its classes
+// without having to out-specify them.
+import "./styles/order.css";
+import "./styles/settings.css";
 
 // Apply saved appearance before the first paint so there is no flash of the
 // default theme on startup.

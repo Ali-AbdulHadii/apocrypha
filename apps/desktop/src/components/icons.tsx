@@ -59,6 +59,17 @@ export const Icon = {
       <path d="M18 14a5 5 0 0 1 3 4.5" />
     </>,
   ),
+  /* Load order: a stack, and the arrow that moves a row through it. */
+  order: make(
+    <>
+      <path d="M3 6h10" />
+      <path d="M3 12h10" />
+      <path d="M3 18h10" />
+      <path d="M18 4v16" />
+      <path d="m15 7 3-3 3 3" />
+      <path d="m15 17 3 3 3-3" />
+    </>,
+  ),
   conflicts: make(
     <>
       <path d="M12 4 3 19h18L12 4Z" />

@@ -4,24 +4,29 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApplyDialog, type ApplyState } from "./components/ApplyDialog";
 import { ConfirmDialog, type Confirm } from "./components/ConfirmDialog";
+import { HealthCheck } from "./components/HealthCheck";
 import { Icon, type IconName } from "./components/icons";
 import { InstallWizard } from "./components/InstallWizard";
 import { ModsScreen } from "./components/ModsScreen";
+import { OrderScreen } from "./components/OrderScreen";
+import { SettingsScreen } from "./components/SettingsScreen";
 import { Splash } from "./components/Splash";
 import { TitleBar } from "./components/TitleBar";
-import { DownloadsPanel } from "./components/DownloadsPanel";
 import { DownloadsScreen } from "./components/DownloadsScreen";
-import { Chip, Segmented, Spinner, pageMotion, useToast } from "./components/ui";
+import { Chip, Spinner, pageMotion, useToast } from "./components/ui";
 import {
   api,
   formatBytes,
   IS_TAURI,
   pickArchive,
   pickDirectory,
+  onDeployFinished,
+  onDeployProgress,
   onDownloadChanged,
   onNxmLink,
   subscribe,
   truncatePath,
+  type ConflictView,
   type DownloadView,
   type DryRunView,
   type GameView,
@@ -30,13 +35,14 @@ import {
   type ProfileView,
   type SettingsView,
 } from "./lib/api";
-import { AppearancePanel, useAppearance } from "./lib/appearance";
+import { useAppearance } from "./lib/appearance";
 import { useMaximized } from "./lib/window";
 import { useTheme } from "./lib/theme";
 
 type Screen =
   | "library"
   | "mods"
+  | "order"
   | "downloads"
   | "profiles"
   | "conflicts"
@@ -45,6 +51,7 @@ type Screen =
 const NAV: { id: Screen; label: string; icon: IconName }[] = [
   { id: "library", label: "Library", icon: "library" },
   { id: "mods", label: "Mods", icon: "mods" },
+  { id: "order", label: "Load order", icon: "order" },
   { id: "downloads", label: "Downloads", icon: "downloads" },
   { id: "profiles", label: "Profiles", icon: "profiles" },
   { id: "conflicts", label: "Changes", icon: "conflicts" },
@@ -68,8 +75,11 @@ export default function App() {
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [downloads, setDownloads] = useState<DownloadView[]>([]);
   const [installingId, setInstallingId] = useState<string | null>(null);
+  const [conflicts, setConflicts] = useState<ConflictView[]>([]);
+  const [overrides, setOverrides] = useState<Record<string, string>>({});
 
   const { push } = useToast();
+  const appearance = useAppearance();
   const maximized = useMaximized();
   const activeGame = games.find((g) => g.id === activeGameId) ?? null;
 
@@ -99,6 +109,17 @@ export default function App() {
     setDownloads(await api.listDownloads());
   }, []);
 
+  // Cheap enough to run after every reorder: it plans in memory and never
+  // touches the game folder.
+  const refreshConflicts = useCallback(async (gameId: string) => {
+    const [list, pinned] = await Promise.all([
+      api.conflicts(gameId),
+      api.conflictOverrides(gameId),
+    ]);
+    setConflicts(list);
+    setOverrides(pinned);
+  }, []);
+
   useEffect(() => {
     if (!IS_TAURI) {
       setBooting(false);
@@ -124,12 +145,16 @@ export default function App() {
     if (!IS_TAURI || !activeGameId) return;
     (async () => {
       try {
-        await Promise.all([refreshMods(activeGameId), refreshProfiles(activeGameId)]);
+        await Promise.all([
+          refreshMods(activeGameId),
+          refreshProfiles(activeGameId),
+          refreshConflicts(activeGameId),
+        ]);
       } catch (e) {
         fail(e);
       }
     })();
-  }, [activeGameId, refreshMods, refreshProfiles, fail]);
+  }, [activeGameId, refreshMods, refreshProfiles, refreshConflicts, fail]);
 
   // Re-scan on arrival, so a file saved from a browser while the app was open
   // is already listed by the time the user looks.
@@ -162,6 +187,48 @@ export default function App() {
       }),
     );
   }, [push, fail]);
+
+  /* --------------------------------------------------- deployment events --- */
+
+  // Applying runs on its own thread and reports as it goes, so the dialog shows
+  // real counts and the window keeps painting. Subscribed once for the life of
+  // the app rather than per deploy: an event that arrives between renders would
+  // otherwise be dropped.
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    return subscribe(() =>
+      onDeployProgress((p) =>
+        setApply((prev) =>
+          // Ignore progress once the run has settled, so a late event cannot
+          // reopen a finished dialog.
+          prev && prev.phase !== "done"
+            ? { ...prev, phase: p.phase === "reverting" ? "reverting" : "linking", progress: p }
+            : prev,
+        ),
+      ),
+    );
+  }, []);
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    return subscribe(() =>
+      onDeployFinished((o) => {
+        setApply({
+          phase: "done",
+          cancelled: o.cancelled,
+          result: o.result ?? undefined,
+          error: o.error ?? undefined,
+          rollback: o.rollback,
+        });
+        if (!o.error && !o.cancelled) setDirty(false);
+        setPreview(null);
+        if (activeGameId) {
+          refreshMods(activeGameId).catch(fail);
+          refreshConflicts(activeGameId).catch(() => {});
+        }
+      }),
+    );
+  }, [activeGameId, refreshMods, refreshConflicts, fail]);
 
   // Progress carries the whole entry, so the list is updated by replacement.
   useEffect(() => {
@@ -368,12 +435,51 @@ export default function App() {
       setDirty(true);
       try {
         await api.setModOrder(activeGameId, orderedIds);
+        // Who wins each contested file follows directly from the order, so the
+        // conflict list would otherwise describe the arrangement before the drag.
+        await refreshConflicts(activeGameId);
       } catch (e) {
         fail(e);
         await refreshMods(activeGameId);
       }
     },
-    [activeGameId, refreshMods, fail],
+    [activeGameId, refreshMods, refreshConflicts, fail],
+  );
+
+  const pinConflict = useCallback(
+    async (path: string, modId: string) => {
+      if (!activeGameId) return;
+      setOverrides((prev) => ({ ...prev, [path]: modId }));
+      setDirty(true);
+      try {
+        await api.setConflictOverride(activeGameId, path, modId);
+        await refreshConflicts(activeGameId);
+      } catch (e) {
+        fail(e);
+        await refreshConflicts(activeGameId).catch(() => {});
+      }
+    },
+    [activeGameId, refreshConflicts, fail],
+  );
+
+  const unpinConflict = useCallback(
+    async (path: string) => {
+      if (!activeGameId) return;
+      setOverrides((prev) => {
+        const next = { ...prev };
+        delete next[path];
+        return next;
+      });
+      setDirty(true);
+      try {
+        await api.clearConflictOverride(activeGameId, path);
+        await refreshConflicts(activeGameId);
+      } catch (e) {
+        fail(e);
+        await refreshConflicts(activeGameId).catch(() => {});
+      }
+    },
+    [activeGameId, refreshConflicts, fail],
   );
 
   const removeMod = useCallback(
@@ -421,26 +527,33 @@ export default function App() {
     }
   }, [activeGameId, mods, push, fail]);
 
+  // Returns as soon as the work is queued. Everything after this point arrives
+  // as deploy-progress and deploy-finished events.
   const runDeploy = useCallback(async () => {
     if (!activeGameId) return;
     if (!mods.some((m) => m.enabled)) {
       push("Turn on at least one mod first", "bad");
       return;
     }
-    setApply({ phase: "linking" });
+    setApply({ phase: "starting" });
     try {
-      const r = await api.deploy(activeGameId);
-      setApply({ phase: "done", result: r });
-      setDirty(false);
-      setPreview(null);
-      await refreshMods(activeGameId);
+      await api.startDeploy(activeGameId);
     } catch (e) {
       setApply({
         phase: "done",
         error: String(e instanceof Error ? e.message : e),
       });
     }
-  }, [activeGameId, mods, push, refreshMods]);
+  }, [activeGameId, mods, push]);
+
+  const cancelDeploy = useCallback(async () => {
+    setApply((prev) => (prev ? { ...prev, cancelling: true } : prev));
+    try {
+      await api.cancelDeploy();
+    } catch (e) {
+      fail(e);
+    }
+  }, [fail]);
 
   const runRollback = useCallback(async () => {
     if (!activeGameId) return;
@@ -545,9 +658,19 @@ export default function App() {
                       setPendingArchive(null);
                       setWizardMod(m);
                     }}
-                    onReorder={reorderMods}
                     onRemove={removeMod}
                     onImport={startImport}
+                    onOpenLoadOrder={() => setScreen("order")}
+                  />
+                ) : screen === "order" ? (
+                  <OrderScreen
+                    mods={mods}
+                    conflicts={conflicts}
+                    overrides={overrides}
+                    busy={busy}
+                    onReorder={reorderMods}
+                    onOverride={pinConflict}
+                    onClearOverride={unpinConflict}
                   />
                 ) : screen === "downloads" ? (
                   <DownloadsScreen
@@ -567,12 +690,20 @@ export default function App() {
                     onError={fail}
                   />
                 ) : screen === "conflicts" ? (
-                  <ChangesScreen preview={preview} onPreview={runPreview} busy={busy} />
+                  <ChangesScreen
+                    preview={preview}
+                    onPreview={runPreview}
+                    busy={busy}
+                    gameId={activeGameId}
+                    onError={fail}
+                    onInfo={push}
+                  />
                 ) : (
                   <SettingsScreen
                     settings={settings}
                     onSettings={setSettings}
                     game={activeGame}
+                    appearance={appearance}
                     onError={fail}
                     onInfo={push}
                   />
@@ -610,7 +741,13 @@ export default function App() {
       </AnimatePresence>
 
       <AnimatePresence>
-        {apply && <ApplyDialog state={apply} onClose={() => setApply(null)} />}
+        {apply && (
+          <ApplyDialog
+            state={apply}
+            onCancel={cancelDeploy}
+            onClose={() => setApply(null)}
+          />
+        )}
       </AnimatePresence>
 
       <AnimatePresence>
@@ -722,6 +859,7 @@ function TopBar({
   const titles: Record<Screen, string> = {
     library: "Library",
     mods: "Mods",
+    order: "Load order",
     downloads: "Downloads",
     profiles: "Profiles",
     conflicts: "Changes",
@@ -1021,30 +1159,39 @@ function ChangesScreen({
   preview,
   onPreview,
   busy,
+  gameId,
+  onError,
+  onInfo,
 }: {
   preview: DryRunView | null;
   onPreview: () => void;
   busy: boolean;
+  gameId: string | null;
+  onError: (e: unknown) => void;
+  onInfo: (msg: string, kind?: "ok" | "bad" | "info") => void;
 }) {
   if (!preview) {
     return (
-      <div className="empty">
-        <span className="empty-icon">
-          <Icon.preview size={40} strokeWidth={1} />
-        </span>
-        <div className="empty-title">Nothing previewed yet</div>
-        <div>
-          See exactly which files would be added or replaced before anything is
-          written.
+      <div className="stack">
+        <div className="empty">
+          <span className="empty-icon">
+            <Icon.preview size={40} strokeWidth={1} />
+          </span>
+          <div className="empty-title">Nothing previewed yet</div>
+          <div>
+            See exactly which files would be added or replaced before anything is
+            written.
+          </div>
+          <button
+            className="btn primary"
+            onClick={onPreview}
+            disabled={busy}
+            style={{ marginTop: "var(--sp-3)" }}
+          >
+            <Icon.preview /> Preview changes
+          </button>
         </div>
-        <button
-          className="btn primary"
-          onClick={onPreview}
-          disabled={busy}
-          style={{ marginTop: 8 }}
-        >
-          <Icon.preview /> Preview changes
-        </button>
+        <HealthCheck gameId={gameId} onError={onError} onInfo={onInfo} />
       </div>
     );
   }
@@ -1075,8 +1222,8 @@ function ChangesScreen({
             Files claimed by more than one mod ({preview.conflicts.length})
           </div>
           <div className="card-hint">
-            Mods further down the load order win. Reorder them on the Mods screen
-            to change who wins.
+            Mods further down the load order win. Change who wins on the Load
+            order screen, either by moving a mod or by pinning a single file.
           </div>
           <div className="file-list">
             {preview.conflicts.map((c) => (
@@ -1115,81 +1262,8 @@ function ChangesScreen({
           )}
         </div>
       </div>
-    </div>
-  );
-}
 
-function SettingsScreen({
-  settings,
-  onSettings,
-  game,
-  onError,
-  onInfo,
-}: {
-  settings: SettingsView | null;
-  onSettings: (s: SettingsView) => void;
-  game: GameView | null;
-  onError: (e: unknown) => void;
-  onInfo: (msg: string, kind?: "ok" | "bad" | "info") => void;
-}) {
-  const appearance = useAppearance();
-  if (!settings) return <div className="empty">Loading settings.</div>;
-
-  return (
-    <div className="stack">
-      <AppearancePanel {...appearance} />
-
-      <DownloadsPanel
-        settings={settings}
-        onSettings={onSettings}
-        onError={onError}
-        onInfo={onInfo}
-      />
-
-      <div className="card stack">
-        <div className="card-title">Where game information comes from</div>
-        <div className="card-hint">
-          Built in definitions work with no internet. The online source will fetch
-          them from the Apocrypha service.
-        </div>
-        <Segmented
-          idPrefix="gamedb"
-          value={settings.gameDbSource as "local-builtin" | "online-api"}
-          onChange={async (v) => {
-            try {
-              onSettings(await api.setGameDbSource(v));
-            } catch (e) {
-              onError(e);
-            }
-          }}
-          options={[
-            { value: "local-builtin", label: "Built in" },
-            { value: "online-api", label: "Online" },
-          ]}
-        />
-      </div>
-
-      <div className="card stack">
-        <div className="card-title">Files</div>
-        <dl className="kv">
-          <dt>Apocrypha data folder</dt>
-          <dd className="mono">{settings.dataRoot}</dd>
-          <dt>How files are placed</dt>
-          <dd>
-            Reflink, then hard link, then copy, whichever the disk supports.
-            <div className="card-hint">
-              Your mods, backups of replaced files, and the change log all live
-              outside the game folder.
-            </div>
-          </dd>
-          {game?.installDir && (
-            <>
-              <dt>Game folder</dt>
-              <dd className="mono">{game.installDir}</dd>
-            </>
-          )}
-        </dl>
-      </div>
+      <HealthCheck gameId={gameId} onError={onError} onInfo={onInfo} />
     </div>
   );
 }

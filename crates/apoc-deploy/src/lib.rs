@@ -13,6 +13,7 @@ pub mod journal;
 pub mod loader;
 pub mod place;
 pub mod vault;
+pub mod verify;
 
 use apoc_domain::{DeployMethod, DeploymentPlan, PakChainSpec, PlannedFile};
 use journal::{DeploymentHeader, Journal, JournalOp};
@@ -196,8 +197,59 @@ pub fn dry_run(ctx: &DeployContext, plan: &DeploymentPlan) -> Result<DryRun> {
     })
 }
 
+/// How far an apply has got. Counts are over planned files, so a caller can
+/// render both a file count and a byte total.
+#[derive(Debug, Clone, Default)]
+pub struct ApplyProgress {
+    pub files_done: usize,
+    pub files_total: usize,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    /// Destination path of the file just written.
+    pub current: String,
+}
+
+/// What the caller wants to happen next.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Flow {
+    Continue,
+    Cancel,
+}
+
+/// How an apply ended.
+#[derive(Debug)]
+pub enum Applied {
+    Complete(Journal),
+    /// The caller asked to stop. Everything already written has been rolled
+    /// back, so the game directory is as it was before the apply started.
+    Cancelled {
+        journal: Journal,
+        rollback: RollbackReport,
+    },
+}
+
 /// Apply a plan. Returns the journal describing exactly what was done.
 pub fn apply(ctx: &DeployContext, plan: &DeploymentPlan) -> Result<Journal> {
+    match apply_with(ctx, plan, &mut |_| Flow::Continue)? {
+        Applied::Complete(journal) => Ok(journal),
+        // Unreachable with a sink that never cancels, but returning the journal
+        // keeps the old signature honest instead of panicking on a refactor.
+        Applied::Cancelled { journal, .. } => Ok(journal),
+    }
+}
+
+/// Apply a plan, reporting progress and letting the caller stop.
+///
+/// `on_progress` is called once per file, after it is placed *and* journaled, so
+/// anything it has been told about is already reversible. Returning
+/// [`Flow::Cancel`] rolls back everything written so far: a cancelled apply
+/// leaves the game directory exactly as it was found, which is what makes
+/// cancelling safe to offer in the UI at all.
+pub fn apply_with(
+    ctx: &DeployContext,
+    plan: &DeploymentPlan,
+    on_progress: &mut dyn FnMut(&ApplyProgress) -> Flow,
+) -> Result<Applied> {
     if !plan.is_valid() {
         let why = plan
             .issues
@@ -219,7 +271,21 @@ pub fn apply(ctx: &DeployContext, plan: &DeploymentPlan) -> Result<Journal> {
         },
     )?;
 
-    for f in &resolve_pak_names(ctx, plan) {
+    let files = resolve_pak_names(ctx, plan);
+    let mut progress = ApplyProgress {
+        files_total: files.len(),
+        bytes_total: files.iter().map(|f| f.size).sum(),
+        ..ApplyProgress::default()
+    };
+    let mut flow = Flow::Continue;
+
+    for f in &files {
+        // Checked before any work for this file, so a cancel costs at most the
+        // rollback of what the caller has already been shown.
+        if flow == Flow::Cancel {
+            break;
+        }
+
         let src = ctx.staging_dir.join(&f.staged_rel_path);
         if !src.is_file() {
             return Err(DeployError::MissingStagedFile(src));
@@ -242,19 +308,37 @@ pub fn apply(ctx: &DeployContext, plan: &DeploymentPlan) -> Result<Journal> {
         journal.append(match original_key {
             Some(original_vault_key) => JournalOp::Replaced {
                 game_rel_path: f.game_rel_path.clone(),
+                staged_rel_path: f.staged_rel_path.clone(),
                 original_vault_key,
                 sha256,
                 method,
             },
             None => JournalOp::Created {
                 game_rel_path: f.game_rel_path.clone(),
+                staged_rel_path: f.staged_rel_path.clone(),
                 sha256,
                 method,
             },
         })?;
+
+        progress.files_done += 1;
+        progress.bytes_done += f.size;
+        progress.current = f.game_rel_path.clone();
+        flow = on_progress(&progress);
     }
 
-    Ok(journal)
+    // A cancel on the last file is honoured too: whether the click landed before
+    // or after the final write is invisible to the user, so "cancel" must not
+    // sometimes mean "deployed".
+    if flow == Flow::Cancel {
+        let report = rollback(ctx, &journal, None);
+        return Ok(Applied::Cancelled {
+            journal,
+            rollback: report,
+        });
+    }
+
+    Ok(Applied::Complete(journal))
 }
 
 /// Install the loader proxy DLL (always a real copy) and register the Wine DLL
@@ -711,6 +795,170 @@ mod tests {
         let plan = plan_of(&[("opt/x.pak", "x.pak", 1)]);
         let dr = dry_run(&f.ctx, &plan).unwrap();
         assert_eq!(dr.creates, vec![wilds_chain().filename(1)]);
+    }
+
+    /// Every file under `dir`, keyed by path relative to it, so a whole game
+    /// directory can be compared before and after in one assertion.
+    fn snapshot(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
+        fn walk(
+            dir: &Path,
+            root: &Path,
+            out: &mut std::collections::BTreeMap<String, Vec<u8>>,
+        ) {
+            let Ok(entries) = fs::read_dir(dir) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    walk(&path, root, out);
+                } else {
+                    let rel = path.strip_prefix(root).unwrap().display().to_string();
+                    out.insert(rel, fs::read(&path).unwrap());
+                }
+            }
+        }
+        let mut out = std::collections::BTreeMap::new();
+        walk(dir, dir, &mut out);
+        out
+    }
+
+    #[test]
+    fn progress_is_reported_once_per_planned_file_and_ends_at_the_totals() {
+        let f = fixture();
+        for name in ["a", "b", "c"] {
+            stage(&f.ctx, &format!("opt/natives/{name}.pak"), b"1234");
+        }
+        let plan = plan_of(&[
+            ("opt/natives/a.pak", "natives/a.pak", 4),
+            ("opt/natives/b.pak", "natives/b.pak", 4),
+            ("opt/natives/c.pak", "natives/c.pak", 4),
+        ]);
+
+        let mut seen: Vec<(usize, u64, String)> = Vec::new();
+        let applied = apply_with(&f.ctx, &plan, &mut |p| {
+            seen.push((p.files_done, p.bytes_done, p.current.clone()));
+            Flow::Continue
+        })
+        .unwrap();
+
+        assert!(matches!(applied, Applied::Complete(_)));
+        assert_eq!(
+            seen,
+            vec![
+                (1, 4, "natives/a.pak".to_string()),
+                (2, 8, "natives/b.pak".to_string()),
+                (3, 12, "natives/c.pak".to_string()),
+            ],
+            "one report per file, naming the file just written"
+        );
+
+        let mut last = ApplyProgress::default();
+        apply_with(&f.ctx, &plan, &mut |p| {
+            last = p.clone();
+            Flow::Continue
+        })
+        .unwrap();
+        assert_eq!(last.files_done, last.files_total);
+        assert_eq!(last.bytes_done, last.bytes_total);
+        assert_eq!(last.files_total, 3);
+        assert_eq!(last.bytes_total, 12);
+    }
+
+    #[test]
+    fn cancelling_partway_leaves_the_game_directory_exactly_as_it_was() {
+        let f = fixture();
+        let vanilla = f.ctx.game_dir.join("natives/shared.pak");
+        fs::create_dir_all(vanilla.parent().unwrap()).unwrap();
+        fs::write(&vanilla, b"VANILLA").unwrap();
+        let before = snapshot(&f.ctx.game_dir);
+
+        stage(&f.ctx, "opt/one.pak", b"ONE");
+        stage(&f.ctx, "opt/natives/shared.pak", b"MODDED");
+        stage(&f.ctx, "opt/three.pak", b"THREE");
+        let plan = plan_of(&[
+            ("opt/one.pak", "one.pak", 3),
+            ("opt/natives/shared.pak", "natives/shared.pak", 6),
+            ("opt/three.pak", "three.pak", 5),
+        ]);
+
+        // Cancel once two of the three files are down, so the rollback has both
+        // a created file and a vaulted original to undo.
+        let mut reports = 0usize;
+        let applied = apply_with(&f.ctx, &plan, &mut |p| {
+            reports += 1;
+            if p.files_done == 2 {
+                Flow::Cancel
+            } else {
+                Flow::Continue
+            }
+        })
+        .unwrap();
+
+        let Applied::Cancelled { journal, rollback } = applied else {
+            panic!("expected a cancelled apply");
+        };
+        assert_eq!(reports, 2, "no further files are placed after the cancel");
+        assert!(rollback.is_clean(), "{rollback:?}");
+        assert_eq!(journal.ops().len(), 2, "only the placed files are journaled");
+
+        assert_eq!(
+            fs::read(&vanilla).unwrap(),
+            b"VANILLA",
+            "the replaced original is back byte-exact"
+        );
+        assert!(
+            !f.ctx.game_dir.join("one.pak").exists(),
+            "a file the apply created is gone"
+        );
+        assert!(!f.ctx.game_dir.join("three.pak").exists());
+        assert_eq!(
+            snapshot(&f.ctx.game_dir),
+            before,
+            "the whole game directory is byte-identical to before the apply"
+        );
+    }
+
+    #[test]
+    fn the_journal_records_the_staged_path_each_file_was_placed_from() {
+        let f = fixture();
+        let vanilla = f.ctx.game_dir.join("natives/shared.pak");
+        fs::create_dir_all(vanilla.parent().unwrap()).unwrap();
+        fs::write(&vanilla, b"VANILLA").unwrap();
+        stage(&f.ctx, "opt/natives/shared.pak", b"MODDED");
+        stage(&f.ctx, "opt/deep/new.pak", b"NEW");
+        let plan = plan_of(&[
+            ("opt/natives/shared.pak", "natives/shared.pak", 6),
+            ("opt/deep/new.pak", "natives/new.pak", 3),
+        ]);
+
+        let journal = apply(&f.ctx, &plan).unwrap();
+        let staged: Vec<(&str, &str)> = journal
+            .ops()
+            .iter()
+            .filter_map(|op| match op {
+                JournalOp::Replaced {
+                    game_rel_path,
+                    staged_rel_path,
+                    ..
+                }
+                | JournalOp::Created {
+                    game_rel_path,
+                    staged_rel_path,
+                    ..
+                } => Some((game_rel_path.as_str(), staged_rel_path.as_str())),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            staged,
+            vec![
+                ("natives/shared.pak", "opt/natives/shared.pak"),
+                ("natives/new.pak", "opt/deep/new.pak"),
+            ],
+            "the source is recoverable from the journal alone"
+        );
     }
 
     #[test]

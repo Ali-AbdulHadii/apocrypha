@@ -16,6 +16,11 @@ pub struct AppState {
     /// In-flight and finished downloads. Not persisted: a transfer cannot
     /// survive a restart anyway, and finished files are found by scanning.
     pub downloads: std::sync::Arc<crate::downloads::Queue>,
+    /// Cancel flag for the deployment currently running, if one is.
+    ///
+    /// `Some` is also what "a deploy is in flight" means, so a second Apply can
+    /// be refused rather than allowed to interleave writes with the first.
+    pub deploy_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
 }
 
 /// Setting holding a user-chosen downloads folder. Unset means the default.
@@ -29,6 +34,7 @@ impl AppState {
             store: Mutex::new(store),
             paths,
             downloads: Default::default(),
+            deploy_cancel: Mutex::new(None),
         })
     }
 
@@ -187,6 +193,76 @@ pub struct SettingsView {
     /// False once the user has chosen their own folder, so the interface can
     /// offer to put it back without having to know what the default is.
     pub downloads_dir_is_default: bool,
+}
+
+/// How far the running deployment has got. Emitted as `deploy-progress`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ApplyProgressView {
+    /// `reverting` while the previous deployment is undone, then `linking`.
+    pub phase: String,
+    pub files_done: usize,
+    pub files_total: usize,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+    pub current: String,
+}
+
+/// How the deployment ended. Emitted once, as `deploy-finished`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeployOutcomeView {
+    pub cancelled: bool,
+    pub result: Option<DeployResultView>,
+    pub error: Option<String>,
+    /// Set when a cancel could not put everything back, so the interface can say
+    /// so instead of reporting a clean stop.
+    pub rollback: Option<RollbackView>,
+}
+
+/// One deployed file whose on-disk state is not what the journal describes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FileVerdictView {
+    pub path: String,
+    /// `missing` or `modified`.
+    pub state: String,
+    pub repairable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct VerifyReportView {
+    pub checked: usize,
+    pub ok: usize,
+    pub problems: Vec<FileVerdictView>,
+    pub intact: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RepairReportView {
+    pub repaired: Vec<String>,
+    pub skipped: Vec<String>,
+    pub errors: Vec<String>,
+}
+
+/// One folder Apocrypha owns, and what it currently costs on disk.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UsageEntryView {
+    pub label: String,
+    pub path: String,
+    pub bytes: u64,
+    /// One line saying what lives there, in the user's terms.
+    pub hint: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StorageUsageView {
+    pub entries: Vec<UsageEntryView>,
+    pub total: u64,
 }
 
 /// Build the UI view of a bundle's groups.

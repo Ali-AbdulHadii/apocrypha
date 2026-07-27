@@ -1,0 +1,224 @@
+/* ===========================================================================
+   Settings screen.
+
+   One section at a time, chosen from a row of tabs pinned to the top of the
+   pane. Inside a section, settings live in grouped inset panels: an eyebrow
+   header, then one bordered surface holding rows.
+
+   A row is label and optional description on the left, control on the right.
+   The line between two rows is inset to the label's left edge rather than
+   spanning the panel, which is what makes a grouped list read as one object
+   instead of a stack of strips.
+
+   Every value is a token, so the Appearance settings retheme this screen along
+   with everything else.
+   ========================================================================= */
+
+.set-screen {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+  min-width: 0;
+}
+
+/* ------------------------------------------------------------- tab row --- */
+/* Sticky against the scrolling pane. The negative top offset and matching
+   padding cancel the pane's own padding, so the bar sits flush with the top
+   edge when it sticks and in its natural place when it has not. */
+.set-tabbar {
+  position: sticky;
+  top: calc(var(--sp-5) * -1);
+  z-index: 2;
+  margin-top: calc(var(--sp-5) * -1);
+  padding: var(--sp-5) 0 var(--sp-3);
+  background: var(--bg-base);
+}
+
+.set-tabs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: var(--sp-1);
+  max-width: 100%;
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.set-tab {
+  position: relative;
+  padding: var(--sp-2) var(--sp-4);
+  border-radius: var(--radius-xs);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  transition: color var(--dur-fast) var(--ease-out);
+}
+
+.set-tab:hover,
+.set-tab[aria-selected="true"] {
+  color: var(--text-primary);
+}
+
+.set-tab > span {
+  position: relative;
+  z-index: 1;
+}
+
+.set-tab-pill {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  border-radius: var(--radius-xs);
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+
+/* ------------------------------------------------------- section groups --- */
+.set-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-5);
+  min-width: 0;
+}
+
+.set-group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  min-width: 0;
+}
+
+.set-eyebrow {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  padding-left: var(--sp-3);
+}
+
+.set-panel {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+/* ---------------------------------------------------------------- rows --- */
+.set-row {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-3) var(--sp-4);
+  padding: var(--sp-4);
+}
+
+/* Inset on the left so the line starts where the label starts. */
+.set-row + .set-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--sp-4);
+  right: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+/* A wide control (a path, a slider, a text field) sits under the label
+   instead of beside it. */
+.set-row-stacked {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.set-row-text {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+
+.set-label {
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--text-primary);
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.set-desc {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: var(--leading);
+  /* A measure, in characters, so it scales with the text size setting. */
+  max-width: 68ch;
+}
+
+.set-value {
+  font-size: var(--text-sm);
+  font-weight: 400;
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+}
+
+.set-control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  min-width: 0;
+}
+
+.set-row-stacked .set-control {
+  justify-content: flex-start;
+}
+
+.set-control .range,
+.set-control .input {
+  flex: 1;
+  min-width: var(--sp-7);
+}
+
+/* A path is shown whole, wrapping if it must. Truncating the middle of a
+   folder path is fine in a list of mods; on the screen that tells you where
+   your disk went it is not. */
+.set-path {
+  min-width: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+}
+
+.set-control .set-path {
+  flex: 1;
+}
+
+/* ------------------------------------------------- where things live ----- */
+/* The one group on this screen that carries weight: real paths, measured
+   sizes, and a way into each folder. */
+.set-size {
+  font-size: var(--text-md);
+  font-weight: 500;
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  min-width: var(--sp-6);
+}
+
+/* Sizes are measured on a background thread, so each row waits on its own. */
+.set-size-wait {
+  display: inline-block;
+  width: var(--sp-6);
+  height: var(--text-sm);
+  vertical-align: middle;
+}
+
+.set-total {
+  background: var(--bg-sunken);
+}

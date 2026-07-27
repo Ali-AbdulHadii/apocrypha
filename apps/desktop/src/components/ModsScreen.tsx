@@ -3,12 +3,30 @@
  *
  * Built for large libraries: mods group into collapsible categories, can be
  * searched and filtered, and carry an explicit applied/pending badge so it is
- * obvious what is actually in the game right now. Load order is set by dragging
- * the grip on the left of each row.
+ * obvious what is actually in the game right now.
+ *
+ * Two decisions keep a few hundred mods smooth here.
+ *
+ * 1. Load order is not edited on this screen. It has its own screen now, so
+ *    this one never mounts drag machinery. Rows still show their position,
+ *    because knowing where a mod sits is useful even where you cannot move it.
+ *
+ * 2. Past a threshold each category body is windowed: only the rows near the
+ *    scroll viewport are in the DOM and a plain spacer stands in for the rest.
+ *    Row height is measured from a real row rather than written down here,
+ *    because spacing and text size are user settings and any baked in number
+ *    would be wrong the moment somebody changes them.
  */
 
-import { AnimatePresence, Reorder, motion, useDragControls } from "framer-motion";
-import { useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { formatBytes, type ModView } from "../lib/api";
 import { Icon } from "./icons";
 import { Chip, Switch } from "./ui";
@@ -23,43 +41,222 @@ export interface ModsScreenProps {
   dirty: boolean;
   onToggle: (mod: ModView, enabled: boolean) => void;
   onConfigure: (mod: ModView) => void;
-  onReorder: (orderedIds: string[]) => void;
   onRemove: (mod: ModView) => void;
   onImport: () => void;
+  /** Takes the user to the Load order screen, where the order is editable. */
+  onOpenLoadOrder?: () => void;
 }
+
+/** Below this many rows, windowing costs more than it saves. */
+const VIRTUALISE_ABOVE = 60;
+/** Rows kept mounted past each edge of the viewport, so scrolling is not bare. */
+const OVERSCAN_ROWS = 6;
+/** How many rows a group renders before it has measured anything. */
+const SEED_ROWS = 24;
 
 function categoryOf(m: ModView): string {
   return m.category?.trim() || "Uncategorised";
 }
 
+/* --------------------------------------------------------------- motion --- */
+
 /**
- * Rebuild the whole load order after one category was reordered.
+ * Read a duration token, in seconds.
  *
- * The reordered mods go back into the exact positions that category already
- * occupied, so moving a mod inside "Armor" cannot shuffle every other category
- * to the end of the list.
+ * framer-motion needs a number, so this value cannot live in CSS alone. Reading
+ * the token instead of writing 0.2 in here means the Appearance settings still
+ * reach this animation, and the reduced motion preference still switches it off.
  */
-export function spliceOrder(
-  all: ModView[],
-  category: string,
-  reorderedIds: string[],
-): string[] {
-  const full = [...all].sort((a, b) => a.priority - b.priority).map((m) => m.id);
-  const byId = new Map(all.map((m) => [m.id, m]));
-
-  const slots: number[] = [];
-  full.forEach((id, i) => {
-    const m = byId.get(id);
-    if (m && categoryOf(m) === category) slots.push(i);
-  });
-
-  const out = [...full];
-  slots.forEach((slot, i) => {
-    const id = reorderedIds[i];
-    if (id !== undefined) out[slot] = id;
-  });
-  return out;
+function readDuration(): number {
+  const raw = getComputedStyle(document.documentElement)
+    .getPropertyValue("--dur")
+    .trim();
+  const n = Number.parseFloat(raw);
+  if (!Number.isFinite(n)) return 0.2;
+  return raw.endsWith("ms") ? n / 1000 : n;
 }
+
+function useCollapseDuration(): number {
+  const [seconds, setSeconds] = useState(0.2);
+
+  useEffect(() => {
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setSeconds(reduced.matches ? 0 : readDuration());
+    sync();
+    reduced.addEventListener("change", sync);
+    return () => reduced.removeEventListener("change", sync);
+  }, []);
+
+  return seconds;
+}
+
+/* ------------------------------------------------------------ windowing --- */
+
+interface RowWindow {
+  /** First row index in the DOM. */
+  start: number;
+  /** One past the last row index in the DOM. */
+  end: number;
+  /** Height of the spacer standing in for the rows above, in pixels. */
+  padTop: number;
+  /** Height of the spacer standing in for the rows below, in pixels. */
+  padBottom: number;
+}
+
+function sameWindow(a: RowWindow, b: RowWindow): boolean {
+  return (
+    a.start === b.start &&
+    a.end === b.end &&
+    a.padTop === b.padTop &&
+    a.padBottom === b.padBottom
+  );
+}
+
+/**
+ * Nearest scrolling ancestor.
+ *
+ * The scroll container belongs to the app shell, not to this screen, so it is
+ * found by walking up and asking the browser rather than by naming a class this
+ * file does not own. Elements that clip without scrolling are skipped on
+ * purpose: the group card and the collapse wrapper both set overflow hidden and
+ * neither of them is the scroller.
+ */
+function findScroller(from: HTMLElement | null): HTMLElement | null {
+  let el = from?.parentElement ?? null;
+  while (el) {
+    const flow = getComputedStyle(el).overflowY;
+    if (flow === "auto" || flow === "scroll" || flow === "overlay") return el;
+    el = el.parentElement;
+  }
+  return null;
+}
+
+/**
+ * Keep only the rows near the viewport mounted.
+ *
+ * Row height is never assumed. Every pass measures a row that is genuinely on
+ * screen and reads the gap straight off the list container, so retuning the
+ * spacing or text size tokens while the list is open simply produces a
+ * different pitch on the next pass. To guarantee there is always something to
+ * measure, a group that has scrolled out of sight still keeps exactly one row
+ * mounted: it costs nothing and it doubles as the measuring stick.
+ */
+function useRowWindow(count: number, enabled: boolean) {
+  const [bodyEl, setBodyEl] = useState<HTMLDivElement | null>(null);
+  const [win, setWin] = useState<RowWindow>(() => ({
+    start: 0,
+    end: enabled ? Math.min(count, SEED_ROWS) : count,
+    padTop: 0,
+    padBottom: 0,
+  }));
+
+  const scrollerRef = useRef<HTMLElement | null>(null);
+  const frameRef = useRef(0);
+
+  const recompute = useCallback(() => {
+    const whole: RowWindow = { start: 0, end: count, padTop: 0, padBottom: 0 };
+
+    if (!enabled || count === 0) {
+      if (!sameWindow(win, whole)) setWin(whole);
+      return;
+    }
+    if (!bodyEl) return;
+
+    if (!scrollerRef.current) scrollerRef.current = findScroller(bodyEl);
+    const scroller = scrollerRef.current;
+    // Nothing scrolls above this list, so there is no window to compute.
+    if (!scroller) {
+      if (!sameWindow(win, whole)) setWin(whole);
+      return;
+    }
+
+    const first = bodyEl.querySelector<HTMLElement>(".mod-row");
+    if (!first) {
+      // No row to measure. This is the first paint, and also the recovery path
+      // for when a filter shrinks the list past the current window.
+      const seed: RowWindow = {
+        start: 0,
+        end: Math.min(count, SEED_ROWS),
+        padTop: 0,
+        padBottom: 0,
+      };
+      if (!sameWindow(win, seed)) setWin(seed);
+      return;
+    }
+
+    const box = first.getBoundingClientRect();
+    if (box.height <= 0) return;
+    const gap = Number.parseFloat(getComputedStyle(bodyEl).rowGap) || 0;
+    const pitch = box.height + gap;
+
+    // Anchor on the row that is mounted and step back over the rows the top
+    // spacer stands in for. Working from a real row means this never has to
+    // know the group's own padding, and it stays correct while a category is
+    // mid collapse.
+    const viewTop = scroller.getBoundingClientRect().top;
+    const zero = box.top - win.start * pitch - viewTop;
+    const overscan = OVERSCAN_ROWS * pitch;
+
+    let start = Math.floor((-zero - overscan) / pitch);
+    let end = Math.ceil((scroller.clientHeight - zero + overscan) / pitch);
+    start = Math.min(Math.max(start, 0), count - 1);
+    end = Math.min(Math.max(end, start + 1), count);
+
+    const tail = count - end;
+    const next: RowWindow = {
+      start,
+      end,
+      padTop: start > 0 ? Math.round(start * pitch - gap) : 0,
+      padBottom: tail > 0 ? Math.round(tail * pitch - gap) : 0,
+    };
+    if (!sameWindow(win, next)) setWin(next);
+  }, [bodyEl, count, enabled, win]);
+
+  // Verify the window after every render, before paint, so a filter, a sort or
+  // a category opening never leaves a stale slice on screen for a frame.
+  const latest = useRef(recompute);
+  useLayoutEffect(() => {
+    latest.current = recompute;
+    recompute();
+  });
+
+  useEffect(() => {
+    if (!enabled || !bodyEl) return;
+    scrollerRef.current = findScroller(bodyEl);
+    const scroller = scrollerRef.current;
+
+    const schedule = () => {
+      if (frameRef.current) return;
+      frameRef.current = requestAnimationFrame(() => {
+        frameRef.current = 0;
+        latest.current();
+      });
+    };
+
+    scroller?.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+
+    // The group body is watched as well as the viewport. It changes height
+    // while a category opens or closes, and it changes height if the spacing
+    // tokens are retuned while the list is open, which is exactly the moment
+    // the row height needs taking again.
+    const observer = new ResizeObserver(schedule);
+    observer.observe(bodyEl);
+    if (scroller) observer.observe(scroller);
+
+    return () => {
+      scroller?.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      observer.disconnect();
+      if (frameRef.current) cancelAnimationFrame(frameRef.current);
+      frameRef.current = 0;
+    };
+  }, [bodyEl, enabled]);
+
+  return { setBodyEl, win };
+}
+
+/* ------------------------------------------------------------- the list --- */
 
 export function ModsScreen({
   mods,
@@ -67,17 +264,16 @@ export function ModsScreen({
   dirty,
   onToggle,
   onConfigure,
-  onReorder,
   onRemove,
   onImport,
+  onOpenLoadOrder,
 }: ModsScreenProps) {
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortKey>("order");
   const [status, setStatus] = useState<"all" | "enabled" | "disabled">("all");
   const [category, setCategory] = useState("all");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  /** Groups whose open animation has finished, so their clip can be dropped. */
-  const [settled, setSettled] = useState<Set<string>>(new Set());
+  const duration = useCollapseDuration();
 
   const categories = useMemo(() => {
     const set = new Set(mods.map(categoryOf));
@@ -121,9 +317,12 @@ export function ModsScreen({
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [filtered]);
 
-  /** Dragging only makes sense when the list is in load order and unfiltered. */
-  const reorderable =
-    sort === "order" && !query.trim() && status === "all" && category === "all";
+  /**
+   * Windowing is decided on the whole visible list, not per category. What
+   * costs frames is the total number of mounted rows, and ten categories of
+   * fifty is the same problem as one of five hundred.
+   */
+  const virtualise = filtered.length > VIRTUALISE_ABOVE;
 
   function toggleCategory(name: string) {
     setCollapsed((prev) => {
@@ -145,7 +344,11 @@ export function ModsScreen({
           Add a ZIP archive to begin. Segmented installers, loose files, loaders
           and PAK mods are all supported.
         </div>
-        <button className="btn primary" onClick={onImport} style={{ marginTop: 8 }}>
+        <button
+          className="btn primary"
+          onClick={onImport}
+          style={{ marginTop: "var(--sp-3)" }}
+        >
           <Icon.plus /> Add mod
         </button>
       </div>
@@ -204,9 +407,20 @@ export function ModsScreen({
         </select>
       </div>
 
-      {!reorderable && sort === "order" && (
-        <div className="card-hint">
-          Clear the search and filters to drag mods into a different load order.
+      {sort === "order" && onOpenLoadOrder && (
+        <div className="row">
+          <span className="card-hint">
+            The number on each row is the position the game loads that mod in.
+            You set the order on its own screen, where searching and filtering
+            here cannot get in the way.
+          </span>
+          <button
+            className="btn sm"
+            onClick={onOpenLoadOrder}
+            style={{ marginLeft: "auto", flexShrink: 0 }}
+          >
+            <Icon.grip size={14} /> Open load order
+          </button>
         </div>
       )}
 
@@ -219,97 +433,125 @@ export function ModsScreen({
           <div>Try a different search or clear the filters.</div>
         </div>
       ) : (
-        grouped.map(([name, items]) => {
-          const open = !collapsed.has(name);
-          const enabledCount = items.filter((m) => m.enabled).length;
-          return (
-            <section className="mod-group" key={name}>
-              <button className="mod-group-head" onClick={() => toggleCategory(name)}>
-                <span className={`chevron ${open ? "open" : ""}`}>
-                  <Icon.chevronRight size={14} />
-                </span>
-                <span className="mod-group-name">{name}</span>
-                <span className="mod-group-count">
-                  {enabledCount} of {items.length} enabled
-                </span>
-              </button>
-
-              <AnimatePresence initial={false}>
-                {open && (
-                  <motion.div
-                    initial={{ height: 0, opacity: 0 }}
-                    animate={{ height: "auto", opacity: 1 }}
-                    exit={{ height: 0, opacity: 0 }}
-                    transition={{ duration: 0.2, ease: [0.16, 1, 0.3, 1] }}
-                    // Clipped while the height animates, then released, so a
-                    // row being dragged is not cut off at the group edge.
-                    style={{ overflow: settled.has(name) ? "visible" : "hidden" }}
-                    onAnimationComplete={() =>
-                      setSettled((prev) => new Set(prev).add(name))
-                    }
-                    onAnimationStart={() =>
-                      setSettled((prev) => {
-                        const next = new Set(prev);
-                        next.delete(name);
-                        return next;
-                      })
-                    }
-                  >
-                    {reorderable ? (
-                      <Reorder.Group
-                        axis="y"
-                        // Ids, not mod objects. Reorder tracks values by
-                        // identity, and every state update rebuilds the mod
-                        // objects, so object values would break mid drag.
-                        values={items.map((m) => m.id)}
-                        onReorder={(nextIds) => onReorder(spliceOrder(mods, name, nextIds))}
-                        className="mod-group-body"
-                        as="div"
-                      >
-                        {items.map((m) => (
-                          <DraggableModRow
-                            key={m.id}
-                            mod={m}
-                            applied={appliedIds.has(m.id)}
-                            onToggle={onToggle}
-                            onConfigure={onConfigure}
-                            onRemove={onRemove}
-                          />
-                        ))}
-                      </Reorder.Group>
-                    ) : (
-                      <div className="mod-group-body">
-                        {items.map((m) => (
-                          <ModRow
-                            key={m.id}
-                            mod={m}
-                            applied={appliedIds.has(m.id)}
-                            dirty={dirty}
-                            onToggle={onToggle}
-                            onConfigure={onConfigure}
-                            onRemove={onRemove}
-                          />
-                        ))}
-                      </div>
-                    )}
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </section>
-          );
-        })
+        grouped.map(([name, items]) => (
+          <ModGroup
+            key={name}
+            name={name}
+            items={items}
+            open={!collapsed.has(name)}
+            virtualise={virtualise}
+            duration={duration}
+            appliedIds={appliedIds}
+            dirty={dirty}
+            onHeadClick={() => toggleCategory(name)}
+            onToggle={onToggle}
+            onConfigure={onConfigure}
+            onRemove={onRemove}
+          />
+        ))
       )}
     </div>
   );
 }
 
-function StatusChip({
-  mod,
-  applied,
+/* ------------------------------------------------------------ one group --- */
+
+function ModGroup({
+  name,
+  items,
+  open,
+  virtualise,
+  duration,
+  appliedIds,
+  dirty,
+  onHeadClick,
+  onToggle,
+  onConfigure,
+  onRemove,
 }: {
-  mod: ModView;
-  applied: boolean;
+  name: string;
+  items: ModView[];
+  open: boolean;
+  virtualise: boolean;
+  duration: number;
+  appliedIds: Set<string>;
+  dirty: boolean;
+  onHeadClick: () => void;
+  onToggle: (m: ModView, enabled: boolean) => void;
+  onConfigure: (m: ModView) => void;
+  onRemove: (m: ModView) => void;
 }) {
+  const { setBodyEl, win } = useRowWindow(items.length, virtualise);
+  const enabledCount = items.filter((m) => m.enabled).length;
+  const slice = virtualise ? items.slice(win.start, win.end) : items;
+
+  return (
+    <section className="mod-group">
+      <button
+        className="mod-group-head"
+        onClick={onHeadClick}
+        aria-expanded={open}
+      >
+        <span className={`chevron ${open ? "open" : ""}`}>
+          <Icon.chevronRight size={14} />
+        </span>
+        <span className="mod-group-name">{name}</span>
+        <span className="mod-group-count">
+          {enabledCount} of {items.length} enabled
+        </span>
+      </button>
+
+      <AnimatePresence initial={false}>
+        {open && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration, ease: [0.16, 1, 0.3, 1] }}
+            style={{ overflow: "hidden" }}
+          >
+            {/* The spacers give the body the height it would have had with
+                every row mounted, so the height animation and the scrollbar
+                both behave exactly as they did before windowing. */}
+            <div className="mod-group-body" ref={setBodyEl}>
+              {win.padTop > 0 && (
+                <div
+                  className="mod-rows-spacer"
+                  style={{ height: win.padTop, flexShrink: 0 }}
+                  aria-hidden="true"
+                />
+              )}
+
+              {slice.map((m) => (
+                <ModRow
+                  key={m.id}
+                  mod={m}
+                  applied={appliedIds.has(m.id)}
+                  dirty={dirty}
+                  onToggle={onToggle}
+                  onConfigure={onConfigure}
+                  onRemove={onRemove}
+                />
+              ))}
+
+              {win.padBottom > 0 && (
+                <div
+                  className="mod-rows-spacer"
+                  style={{ height: win.padBottom, flexShrink: 0 }}
+                  aria-hidden="true"
+                />
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </section>
+  );
+}
+
+/* -------------------------------------------------------------- one row --- */
+
+function StatusChip({ mod, applied }: { mod: ModView; applied: boolean }) {
   if (!mod.enabled) {
     return applied ? <Chip kind="warn">Still in game</Chip> : <Chip>Off</Chip>;
   }
@@ -319,63 +561,6 @@ function StatusChip({
     </Chip>
   ) : (
     <Chip kind="warn">Not applied</Chip>
-  );
-}
-
-/** Shared row content, used by both the static and draggable variants. */
-function RowBody({
-  mod,
-  applied,
-  handle,
-  onToggle,
-  onConfigure,
-  onRemove,
-}: {
-  mod: ModView;
-  applied: boolean;
-  handle: React.ReactNode;
-  onToggle: (m: ModView, enabled: boolean) => void;
-  onConfigure: (m: ModView) => void;
-  onRemove: (m: ModView) => void;
-}) {
-  return (
-    <>
-      {handle}
-
-      <Switch
-        checked={mod.enabled}
-        onChange={(v) => onToggle(mod, v)}
-        label={`Enable ${mod.name}`}
-      />
-
-      <div style={{ minWidth: 0, flex: 1 }}>
-        <div className="row" style={{ gap: "var(--sp-3)" }}>
-          <span className="mod-name truncate">{mod.name}</span>
-          {mod.version && <Chip>{mod.version}</Chip>}
-          <StatusChip mod={mod} applied={applied} />
-        </div>
-        <div className="mod-meta">
-          {/* Written as the character itself: a \u escape in JSX text is not
-              processed, it renders as the six literal characters. */}
-          {mod.author ? `${mod.author} \u00b7 ` : ""}
-          {mod.selection.length} of{" "}
-          {mod.groups.reduce((n, g) => n + g.options.length, 0)} options \u00b7{" "}
-          {mod.totalFiles} files \u00b7 {formatBytes(mod.totalBytes)}
-        </div>
-      </div>
-
-      <button className="btn sm" onClick={() => onConfigure(mod)}>
-        Configure
-      </button>
-      <button
-        className="btn sm icon ghost"
-        onClick={() => onRemove(mod)}
-        aria-label={`Remove ${mod.name}`}
-        title="Remove from library"
-      >
-        <Icon.trash size={14} />
-      </button>
-    </>
   );
 }
 
@@ -395,75 +580,44 @@ function ModRow({
 }) {
   return (
     <div className={`mod-row ${mod.enabled ? "" : "disabled"}`}>
-      <RowBody
-        mod={mod}
-        applied={applied}
-        handle={<span className="mod-order">{mod.priority}</span>}
-        onToggle={onToggle}
-        onConfigure={onConfigure}
-        onRemove={onRemove}
+      <span className="mod-order" title="Load order position">
+        {mod.priority}
+      </span>
+
+      <Switch
+        checked={mod.enabled}
+        onChange={(v) => onToggle(mod, v)}
+        label={`Enable ${mod.name}`}
       />
+
+      <div style={{ minWidth: 0, flex: 1 }}>
+        <div className="row" style={{ gap: "var(--sp-3)" }}>
+          <span className="mod-name truncate">{mod.name}</span>
+          {mod.version && <Chip>{mod.version}</Chip>}
+          <StatusChip mod={mod} applied={applied} />
+        </div>
+        <div className="mod-meta">
+          {/* Middots are written as the character itself. A \u escape is only
+              processed inside a string; as bare JSX text it renders as the
+              six literal characters. */}
+          {mod.author ? `${mod.author} · ` : ""}
+          {mod.selection.length} of{" "}
+          {mod.groups.reduce((n, g) => n + g.options.length, 0)} options ·{" "}
+          {mod.totalFiles} files · {formatBytes(mod.totalBytes)}
+        </div>
+      </div>
+
+      <button className="btn sm" onClick={() => onConfigure(mod)}>
+        Configure
+      </button>
+      <button
+        className="btn sm icon ghost"
+        onClick={() => onRemove(mod)}
+        aria-label={`Remove ${mod.name}`}
+        title="Remove from library"
+      >
+        <Icon.trash size={14} />
+      </button>
     </div>
-  );
-}
-
-/**
- * A row that can be dragged by its grip.
- *
- * The item value is the mod id rather than the mod object, because Reorder
- * matches values by identity and the mod objects are rebuilt on every state
- * update. Dragging only starts from the grip, so the toggle and the Configure
- * button stay clickable.
- */
-function DraggableModRow({
-  mod,
-  applied,
-  onToggle,
-  onConfigure,
-  onRemove,
-}: {
-  mod: ModView;
-  applied: boolean;
-  onToggle: (m: ModView, enabled: boolean) => void;
-  onConfigure: (m: ModView) => void;
-  onRemove: (m: ModView) => void;
-}) {
-  const controls = useDragControls();
-
-  return (
-    <Reorder.Item
-      value={mod.id}
-      dragListener={false}
-      dragControls={controls}
-      className={`mod-row ${mod.enabled ? "" : "disabled"}`}
-      whileDrag={{ scale: 1.01, zIndex: 2 }}
-      transition={{ type: "spring", stiffness: 600, damping: 40 }}
-      as="div"
-    >
-      <RowBody
-        mod={mod}
-        applied={applied}
-        handle={
-          <span
-            className="drag-handle"
-            // touch-action is none in CSS so the browser does not claim the
-            // gesture for scrolling before the drag can start.
-            onPointerDown={(e) => {
-              e.preventDefault();
-              controls.start(e);
-            }}
-            role="button"
-            tabIndex={-1}
-            aria-label={`Reorder ${mod.name}`}
-            title="Drag to change load order"
-          >
-            <Icon.grip size={14} />
-          </span>
-        }
-        onToggle={onToggle}
-        onConfigure={onConfigure}
-        onRemove={onRemove}
-      />
-    </Reorder.Item>
   );
 }

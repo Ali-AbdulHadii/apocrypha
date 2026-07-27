@@ -21,8 +21,9 @@ pub use extract::{
 };
 pub use modinfo::Modinfo;
 pub use plan::{
-    choose_exclusive, combine as combine_plans, default_selection, plan as plan_deployment,
-    recommended_selection, toggle, ModPlan,
+    choose_exclusive, combine as combine_plans,
+    combine_with_overrides as combine_plans_with_overrides, default_selection,
+    plan as plan_deployment, recommended_selection, toggle, ConflictOverrides, ModPlan,
 };
 pub use rules::GameRules;
 
