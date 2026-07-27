@@ -1234,46 +1234,42 @@
   flex-shrink: 0;
 }
 
-.phase-list {
-  display: flex;
-  flex-direction: column;
-  gap: var(--sp-3);
-}
-
-.phase {
+/* One problem file in the health check. A label so the whole row, not just the
+   16px box, is a hit target for the checkbox. */
+.health-row {
   display: flex;
   align-items: center;
   gap: var(--sp-3);
-  font-size: var(--text-sm);
-  color: var(--text-tertiary);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
 }
 
-.phase.active {
-  color: var(--text-primary);
+.health-row:hover {
+  background: var(--bg-hover);
 }
 
-.phase.done {
-  color: var(--text-secondary);
-}
-
-.phase-dot {
-  width: 16px;
-  height: 16px;
-  border-radius: var(--radius-pill);
-  border: 1px solid var(--border-strong);
-  display: grid;
-  place-items: center;
+.health-row input {
   flex-shrink: 0;
-  color: var(--accent-contrast);
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
-.phase.done .phase-dot {
-  background: var(--success);
-  border-color: var(--success);
+.health-row .mono {
+  flex: 1;
+  min-width: 0;
 }
 
-.phase.active .phase-dot {
-  border-color: var(--accent);
+/* Apply progress counts. Tabular figures so the numbers do not jitter as they
+   climb, which is most of what makes a live counter feel unsteady. */
+.apply-counts {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--sp-4);
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
 }
 
 /* ------------------------------------------------------------ lockup ----- */

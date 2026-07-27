@@ -72,7 +72,7 @@ checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
 name = "apoc-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "apoc-deploy",
  "apoc-domain",
@@ -86,7 +86,7 @@ dependencies = [
 
 [[package]]
 name = "apoc-deploy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "apoc-domain",
  "apoc-steam",
@@ -100,14 +100,14 @@ dependencies = [
 
 [[package]]
 name = "apoc-domain"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
 ]
 
 [[package]]
 name = "apoc-gamedef"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "apoc-domain",
  "serde",
@@ -117,7 +117,7 @@ dependencies = [
 
 [[package]]
 name = "apoc-modengine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "apoc-domain",
  "regex",
@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "apoc-nexus"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -143,11 +143,11 @@ dependencies = [
 
 [[package]]
 name = "apoc-steam"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "apoc-storage"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "apoc-domain",
  "rusqlite",
@@ -159,7 +159,7 @@ dependencies = [
 
 [[package]]
 name = "apocrypha-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "apoc-deploy",
  "apoc-domain",

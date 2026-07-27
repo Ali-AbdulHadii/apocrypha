@@ -193,9 +193,12 @@ pub fn plan(bundle: &ModBundle, sel: &Selection) -> DeploymentPlan {
     let mut files = Vec::with_capacity(order.len());
     let mut conflicts = Vec::new();
     for dest in order {
-        let file = winners
-            .remove(&dest)
-            .expect("winner recorded for every path");
+        // `order` and `winners` are filled in the same pass, so a missing winner
+        // cannot happen; skipping beats panicking because a planning bug should
+        // cost the user one file, not the whole deploy.
+        let Some(file) = winners.remove(&dest) else {
+            continue;
+        };
         let c = contenders.remove(&dest).unwrap_or_default();
         if c.len() > 1 {
             conflicts.push(Conflict {
@@ -224,16 +227,39 @@ pub struct ModPlan {
     pub plan: DeploymentPlan,
 }
 
+/// Which mod should win specific contested paths, overriding load order.
+/// Key: game-relative destination path. Value: the mod id that should win.
+pub type ConflictOverrides = std::collections::HashMap<String, String>;
+
 /// Merge several mods' plans into a single deployment.
 ///
 /// Staged paths are namespaced by mod id so one staging root serves them all,
 /// and cross-mod conflicts on the same destination are resolved by load-order
 /// priority: higher priority is applied last and therefore wins.
-pub fn combine(mut mods: Vec<ModPlan>, bundle_name: &str) -> DeploymentPlan {
+pub fn combine(mods: Vec<ModPlan>, bundle_name: &str) -> DeploymentPlan {
+    combine_with_overrides(mods, bundle_name, &ConflictOverrides::new())
+}
+
+/// [`combine`], but with per-path exceptions to load order.
+///
+/// Reordering two mods to settle one contested file drags every other file they
+/// own along with it, so a user who wants one mod's mesh and another's texture
+/// cannot express that by priority alone. An override names the winner for a
+/// single destination and leaves the rest of both mods where load order put them.
+///
+/// An override naming a mod that does not contend for that path is ignored
+/// rather than an error: overrides outlive the mods they mention, and a stale
+/// entry must never block a deploy.
+pub fn combine_with_overrides(
+    mut mods: Vec<ModPlan>,
+    bundle_name: &str,
+    overrides: &ConflictOverrides,
+) -> DeploymentPlan {
     mods.sort_by_key(|m| m.priority);
 
-    let mut winners: HashMap<String, PlannedFile> = HashMap::new();
-    let mut contenders: HashMap<String, Vec<String>> = HashMap::new();
+    // Every contender's file is kept, not just the last writer, because an
+    // override can promote a mod that load order would otherwise have buried.
+    let mut candidates: HashMap<String, Vec<(String, PlannedFile)>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
     let mut issues = Vec::new();
     let mut conflicts = Vec::new();
@@ -245,31 +271,38 @@ pub fn combine(mut mods: Vec<ModPlan>, bundle_name: &str) -> DeploymentPlan {
 
         for f in &m.plan.files {
             let dest = f.game_rel_path.clone();
-            if !contenders.contains_key(&dest) {
+            if !candidates.contains_key(&dest) {
                 order.push(dest.clone());
             }
-            contenders
-                .entry(dest.clone())
-                .or_default()
-                .push(m.mod_id.clone());
-            winners.insert(
-                dest.clone(),
+            candidates.entry(dest).or_default().push((
+                m.mod_id.clone(),
                 PlannedFile {
                     // Re-root the staged path into the shared staging directory.
                     staged_rel_path: format!("{}/{}", option_dir(&m.mod_id), f.staged_rel_path),
                     ..f.clone()
                 },
-            );
+            ));
         }
     }
 
     let mut files = Vec::with_capacity(order.len());
     for dest in order {
-        let file = winners.remove(&dest).expect("winner recorded");
-        let c = contenders.remove(&dest).unwrap_or_default();
+        let mut c = candidates.remove(&dest).unwrap_or_default();
+        if c.is_empty() {
+            continue;
+        }
+
+        // Falling back to the last candidate reproduces plain load order: the
+        // highest priority mod was applied last.
+        let winner_at = overrides
+            .get(&dest)
+            .and_then(|wanted| c.iter().rposition(|(mod_id, _)| mod_id == wanted))
+            .unwrap_or(c.len() - 1);
+        let winner_id = c[winner_at].0.clone();
+
         // Only report a cross-mod conflict when distinct mods contend.
         let mut distinct: Vec<String> = Vec::new();
-        for id in &c {
+        for (id, _) in &c {
             if !distinct.contains(id) {
                 distinct.push(id.clone());
             }
@@ -277,11 +310,11 @@ pub fn combine(mut mods: Vec<ModPlan>, bundle_name: &str) -> DeploymentPlan {
         if distinct.len() > 1 {
             conflicts.push(Conflict {
                 game_rel_path: dest.clone(),
-                winner: distinct.last().cloned().unwrap_or_default(),
+                winner: winner_id,
                 contenders: distinct,
             });
         }
-        files.push(file);
+        files.push(c.swap_remove(winner_at).1);
     }
 
     DeploymentPlan {
@@ -510,6 +543,191 @@ mod tests {
         assert_eq!(combined.conflicts.len(), 1);
         assert_eq!(combined.conflicts[0].winner, "high");
         assert_eq!(combined.conflicts[0].contenders, vec!["low", "high"]);
+    }
+
+    fn multi_plan(mod_id: &str, dests: &[&str]) -> DeploymentPlan {
+        DeploymentPlan {
+            bundle_name: mod_id.into(),
+            files: dests
+                .iter()
+                .map(|dest| PlannedFile {
+                    option_id: "opt".into(),
+                    staged_rel_path: format!("opt/{dest}"),
+                    game_rel_path: (*dest).into(),
+                    size: 1,
+                })
+                .collect(),
+            conflicts: vec![],
+            issues: vec![],
+        }
+    }
+
+    fn overrides(pairs: &[(&str, &str)]) -> ConflictOverrides {
+        pairs
+            .iter()
+            .map(|(path, mod_id)| ((*path).to_string(), (*mod_id).to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn an_override_gives_a_contested_path_to_a_lower_priority_mod() {
+        let combined = combine_with_overrides(
+            vec![
+                ModPlan {
+                    mod_id: "low".into(),
+                    priority: 0,
+                    plan: single_plan("low", "natives/shared.mdf2.45"),
+                },
+                ModPlan {
+                    mod_id: "high".into(),
+                    priority: 10,
+                    plan: single_plan("high", "natives/shared.mdf2.45"),
+                },
+            ],
+            "All mods",
+            &overrides(&[("natives/shared.mdf2.45", "low")]),
+        );
+
+        assert_eq!(combined.file_count(), 1, "one file per destination");
+        assert!(
+            combined.files[0].staged_rel_path.starts_with("low/"),
+            "the override beats priority: {}",
+            combined.files[0].staged_rel_path
+        );
+        assert_eq!(combined.conflicts.len(), 1);
+        assert_eq!(combined.conflicts[0].winner, "low");
+        assert_eq!(combined.conflicts[0].contenders, vec!["low", "high"]);
+    }
+
+    #[test]
+    fn an_override_moves_only_the_path_it_names() {
+        let combined = combine_with_overrides(
+            vec![
+                ModPlan {
+                    mod_id: "low".into(),
+                    priority: 0,
+                    plan: multi_plan("low", &["natives/body.mesh", "natives/body.tex"]),
+                },
+                ModPlan {
+                    mod_id: "high".into(),
+                    priority: 10,
+                    plan: multi_plan("high", &["natives/body.mesh", "natives/body.tex"]),
+                },
+            ],
+            "All mods",
+            &overrides(&[("natives/body.mesh", "low")]),
+        );
+
+        let staged = |dest: &str| {
+            combined
+                .files
+                .iter()
+                .find(|f| f.game_rel_path == dest)
+                .map(|f| f.staged_rel_path.clone())
+                .unwrap_or_default()
+        };
+        assert!(staged("natives/body.mesh").starts_with("low/"));
+        assert!(
+            staged("natives/body.tex").starts_with("high/"),
+            "the sibling file still follows load order"
+        );
+    }
+
+    #[test]
+    fn an_override_naming_an_absent_mod_falls_back_to_load_order() {
+        let combined = combine_with_overrides(
+            vec![
+                ModPlan {
+                    mod_id: "low".into(),
+                    priority: 0,
+                    plan: single_plan("low", "natives/shared.mdf2.45"),
+                },
+                ModPlan {
+                    mod_id: "high".into(),
+                    priority: 10,
+                    plan: single_plan("high", "natives/shared.mdf2.45"),
+                },
+            ],
+            "All mods",
+            &overrides(&[("natives/shared.mdf2.45", "uninstalled-mod")]),
+        );
+
+        assert_eq!(combined.file_count(), 1);
+        assert!(combined.files[0].staged_rel_path.starts_with("high/"));
+        assert_eq!(combined.conflicts[0].winner, "high");
+    }
+
+    #[test]
+    fn an_override_on_an_uncontested_path_changes_nothing() {
+        let combined = combine_with_overrides(
+            vec![
+                ModPlan {
+                    mod_id: "mod-a".into(),
+                    priority: 0,
+                    plan: single_plan("mod-a", "natives/a.pak"),
+                },
+                ModPlan {
+                    mod_id: "mod-b".into(),
+                    priority: 10,
+                    plan: single_plan("mod-b", "dinput8.dll"),
+                },
+            ],
+            "All mods",
+            &overrides(&[("natives/a.pak", "mod-b"), ("dinput8.dll", "mod-a")]),
+        );
+
+        assert_eq!(combined.file_count(), 2);
+        let staged: Vec<&str> = combined
+            .files
+            .iter()
+            .map(|f| f.staged_rel_path.as_str())
+            .collect();
+        assert!(staged.contains(&"mod-a/opt/natives/a.pak"));
+        assert!(staged.contains(&"mod-b/opt/dinput8.dll"));
+        assert!(combined.conflicts.is_empty(), "no path is contested");
+    }
+
+    #[test]
+    fn the_reported_conflict_winner_matches_the_file_that_was_planned() {
+        let dest = "natives/three-way.tex";
+        let combined = combine_with_overrides(
+            vec![
+                ModPlan {
+                    mod_id: "bottom".into(),
+                    priority: 0,
+                    plan: single_plan("bottom", dest),
+                },
+                ModPlan {
+                    mod_id: "middle".into(),
+                    priority: 5,
+                    plan: single_plan("middle", dest),
+                },
+                ModPlan {
+                    mod_id: "top".into(),
+                    priority: 10,
+                    plan: single_plan("top", dest),
+                },
+            ],
+            "All mods",
+            &overrides(&[(dest, "middle")]),
+        );
+
+        assert_eq!(combined.file_count(), 1);
+        assert_eq!(combined.conflicts.len(), 1);
+        let winner = &combined.conflicts[0].winner;
+        assert_eq!(winner, "middle");
+        assert!(
+            combined.files[0]
+                .staged_rel_path
+                .starts_with(&format!("{winner}/")),
+            "the UI's reported winner is the file on disk: {}",
+            combined.files[0].staged_rel_path
+        );
+        assert_eq!(
+            combined.conflicts[0].contenders,
+            vec!["bottom", "middle", "top"],
+            "every contender stays visible"
+        );
     }
 
     #[test]

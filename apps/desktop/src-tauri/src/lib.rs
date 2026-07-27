@@ -4,6 +4,7 @@
 //! UI layer can be replaced without touching the engines.
 
 mod commands;
+mod deploy_cmds;
 mod downloads;
 mod nexus_cmds;
 mod state;
@@ -51,8 +52,17 @@ pub fn run() {
             commands::set_mod_enabled,
             commands::set_mod_selection,
             commands::preview_deploy,
-            commands::deploy,
             commands::rollback_last,
+            deploy_cmds::start_deploy,
+            deploy_cmds::cancel_deploy,
+            deploy_cmds::list_conflicts,
+            deploy_cmds::set_conflict_override,
+            deploy_cmds::clear_conflict_override,
+            deploy_cmds::conflict_overrides,
+            deploy_cmds::verify_deployment,
+            deploy_cmds::repair_deployment,
+            deploy_cmds::storage_usage,
+            deploy_cmds::open_path,
             commands::setup_loader,
             commands::get_settings,
             commands::set_game_db_source,

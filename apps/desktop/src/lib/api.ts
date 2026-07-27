@@ -154,6 +154,61 @@ export interface SettingsView {
   downloadsDirIsDefault: boolean;
 }
 
+/** Progress of the running deployment, delivered as `deploy-progress`. */
+export interface ApplyProgressView {
+  /** "reverting" while the previous deployment is undone, then "linking". */
+  phase: string;
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+  current: string;
+}
+
+/** How the deployment ended. Delivered once, as `deploy-finished`. */
+export interface DeployOutcomeView {
+  cancelled: boolean;
+  result: DeployResultView | null;
+  error: string | null;
+  /** Present on a cancel, so the interface can say if the undo was complete. */
+  rollback: RollbackView | null;
+}
+
+export type FileState = "ok" | "missing" | "modified";
+
+export interface FileVerdictView {
+  path: string;
+  state: FileState;
+  /** False when the change log predates staged-path recording. */
+  repairable: boolean;
+}
+
+export interface VerifyReportView {
+  checked: number;
+  ok: number;
+  problems: FileVerdictView[];
+  intact: boolean;
+}
+
+export interface RepairReportView {
+  repaired: string[];
+  skipped: string[];
+  errors: string[];
+}
+
+/** One folder Apocrypha owns, and what it costs on disk. */
+export interface UsageEntryView {
+  label: string;
+  path: string;
+  bytes: number;
+  hint: string;
+}
+
+export interface StorageUsageView {
+  entries: UsageEntryView[];
+  total: number;
+}
+
 /** True when running inside the Tauri shell (as opposed to a plain browser). */
 export const IS_TAURI =
   typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -200,10 +255,34 @@ export const api = {
 
   /** Previews every enabled mod in the active profile. */
   previewDeploy: (gameId: string) => call<DryRunView>("preview_deploy", { gameId }),
-  /** Applies every enabled mod as one transaction. */
-  deploy: (gameId: string) => call<DeployResultView>("deploy", { gameId }),
+  /**
+   * Applies every enabled mod as one transaction. Returns as soon as the work is
+   * queued; watch `onDeployProgress` and `onDeployFinished` for the rest.
+   */
+  startDeploy: (gameId: string) => call<void>("start_deploy", { gameId }),
+  /** Asks the running deployment to stop and undo what it has written. */
+  cancelDeploy: () => call<void>("cancel_deploy"),
   rollbackLast: (gameId: string) => call<RollbackView>("rollback_last", { gameId }),
   setupLoader: (gameId: string) => call<string>("setup_loader", { gameId }),
+
+  /** Files claimed by more than one enabled mod. Does not touch the disk. */
+  conflicts: (gameId: string) => call<ConflictView[]>("list_conflicts", { gameId }),
+  setConflictOverride: (gameId: string, path: string, modId: string) =>
+    call<void>("set_conflict_override", { gameId, path, modId }),
+  clearConflictOverride: (gameId: string, path: string) =>
+    call<void>("clear_conflict_override", { gameId, path }),
+  conflictOverrides: (gameId: string) =>
+    call<Record<string, string>>("conflict_overrides", { gameId }),
+
+  /** Compares the change log against what is actually in the game folder. */
+  verifyDeployment: (gameId: string) =>
+    call<VerifyReportView>("verify_deployment", { gameId }),
+  repairDeployment: (gameId: string, paths: string[]) =>
+    call<RepairReportView>("repair_deployment", { gameId, paths }),
+
+  /** Real size on disk of every folder Apocrypha owns. Walks the tree. */
+  storageUsage: () => call<StorageUsageView>("storage_usage"),
+  openPath: (path: string) => call<void>("open_path", { path }),
 
   getSettings: () => call<SettingsView>("get_settings"),
   setGameDbSource: (source: string) =>
@@ -305,6 +384,22 @@ export async function onDownloadChanged(
 ): Promise<() => void> {
   const { listen } = await import("@tauri-apps/api/event");
   return listen<DownloadView>("download-changed", (e) => handler(e.payload));
+}
+
+/** Subscribe to deployment progress. Fires several times a second at most. */
+export async function onDeployProgress(
+  handler: (p: ApplyProgressView) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<ApplyProgressView>("deploy-progress", (e) => handler(e.payload));
+}
+
+/** Subscribe to the single final outcome of a deployment. */
+export async function onDeployFinished(
+  handler: (o: DeployOutcomeView) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<DeployOutcomeView>("deploy-finished", (e) => handler(e.payload));
 }
 
 /** "4.2 MB/s", or empty while the rate is not yet meaningful. */

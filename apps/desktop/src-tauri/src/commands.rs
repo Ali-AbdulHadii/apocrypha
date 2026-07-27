@@ -32,11 +32,11 @@ use tauri::State;
 
 type CmdResult<T> = Result<T, String>;
 
-fn err<E: std::fmt::Display>(e: E) -> String {
+pub(crate) fn err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
 }
 
-fn profile_of(state: &AppState, game_id: &str) -> CmdResult<i64> {
+pub(crate) fn profile_of(state: &AppState, game_id: &str) -> CmdResult<i64> {
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     let game = store.get_game(game_id).map_err(err)?;
     if let Some(id) = game.and_then(|g| g.active_profile_id) {
@@ -248,6 +248,11 @@ pub fn import_mod(
                 archive_sha256: bundle.archive_sha256.clone(),
                 installer_model: format!("{:?}", bundle.installer_model),
                 imported_at: 0,
+                // Set by the Nexus import path, which knows the ids the file was
+                // fetched under. A mod added from disk has no Nexus identity, so
+                // an update check has nothing to ask about, which is correct.
+                nexus_mod_id: None,
+                nexus_file_id: None,
                 bundle: bundle.clone(),
             })
             .map_err(err)?;
@@ -384,7 +389,7 @@ pub fn set_mod_selection(
 ///
 /// `staging_dir` is the game's shared staging root, not one mod's folder, so a
 /// single deployment can span every enabled mod.
-fn build_context(state: &AppState, game_id: &str) -> CmdResult<DeployContext> {
+pub(crate) fn build_context(state: &AppState, game_id: &str) -> CmdResult<DeployContext> {
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     let game = store
         .get_game(game_id)
@@ -407,10 +412,17 @@ fn build_context(state: &AppState, game_id: &str) -> CmdResult<DeployContext> {
 /// Build one combined plan covering **every enabled mod** in the active profile,
 /// ordered by load-order priority. Deploying a single mod at a time was the
 /// reason a modded game could launch with most mods missing.
-fn plan_for_profile(state: &AppState, game_id: &str) -> CmdResult<apoc_domain::DeploymentPlan> {
+pub(crate) fn plan_for_profile(
+    state: &AppState,
+    game_id: &str,
+) -> CmdResult<apoc_domain::DeploymentPlan> {
     let profile_id = profile_of(state, game_id)?;
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     let mods = store.list_mods(game_id).map_err(err)?;
+    // Per-file winners the user pinned. Applied inside the planner rather than
+    // after it, so the reported conflict winner and the file actually planned
+    // can never disagree.
+    let overrides = store.conflict_overrides(profile_id).map_err(err)?;
 
     let mut parts = Vec::new();
     for m in mods {
@@ -439,13 +451,15 @@ fn plan_for_profile(state: &AppState, game_id: &str) -> CmdResult<apoc_domain::D
     } else {
         format!("{} mods", parts.len())
     };
-    Ok(apoc_modengine::combine_plans(parts, &label))
+    Ok(apoc_modengine::combine_plans_with_overrides(
+        parts, &label, &overrides,
+    ))
 }
 
 /// Roll back whatever is currently applied, so an Apply always reconciles the
 /// game directory to exactly the current profile rather than layering onto a
 /// previous deployment.
-fn revert_current(state: &AppState, game_id: &str, ctx: &DeployContext) -> CmdResult<()> {
+pub(crate) fn revert_current(state: &AppState, game_id: &str, ctx: &DeployContext) -> CmdResult<()> {
     let outstanding = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
         store.applied_deployments(game_id).map_err(err)?
@@ -536,7 +550,7 @@ pub fn set_mod_order(
 }
 
 /// Ids of the enabled mods, in load order, that a deployment would cover.
-fn enabled_mod_ids(state: &AppState, game_id: &str) -> CmdResult<Vec<String>> {
+pub(crate) fn enabled_mod_ids(state: &AppState, game_id: &str) -> CmdResult<Vec<String>> {
     let profile_id = profile_of(state, game_id)?;
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     Ok(store
@@ -546,44 +560,6 @@ fn enabled_mod_ids(state: &AppState, game_id: &str) -> CmdResult<Vec<String>> {
         .filter(|s| s.enabled)
         .map(|s| s.mod_id)
         .collect())
-}
-
-/// Apply every enabled mod to the game directory as one journaled transaction.
-///
-/// Any previous deployment is reverted first, so the game directory ends up
-/// matching the current profile exactly instead of accumulating stale files.
-#[tauri::command(async)]
-pub fn deploy(state: State<AppState>, game_id: String) -> CmdResult<DeployResultView> {
-    let plan = plan_for_profile(&state, &game_id)?;
-    let deployed_ids = enabled_mod_ids(&state, &game_id)?;
-    let ctx = build_context(&state, &game_id)?;
-    revert_current(&state, &game_id, &ctx)?;
-    let dr = apoc_deploy::dry_run(&ctx, &plan).map_err(err)?;
-    let journal = apoc_deploy::apply(&ctx, &plan).map_err(err)?;
-
-    let profile_id = profile_of(&state, &game_id)?;
-    {
-        let store = state.store.lock().map_err(|_| "state poisoned")?;
-        store
-            .record_deployment(
-                journal.id(),
-                &game_id,
-                Some(profile_id),
-                &journal.path().display().to_string(),
-                "applied",
-            )
-            .map_err(err)?;
-        store
-            .set_deployed_mods(journal.id(), &deployed_ids)
-            .map_err(err)?;
-    }
-
-    Ok(DeployResultView {
-        deployment_id: journal.id().to_string(),
-        files_deployed: plan.file_count(),
-        bytes: plan.total_size(),
-        method: dr.method.as_str().to_string(),
-    })
 }
 
 /// Undeploy: revert every outstanding deployment, returning the game directory

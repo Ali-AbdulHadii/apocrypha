@@ -9,6 +9,7 @@ pub mod paths;
 use apoc_domain::{ModBundle, Selection};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use thiserror::Error;
 
 pub use paths::Paths;
@@ -74,6 +75,13 @@ pub struct ModRecord {
     /// Unix seconds when the mod was imported.
     #[serde(default)]
     pub imported_at: i64,
+    /// Nexus provenance, absent for mods imported from a local file. Kept as two
+    /// separate ids because an update check needs the file id to tell "a newer
+    /// file exists" from "the same file under a different name".
+    #[serde(default)]
+    pub nexus_mod_id: Option<i64>,
+    #[serde(default)]
+    pub nexus_file_id: Option<i64>,
     /// Full normalized bundle, so the wizard can be reopened without the archive.
     pub bundle: ModBundle,
 }
@@ -95,7 +103,7 @@ pub struct ModState {
     pub selection: Selection,
 }
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
 /// The application's persistent store.
 pub struct Store {
@@ -200,6 +208,34 @@ impl Store {
                 .execute("ALTER TABLE deployments ADD COLUMN deployed_mods TEXT", []);
         }
 
+        // v3: a per-profile record of which mod the user picked to win a
+        // contested path, plus the Nexus ids an update check needs.
+        //
+        // mod_id cascades on delete because an override naming an uninstalled
+        // mod is worse than no override at all: the deploy planner would hand
+        // the path to a winner that has no files left to place there.
+        self.conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS conflict_overrides (
+                profile_id    INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                game_rel_path TEXT NOT NULL,
+                mod_id        TEXT NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
+                PRIMARY KEY (profile_id, game_rel_path)
+            );
+            "#,
+        )?;
+        for column in ["nexus_mod_id", "nexus_file_id"] {
+            let has_col: bool = self
+                .conn
+                .prepare(&format!("SELECT {column} FROM mods LIMIT 1"))
+                .is_ok();
+            if !has_col {
+                let _ = self
+                    .conn
+                    .execute(&format!("ALTER TABLE mods ADD COLUMN {column} INTEGER"), []);
+            }
+        }
+
         self.conn
             .pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
@@ -219,9 +255,11 @@ impl Store {
     pub fn get_setting(&self, key: &str) -> Result<Option<String>> {
         Ok(self
             .conn
-            .query_row("SELECT value FROM settings WHERE key=?1", params![key], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT value FROM settings WHERE key=?1",
+                params![key],
+                |r| r.get(0),
+            )
             .optional()?)
     }
 
@@ -289,15 +327,17 @@ impl Store {
     pub fn insert_mod(&self, rec: &ModRecord) -> Result<()> {
         let bundle_json = serde_json::to_string(&rec.bundle)?;
         self.conn.execute(
-            "INSERT INTO mods(id,game_id,name,version,author,archive_path,archive_sha256,installer_model,bundle_json)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9)
+            "INSERT INTO mods(id,game_id,name,version,author,archive_path,archive_sha256,installer_model,bundle_json,nexus_mod_id,nexus_file_id)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
              ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, version=excluded.version, author=excluded.author,
                 archive_path=excluded.archive_path, archive_sha256=excluded.archive_sha256,
-                installer_model=excluded.installer_model, bundle_json=excluded.bundle_json",
+                installer_model=excluded.installer_model, bundle_json=excluded.bundle_json,
+                nexus_mod_id=excluded.nexus_mod_id, nexus_file_id=excluded.nexus_file_id",
             params![
                 rec.id, rec.game_id, rec.name, rec.version, rec.author,
-                rec.archive_path, rec.archive_sha256, rec.installer_model, bundle_json
+                rec.archive_path, rec.archive_sha256, rec.installer_model, bundle_json,
+                rec.nexus_mod_id, rec.nexus_file_id
             ],
         )?;
         Ok(())
@@ -319,16 +359,22 @@ impl Store {
             archive_sha256: row.get(6)?,
             installer_model: row.get(7)?,
             imported_at,
+            nexus_mod_id: row.get(10)?,
+            nexus_file_id: row.get(11)?,
             bundle,
         })
     }
+
+    /// The column list every `ModRecord` read shares, so the positional indices
+    /// in `row_to_mod` cannot drift between the two queries that use it.
+    const MOD_COLUMNS: &'static str = "id,game_id,name,version,author,archive_path,\
+         archive_sha256,installer_model,bundle_json,imported_at,nexus_mod_id,nexus_file_id";
 
     pub fn get_mod(&self, id: &str) -> Result<Option<ModRecord>> {
         Ok(self
             .conn
             .query_row(
-                "SELECT id,game_id,name,version,author,archive_path,archive_sha256,installer_model,bundle_json,imported_at
-                 FROM mods WHERE id=?1",
+                &format!("SELECT {} FROM mods WHERE id=?1", Self::MOD_COLUMNS),
                 params![id],
                 Self::row_to_mod,
             )
@@ -336,11 +382,24 @@ impl Store {
     }
 
     pub fn list_mods(&self, game_id: &str) -> Result<Vec<ModRecord>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id,game_id,name,version,author,archive_path,archive_sha256,installer_model,bundle_json,imported_at
-             FROM mods WHERE game_id=?1 ORDER BY imported_at, name",
-        )?;
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {} FROM mods WHERE game_id=?1 ORDER BY imported_at, name",
+            Self::MOD_COLUMNS
+        ))?;
         let rows = stmt.query_map(params![game_id], Self::row_to_mod)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Mods that came from Nexus, as (mod_id, nexus_mod_id, nexus_file_id).
+    /// An update check needs the file id to tell "newer file exists" from
+    /// "same file, different name".
+    pub fn nexus_linked_mods(&self, game_id: &str) -> Result<Vec<(String, i64, i64)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,nexus_mod_id,nexus_file_id FROM mods
+             WHERE game_id=?1 AND nexus_mod_id IS NOT NULL AND nexus_file_id IS NOT NULL
+             ORDER BY id",
+        )?;
+        let rows = stmt.query_map(params![game_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
     }
 
@@ -359,7 +418,8 @@ impl Store {
     }
 
     pub fn delete_mod(&self, id: &str) -> Result<()> {
-        self.conn.execute("DELETE FROM mods WHERE id=?1", params![id])?;
+        self.conn
+            .execute("DELETE FROM mods WHERE id=?1", params![id])?;
         Ok(())
     }
 
@@ -515,6 +575,47 @@ impl Store {
         Ok(())
     }
 
+    // ---- conflict overrides ---------------------------------------------
+
+    /// Pin `game_rel_path` to `mod_id` for this profile, overriding load order.
+    ///
+    /// Keyed by path rather than by pair of mods so the choice survives the
+    /// other mod being reordered, disabled, or replaced by a third one.
+    pub fn set_conflict_override(
+        &self,
+        profile_id: i64,
+        game_rel_path: &str,
+        mod_id: &str,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO conflict_overrides(profile_id,game_rel_path,mod_id)
+             VALUES(?1,?2,?3)
+             ON CONFLICT(profile_id,game_rel_path) DO UPDATE SET mod_id=excluded.mod_id",
+            params![profile_id, game_rel_path, mod_id],
+        )?;
+        Ok(())
+    }
+
+    /// Drop the override for one path, returning that path to load-order rules.
+    pub fn clear_conflict_override(&self, profile_id: i64, game_rel_path: &str) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM conflict_overrides WHERE profile_id=?1 AND game_rel_path=?2",
+            params![profile_id, game_rel_path],
+        )?;
+        Ok(())
+    }
+
+    /// Every override in a profile, as `game_rel_path -> mod_id`. Returned whole
+    /// because the deploy planner consults it once per path it is about to
+    /// place, and a per-path query there would be one round trip per file.
+    pub fn conflict_overrides(&self, profile_id: i64) -> Result<HashMap<String, String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT game_rel_path,mod_id FROM conflict_overrides WHERE profile_id=?1")?;
+        let rows = stmt.query_map(params![profile_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        Ok(rows.collect::<rusqlite::Result<HashMap<_, _>>>()?)
+    }
+
     // ---- deployments ----------------------------------------------------
 
     pub fn record_deployment(
@@ -631,6 +732,24 @@ mod tests {
         s
     }
 
+    fn add_mod(s: &Store, id: &str, nexus: Option<(i64, i64)>) {
+        s.insert_mod(&ModRecord {
+            id: id.into(),
+            game_id: "monster-hunter-wilds".into(),
+            name: id.into(),
+            version: None,
+            author: None,
+            archive_path: format!("/downloads/{id}.zip"),
+            archive_sha256: None,
+            installer_model: "fluffy-aio".into(),
+            imported_at: 0,
+            nexus_mod_id: nexus.map(|(m, _)| m),
+            nexus_file_id: nexus.map(|(_, f)| f),
+            bundle: empty_bundle(id),
+        })
+        .unwrap();
+    }
+
     #[test]
     fn defaults_to_the_local_builtin_game_database() {
         let s = Store::open_in_memory().unwrap();
@@ -652,6 +771,8 @@ mod tests {
             archive_sha256: Some("abc".into()),
             installer_model: "fluffy-aio".into(),
             imported_at: 0,
+            nexus_mod_id: None,
+            nexus_file_id: None,
             bundle: empty_bundle("Ver.R Hirabami F-M Armor"),
         })
         .unwrap();
@@ -679,6 +800,8 @@ mod tests {
                 archive_sha256: None,
                 installer_model: "fluffy-aio".into(),
                 imported_at: 0,
+                nexus_mod_id: None,
+                nexus_file_id: None,
                 bundle: empty_bundle(name),
             })
             .unwrap();
@@ -709,6 +832,8 @@ mod tests {
             archive_sha256: None,
             installer_model: "fluffy-aio".into(),
             imported_at: 0,
+            nexus_mod_id: None,
+            nexus_file_id: None,
             bundle: empty_bundle("M"),
         })
         .unwrap();
@@ -761,6 +886,8 @@ mod tests {
             archive_sha256: None,
             installer_model: "fluffy-aio".into(),
             imported_at: 0,
+            nexus_mod_id: None,
+            nexus_file_id: None,
             bundle: empty_bundle("M"),
         })
         .unwrap();
@@ -803,7 +930,10 @@ mod tests {
         // Reverting one deployment drops its mods from the live set.
         s.record_deployment("d1", "monster-hunter-wilds", None, "/j1", "reverted")
             .unwrap();
-        assert_eq!(s.applied_mod_ids("monster-hunter-wilds").unwrap(), vec!["mod-c"]);
+        assert_eq!(
+            s.applied_mod_ids("monster-hunter-wilds").unwrap(),
+            vec!["mod-c"]
+        );
     }
 
     #[test]
@@ -820,6 +950,8 @@ mod tests {
                 archive_sha256: None,
                 installer_model: "fluffy-aio".into(),
                 imported_at: 0,
+                nexus_mod_id: None,
+                nexus_file_id: None,
                 bundle: empty_bundle(id),
             })
             .unwrap();
@@ -872,6 +1004,8 @@ mod tests {
             archive_sha256: None,
             installer_model: "fluffy-aio".into(),
             imported_at: 0,
+            nexus_mod_id: None,
+            nexus_file_id: None,
             bundle: empty_bundle("M"),
         })
         .unwrap();
@@ -882,5 +1016,155 @@ mod tests {
             .unwrap();
         assert!(s.get_mod("mod-1").unwrap().is_none());
         assert!(s.list_profiles("monster-hunter-wilds").unwrap().is_empty());
+    }
+
+    #[test]
+    fn conflict_overrides_round_trip_and_are_independent_between_profiles() {
+        let s = seeded();
+        add_mod(&s, "mod-a", None);
+        add_mod(&s, "mod-b", None);
+        let vanilla = s.ensure_profile("monster-hunter-wilds", "Vanilla").unwrap();
+        let testing = s.ensure_profile("monster-hunter-wilds", "Testing").unwrap();
+
+        s.set_conflict_override(vanilla, "natives/stm/a.pak", "mod-a")
+            .unwrap();
+        s.set_conflict_override(testing, "natives/stm/a.pak", "mod-b")
+            .unwrap();
+
+        assert_eq!(
+            s.conflict_overrides(vanilla)
+                .unwrap()
+                .get("natives/stm/a.pak"),
+            Some(&"mod-a".to_string())
+        );
+        assert_eq!(
+            s.conflict_overrides(testing)
+                .unwrap()
+                .get("natives/stm/a.pak"),
+            Some(&"mod-b".to_string())
+        );
+
+        // Re-pinning the same path replaces the winner instead of erroring.
+        s.set_conflict_override(vanilla, "natives/stm/a.pak", "mod-b")
+            .unwrap();
+        assert_eq!(
+            s.conflict_overrides(vanilla)
+                .unwrap()
+                .get("natives/stm/a.pak"),
+            Some(&"mod-b".to_string())
+        );
+
+        s.clear_conflict_override(vanilla, "natives/stm/a.pak")
+            .unwrap();
+        assert!(s.conflict_overrides(vanilla).unwrap().is_empty());
+        assert_eq!(s.conflict_overrides(testing).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn deleting_a_mod_removes_the_overrides_that_pointed_at_it() {
+        let s = seeded();
+        add_mod(&s, "mod-a", None);
+        add_mod(&s, "mod-b", None);
+        let p = s.ensure_profile("monster-hunter-wilds", "P").unwrap();
+        s.set_conflict_override(p, "natives/stm/a.pak", "mod-a")
+            .unwrap();
+        s.set_conflict_override(p, "natives/stm/b.pak", "mod-b")
+            .unwrap();
+
+        s.delete_mod("mod-a").unwrap();
+
+        let overrides = s.conflict_overrides(p).unwrap();
+        assert!(!overrides.contains_key("natives/stm/a.pak"));
+        assert_eq!(
+            overrides.get("natives/stm/b.pak"),
+            Some(&"mod-b".to_string())
+        );
+    }
+
+    #[test]
+    fn nexus_linked_mods_returns_only_the_mods_carrying_both_ids() {
+        let s = seeded();
+        add_mod(&s, "mod-local", None);
+        add_mod(&s, "mod-nexus", Some((1234, 5678)));
+        add_mod(&s, "mod-half", None);
+        // A mod known on Nexus but never downloaded through Apocrypha has no file
+        // id, so an update check cannot compare it and must skip it.
+        s.conn
+            .execute("UPDATE mods SET nexus_mod_id=99 WHERE id='mod-half'", [])
+            .unwrap();
+
+        assert_eq!(
+            s.nexus_linked_mods("monster-hunter-wilds").unwrap(),
+            vec![("mod-nexus".to_string(), 1234, 5678)]
+        );
+        let got = s.get_mod("mod-nexus").unwrap().unwrap();
+        assert_eq!(got.nexus_mod_id, Some(1234));
+        assert_eq!(got.nexus_file_id, Some(5678));
+        assert_eq!(s.get_mod("mod-local").unwrap().unwrap().nexus_mod_id, None);
+    }
+
+    #[test]
+    fn upgrading_a_v2_database_keeps_its_rows_and_adds_the_v3_schema() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("apocrypha.sqlite");
+
+        {
+            let s = Store::open(&db).unwrap();
+            s.upsert_game(&GameRecord {
+                id: "monster-hunter-wilds".into(),
+                name: "Monster Hunter Wilds".into(),
+                install_dir: Some("/games/mhw".into()),
+                proton_prefix: None,
+                active_profile_id: None,
+            })
+            .unwrap();
+            add_mod(&s, "mod-a", None);
+            let p = s.ensure_profile("monster-hunter-wilds", "Vanilla").unwrap();
+            s.set_mod_state(
+                p,
+                &ModState {
+                    mod_id: "mod-a".into(),
+                    enabled: true,
+                    priority: 7,
+                    selection: Selection::new(),
+                },
+            )
+            .unwrap();
+
+            // Reshape the file into exactly what the previous release wrote.
+            s.conn
+                .execute_batch(
+                    "DROP TABLE conflict_overrides;
+                     ALTER TABLE mods DROP COLUMN nexus_mod_id;
+                     ALTER TABLE mods DROP COLUMN nexus_file_id;
+                     PRAGMA user_version = 2;",
+                )
+                .unwrap();
+        }
+
+        let s = Store::open(&db).unwrap();
+        let version: i64 = s
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+
+        let kept = s.get_mod("mod-a").unwrap().unwrap();
+        assert_eq!(kept.archive_path, "/downloads/mod-a.zip");
+        assert_eq!(kept.nexus_mod_id, None);
+        let profiles = s.list_profiles("monster-hunter-wilds").unwrap();
+        assert_eq!(profiles.len(), 1);
+        let state = s.get_mod_state(profiles[0].id, "mod-a").unwrap().unwrap();
+        assert_eq!(state.priority, 7);
+
+        // The v3 additions are usable on the upgraded file, not just on a fresh one.
+        s.set_conflict_override(profiles[0].id, "natives/stm/a.pak", "mod-a")
+            .unwrap();
+        assert_eq!(s.conflict_overrides(profiles[0].id).unwrap().len(), 1);
+        add_mod(&s, "mod-b", Some((10, 20)));
+        assert_eq!(
+            s.nexus_linked_mods("monster-hunter-wilds").unwrap(),
+            vec![("mod-b".to_string(), 10, 20)]
+        );
     }
 }

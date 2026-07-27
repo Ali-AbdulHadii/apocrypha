@@ -18,12 +18,25 @@ pub enum JournalOp {
     /// A file that did not exist before was created by us.
     Created {
         game_rel_path: String,
+        /// Staged source this was placed from, relative to the staging root.
+        ///
+        /// Recorded so a later verify/repair pass can re-place a file that went
+        /// missing: knowing only the destination, the bytes are unrecoverable
+        /// once the link is broken. Defaulted because journals written before
+        /// this field existed must still load, and an empty string reads as
+        /// "source unknown, repair not possible".
+        #[serde(default)]
+        staged_rel_path: String,
         sha256: String,
         method: DeployMethod,
     },
     /// A pre-existing file was replaced; the original is preserved in the vault.
     Replaced {
         game_rel_path: String,
+        /// Staged source this was placed from, relative to the staging root.
+        /// See [`JournalOp::Created`] for why it is recorded and defaulted.
+        #[serde(default)]
+        staged_rel_path: String,
         /// Vault key (content hash) of the ORIGINAL file.
         original_vault_key: String,
         /// Hash of the file we wrote.
@@ -166,6 +179,7 @@ mod tests {
         let mut j = Journal::create(dir.path(), header.clone()).unwrap();
         j.append(JournalOp::Created {
             game_rel_path: "natives/a.mesh.1".into(),
+            staged_rel_path: "opt/natives/a.mesh.1".into(),
             sha256: "abc".into(),
             method: DeployMethod::Hardlink,
         })
@@ -195,6 +209,7 @@ mod tests {
         let mut j = Journal::create(dir.path(), header).unwrap();
         j.append(JournalOp::Created {
             game_rel_path: "a".into(),
+            staged_rel_path: "opt/a".into(),
             sha256: "h".into(),
             method: DeployMethod::Copy,
         })
@@ -205,5 +220,34 @@ mod tests {
 
         let loaded = Journal::load(j.path()).unwrap();
         assert_eq!(loaded.ops().len(), 1, "partial line ignored, valid ops kept");
+    }
+
+    #[test]
+    fn loads_a_journal_written_before_staged_paths_were_recorded() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("dep-old.jsonl");
+        let mut f = File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"id":"dep-old","game_id":"g","bundle_name":"b","created_at":0,"game_dir":"/g"}}"#
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"op":"created","game_rel_path":"natives/a.pak","sha256":"h","method":"hardlink"}}"#
+        )
+        .unwrap();
+
+        let loaded = Journal::load(&path).unwrap();
+        assert_eq!(
+            loaded.ops(),
+            &[JournalOp::Created {
+                game_rel_path: "natives/a.pak".into(),
+                staged_rel_path: String::new(),
+                sha256: "h".into(),
+                method: DeployMethod::Hardlink,
+            }],
+            "an older op still rolls back, it just cannot be repaired"
+        );
     }
 }
