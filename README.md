@@ -13,7 +13,9 @@ MIT licence. Linux (x86_64), Steam and Proton.
 
 ## Status
 
-**Early development.** Version 0.1, Phase 1. Monster Hunter Wilds is the only game profile that ships today, and the deployment engine has been exercised end to end against a real 808-file segmented installer but not yet against a wide spread of community mods. Expect rough edges, expect the UI to change, and keep a backup of anything you cannot re-download. The safety machinery (vault, journal, hash-guarded rollback) is the part that has had the most attention, because it is the part that can ruin your day if it is wrong.
+**Early development.** Version 0.2, Phase 2. Monster Hunter Wilds is the only game profile that ships today, and the deployment engine has been exercised end to end against real segmented installers but not yet against a wide spread of community mods. Expect rough edges, expect the UI to change, and keep a backup of anything you cannot re-download. The safety machinery (vault, journal, hash-guarded rollback) is the part that has had the most attention, because it is the part that can ruin your day if it is wrong.
+
+Phase 2 added the things a library needs once it stops being small: applying is interruptible and reports real progress, the game folder can be checked against the change log and repaired, load order has its own screen with per-file overrides, and the mod list windows itself so a few hundred mods stay smooth.
 
 Known gaps today:
 
@@ -33,10 +35,14 @@ What works today:
 - **Install wizard for segmented installers.** Options, roles and radio sets are derived from the mod's own payload and metadata, not from a hardcoded list. Independent choices stay independent instead of collapsing into one giant radio group.
 - **Profiles.** Separate selections per profile, so a "clean run" profile and a "everything on" profile can coexist over the same installed mods.
 - **Enable and disable without deleting.** Staged payloads live in Apocrypha's own directory. Turning a mod off removes its deployed files, not your download.
-- **Load order.** Priority-based ordering with per-relative-path conflict scope.
-- **Conflict detection.** Before anything is written, you get the list of files two mods both want to own and which one wins.
+- **Load order on its own screen.** A flat, always-draggable list with keyboard move controls, showing how many contested files each mod wins and loses. Mods stays a library you browse; ordering is its own job.
+- **Conflict detection, and per-file overrides.** Before anything is written, you get the list of files two mods both want and which one wins. You can pin a single file to a different mod without reordering anything, so you can take one mod's mesh and another's texture.
 - **Dry run preview.** The full plan (every file, every destination, the placement method chosen) without touching the game directory.
 - **Journaled deployment with hash-guarded rollback.** Every operation is flushed to an append-only JSONL journal as it happens. Undo replays in reverse and refuses to delete a file whose bytes changed since deploy.
+- **Interruptible apply with real progress.** Deployment runs off the main thread and reports files and bytes as it writes. Stopping partway rolls back what it already wrote, so a cancelled apply leaves the game folder exactly as it was.
+- **Verify and repair.** Compares the change log against what is actually in the game folder and reports anything missing or altered. Missing files can be put back from staging; altered files are left alone unless you say otherwise, because putting one back discards whatever changed it.
+- **A mod list that stays smooth.** The list windows itself past sixty rows, measuring row height from a live row so it keeps working when you change the spacing or text size.
+- **Honest disk usage.** Settings shows the measured size of the mod library, the backups, the change log and the downloads folder, with a way into each. Managers quietly consume tens of gigabytes and rarely say so.
 - **REFramework loader setup for Proton.** Writes the `dinput8=n,b` DLL override into the prefix's `user.reg` atomically, captures the previous value for rollback, and refuses to touch the prefix while Steam is running.
 - **Downloads.** Nexus `nxm://` links download in the background with live progress, and wait on a Downloads screen until you choose to install them. The folder is configurable, and anything already in it is listed and installable, so archives saved from a browser or brought from another manager work the same way. Rows show which files are already in your library.
 - **Light and dark themes.** Every colour, size and radius is a CSS custom property, so the Appearance panel can retheme the whole app at runtime.
@@ -62,7 +68,29 @@ What works today:
 
 ## Install
 
-There are no prebuilt packages yet. Build from source.
+### Download a build
+
+The [releases page](https://github.com/Ali-AbdulHadii/apocrypha/releases) has an
+AppImage and a `.deb` for x86_64 Linux.
+
+**AppImage**, which runs anywhere without installing:
+
+```bash
+chmod +x Apocrypha_*_amd64.AppImage
+./Apocrypha_*_amd64.AppImage
+```
+
+**Debian, Ubuntu, Pop!_OS, Mint:**
+
+```bash
+sudo apt install ./Apocrypha_*_amd64.deb
+```
+
+The `.deb` registers Apocrypha as the handler for `nxm://` links, so the Mod
+Manager Download button on Nexus Mods sends files straight to the app. With the
+AppImage, use the button in Settings under Downloads to register it yourself.
+
+### Or build from source
 
 ### Prerequisites
 
@@ -228,9 +256,12 @@ If your game needs a behaviour the schema cannot express, that is a gap in the s
 Phases, not dates. Phase 1 is done: a mod manager that works end to end for one
 game, with the safety machinery built first.
 
-- **Phase 2, trustworthy at scale.** Apply progress and cancellation, mod
-  updates, verify-and-repair against the journal, per-file conflict overrides,
-  and a mod list that stays usable at two hundred mods.
+- **Phase 2, trustworthy at scale.** Mostly done. Apply progress and
+  cancellation, verify-and-repair against the journal, per-file conflict
+  overrides, a dedicated load order screen, and a mod list that stays usable at
+  two hundred mods have all landed. Mod updates from Nexus are the remaining
+  piece: the database records which Nexus mod and file each install came from,
+  but nothing checks for a newer one yet.
 - **Phase 3, more games.** Other RE Engine titles first, then an engine
   different enough to test whether the game profile schema is really general.
   Online game database and FOMOD support land here.

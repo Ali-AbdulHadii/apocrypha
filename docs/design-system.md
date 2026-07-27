@@ -1429,7 +1429,57 @@ to show. If it is installed it says so, and it says what it was installed as.
 
 ---
 
-### 6.25 Also in the sheet
+### 6.25 Settings row grammar
+
+Settings is the one screen dense enough to need a structure of its own, so it has
+one. The app's left rail already plays the part of the left column in a system
+settings window, which makes the settings pane the right column: a row of section
+tabs pinned at the top, then grouped inset panels.
+
+Sheet: `styles/settings.css`. Every class is prefixed `set-`.
+
+| Class | What it is |
+| --- | --- |
+| `.set-tabbar` / `.set-tabs` / `.set-tab` | Section switcher, one section visible at a time. Roving `tabIndex` with arrow-key navigation, and a `layoutId` pill (`.set-tab-pill`) shared with the segmented control's spring. |
+| `.set-group` | One labelled group: an eyebrow, then a panel. |
+| `.set-eyebrow` | Group header: `--text-xs`, uppercase, letter-spaced, `--text-tertiary`. Never bold, never a colour. |
+| `.set-panel` | `--bg-surface`, 1px `--border`, `--radius-lg`, containing rows. |
+| `.set-row` | Grid: label plus optional description on the left, control on the right, vertically centred. Padding `--sp-4`. |
+| `.set-row-stacked` | The variant that puts a wide control (a path, a slider) under the label instead of beside it. |
+| `.set-label` / `.set-desc` | `--text-md` / 500 `--text-primary`, and `--text-sm` `--text-secondary` below it. A description is present only when it adds something. |
+
+**The inset divider is the detail that matters.** Rows are separated by a 1px
+`--border` line that starts at the label's left edge rather than spanning the full
+panel. That single inset is most of what makes a grouped list read as considered
+rather than as a stack of boxes, and it is the reason this is a documented
+component instead of ad-hoc markup.
+
+**One group is allowed to be loud.** "Where things live" reports the measured
+size of the mod library, the backups, the change log and the downloads folder,
+each with its real path and a way in. Mod managers quietly consume tens of
+gigabytes and rarely say so. Sizes are walked on a background thread, so the
+group renders immediately and each row fills in when its number arrives, using
+`.skeleton` while it waits.
+
+### 6.26 Load order row
+
+Sheet: `styles/order.css`, prefixed `order-`. A flat, always-draggable sequence,
+separate from the mod list because Mods is a library you browse and load order is
+one ordered thing you arrange.
+
+| Class | What it is |
+| --- | --- |
+| `.order-row` | Position number, grip, name, and the move controls. Reuses `.drag-handle` and `.mod-name`. |
+| `.order-edge` | The two micro labels bracketing the list: "Loads first" above, "Loads last, wins shared files" below. |
+| `.order-verdict` | Per-mod conflict summary, "wins 3, loses 2", shown only when the mod actually contends. |
+| `.order-claim` / `.order-choice` | One contested path and the buttons that pin a winner to it. The active choice says why it is winning, "pinned" or "by load order". |
+
+**Dragging is never the only way.** Every row carries Move up and Move down
+buttons, because a drag is unreachable from a keyboard and ordering is the entire
+purpose of this screen. The grip is `aria-hidden`, since its action is fully
+duplicated. Each keyboard move announces itself through an `aria-live` region.
+
+### 6.27 Also in the sheet
 
 Smaller pieces that follow directly from the tokens:
 
@@ -1645,8 +1695,8 @@ component that is not in section 6 will be reinvented by the next contributor.
 > sections from this document. Read on for the reasoning behind it.
 
 If you have never handed a design system to an AI before, this section is the whole
-procedure. It works with Claude (including Artifacts and Claude Code), and the same shape
-works with other assistants and with design tools that accept a written brief.
+procedure. It works with any capable assistant, and the same shape works with design
+tools that accept a written brief.
 
 ### 10.1 The idea in one paragraph
 
