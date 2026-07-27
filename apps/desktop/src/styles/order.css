@@ -13,8 +13,10 @@
 
 :root {
   /* Comfortable reading measure for explanatory copy. In ch so it tracks
-     --text-base when the user scales the interface. */
-  --order-measure: 46ch;
+     --text-base when the user scales the interface. Set near the top of the
+     readable range rather than the bottom: these cards are wide, and a short
+     measure inside a wide card reads as cramped rather than as considered. */
+  --order-measure: 62ch;
   /* Width of the position column: wide enough for three digits. */
   --order-index-w: var(--sp-5);
 }
