@@ -8,5 +8,5 @@ Terminal=false
 Type=Application
 StartupWMClass={{name}}
 StartupNotify=true
-Keywords=mods;modding;nexus;proton;steam;monster hunter;
+Keywords=mods;modding;nexus;proton;steam;monster hunter;cyberpunk;
 MimeType=x-scheme-handler/nxm;
