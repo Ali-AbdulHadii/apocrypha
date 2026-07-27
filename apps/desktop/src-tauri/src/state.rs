@@ -80,6 +80,9 @@ pub struct GameView {
     /// Whether the DLL override is currently registered in the prefix.
     pub loader_override_active: bool,
     pub steam_launch_options: Option<String>,
+    /// Nexus Mods domain, so an incoming `nxm://` link can be routed to the
+    /// game it is actually for rather than to whichever game is on screen.
+    pub nexus_domain: Option<String>,
 }
 
 /// One wizard option, flattened for rendering.

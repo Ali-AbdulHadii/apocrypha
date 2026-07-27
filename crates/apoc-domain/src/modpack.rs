@@ -21,6 +21,9 @@ pub enum InstallerModel {
     FlatNatives,
     /// REFramework-only mod (`reframework/`, no `natives/`).
     ReframeworkOnly,
+    /// Loose files under payload roots this game declares, with no installer
+    /// metadata: a Cyberpunk mod shipping `archive/`, `r6/` and `red4ext/`.
+    LooseRoots,
     /// A mod loader distributed as a bare proxy DLL at the archive root
     /// (e.g. REFramework's `dinput8.dll`), with no payload folders.
     Loader,

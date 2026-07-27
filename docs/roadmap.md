@@ -72,17 +72,35 @@ that keeps the options the user already picked.
 
 ## Phase 3: More games, less hardcoding
 
-Wilds is the only profile that ships, but nothing in the engine is Wilds
-specific. The game profile TOML already carries the deploy targets, the pak
-chain, the rewrap rules and the loader definition, and that abstraction has not
-been tested against a second game.
+Status: **started.** Cyberpunk 2077 ships as the second profile.
 
-**Other RE Engine titles first**, because the profile schema was designed from
-them: Dragon's Dogma 2, Resident Evil 4 remake, Monster Hunter Rise.
+**Cyberpunk 2077.** Done, and it went straight to a different engine rather
+than to another RE Engine title, because the schema learns more from being
+disagreed with. What it cost in code was small and worth writing down:
 
-**Then a genuinely different engine**, which is where the profile schema will
-break and need to earn its generality. Likely a Bethesda title, since that is
-where load order semantics get hard and where the plugin concept appears at all.
+- A loader proxy can live in a subdirectory. REFramework's `dinput8.dll` sits
+  in the game root; RED4ext's `winmm.dll` belongs in `bin/x64/`, and a copy at
+  the root is simply never loaded. `proxy_dll` is now a game-relative path, and
+  the Wine registry key is derived from its file name rather than the path.
+- A game can need more than one DLL override. Cyberpunk has two independent
+  proxies in one folder, RED4ext on `winmm` and Cyber Engine Tweaks on
+  `version`, so `wine_dll_overrides` is parsed as a list and "loader ready"
+  means all of them are registered.
+- Format detection asked the profile which roots exist instead of testing for
+  `natives/` and `reframework/` by name.
+
+Three schema changes and no logic changes in the deploy engine is the result
+the abstraction was supposed to produce. Finding the seams cost one real bug,
+too: `canonical_case` had been written below `[loader.proton]` in the Wilds
+profile, so TOML filed it under that table and the casing fix the comment
+described had never once run.
+
+**Other RE Engine titles** are now the cheap ones: Dragon's Dogma 2, Resident
+Evil 4 remake, Monster Hunter Rise should each be a document and nothing else.
+
+**Then a Bethesda title**, which is where the schema should genuinely break:
+`LoadOrderPolicy::Explicit` exists but nothing implements it, and the plugin
+concept has no representation at all.
 
 **Online game database.** The `GameDatabaseSource` port exists and the local
 implementation is complete; the hosted client is not written. Profiles should

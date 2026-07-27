@@ -1,0 +1,139 @@
+# Cyberpunk 2077: declarative game definition.
+#
+# The second game, and the first one on a different engine. Everything specific
+# to Cyberpunk lives in this file; no engine crate contains `if game == "cp77"`.
+#
+# REDengine spreads a mod across several unrelated trees rather than one payload
+# folder, which is why `deploy_targets` has six entries instead of two:
+#
+#   archive/pc/mod/        .archive and .xl files (classic archive mods)
+#   mods/<name>/           REDmod, the official format
+#   r6/scripts/            redscript
+#   r6/tweaks/             TweakXL
+#   red4ext/plugins/       RED4ext native plugins
+#   bin/x64/               the proxy DLLs, and Cyber Engine Tweaks' lua mods
+#   engine/                config and tool overrides
+
+id = "cyberpunk-2077"
+name = "Cyberpunk 2077"
+engine = "red-engine"
+load_order = "priority"
+conflict_scope = "per-relative-path"
+case_sensitive = true
+nexus_domain = "cyberpunk2077"
+
+# REDengine's directories are lowercase on disk and Linux is case-sensitive, so
+# a Windows-authored archive shipping `Archive/` or `R6/` must be folded back
+# into the real tree rather than creating a second one the game never reads.
+canonical_case = [
+  "archive",
+  "pc",
+  "mod",
+  "mods",
+  "r6",
+  "scripts",
+  "tweaks",
+  "input",
+  "config",
+  "cache",
+  "bin",
+  "x64",
+  "plugins",
+  "cyber_engine_tweaks",
+  "red4ext",
+  "engine",
+  "tools",
+]
+
+# Cyberpunk mods carry no installer metadata of their own: an archive is either
+# loose payload roots or a loader release. There is no Fluffy equivalent here,
+# and FOMOD is a Bethesda format, so neither is listed.
+formats = ["loose-roots", "loader"]
+
+[detection]
+steam_app_id = 1091500
+# Cyberpunk's binary sits at `bin/x64/Cyberpunk2077.exe`, not at the game root.
+executable = "Cyberpunk2077.exe"
+
+# Payload roots inside a normalized mod -> destination relative to the game dir.
+# REDengine reads all of these in place, so source and target are the same.
+[[deploy_targets]]
+source = "archive"
+target = "archive"
+
+[[deploy_targets]]
+source = "mods"
+target = "mods"
+
+[[deploy_targets]]
+source = "r6"
+target = "r6"
+
+[[deploy_targets]]
+source = "red4ext"
+target = "red4ext"
+
+[[deploy_targets]]
+source = "bin"
+target = "bin"
+
+[[deploy_targets]]
+source = "engine"
+target = "engine"
+
+# No patch chain: REDengine loads every `.archive` under `archive/pc/mod`
+# directly, so a mod archive needs no renaming to be seen.
+
+[loader]
+name = "RED4ext"
+kind = "dll-proxy"
+# Unlike REFramework's root-level `dinput8.dll`, this proxy belongs beside the
+# game binary. A copy at the game root is simply never loaded.
+proxy_dll = "bin/x64/winmm.dll"
+data_dirs = [
+  "red4ext/plugins",
+  "r6/scripts",
+  "r6/tweaks",
+  "bin/x64/plugins/cyber_engine_tweaks/mods",
+]
+
+[loader.proton]
+# Two entries, because Cyberpunk's modding stack has two independent proxies in
+# the same folder: RED4ext takes `winmm`, Cyber Engine Tweaks takes `version`.
+# Registering only the first leaves half the stack silently dead.
+wine_dll_overrides = "winmm=n,b;version=n,b"
+steam_launch_options = 'WINEDLLOVERRIDES="winmm=n,b;version=n,b" %command%'
+requires_prefix_write = true
+
+# Archives packed from the inside out. A bare `scripts/` at the root really
+# means `r6/scripts/`, and without these the mod imports as zero files.
+[[rewrap]]
+folder = "pc"
+prefix = "archive"
+
+[[rewrap]]
+folder = "scripts"
+prefix = "r6"
+
+[[rewrap]]
+folder = "tweaks"
+prefix = "r6"
+
+[[rewrap]]
+folder = "input"
+prefix = "r6"
+
+[[rewrap]]
+folder = "cache"
+prefix = "r6"
+
+# `plugins/` is ambiguous between `red4ext/plugins` and CET's
+# `bin/x64/plugins`. RED4ext is the far more common bare shape, and a CET mod
+# ships its full `bin/x64/...` path, so this resolves to RED4ext.
+[[rewrap]]
+folder = "plugins"
+prefix = "red4ext"
+
+[[rewrap]]
+folder = "x64"
+prefix = "bin"

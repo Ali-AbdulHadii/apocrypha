@@ -3,7 +3,7 @@
 
 # Apocrypha
 
-A native Linux desktop mod manager for games, built Linux-first rather than ported to it. First target: **Monster Hunter Wilds**.
+A native Linux desktop mod manager for games, built Linux-first rather than ported to it. Ships profiles for **Monster Hunter Wilds** and **Cyberpunk 2077**.
 
 Linux game modding is badly served. The established managers are Windows programs: Vortex needs a Wine prefix and a lot of goodwill to behave, Fluffy Mod Manager is a Windows GUI that people run through Proton and then fight over paths, and Mod Organizer 2 cannot be fixed by porting effort at all. MO2's whole design rests on USVFS, a user-space virtual filesystem built from Windows DLL injection and API hooking. There is no Linux equivalent to hook, so the feature that makes MO2 good is the feature that cannot cross over. That leaves Linux players doing the thing everyone eventually does: copying files into the game directory by hand, keeping a text file of what they changed, and hoping they can undo it later.
 
@@ -13,7 +13,7 @@ MIT licence. Linux (x86_64), Steam and Proton.
 
 ## Status
 
-**Early development.** Version 0.2, Phase 2. Monster Hunter Wilds is the only game profile that ships today, and the deployment engine has been exercised end to end against real segmented installers but not yet against a wide spread of community mods. Expect rough edges, expect the UI to change, and keep a backup of anything you cannot re-download. The safety machinery (vault, journal, hash-guarded rollback) is the part that has had the most attention, because it is the part that can ruin your day if it is wrong.
+**Early development.** Version 0.2, Phase 3. Two game profiles ship today, and the deployment engine has been exercised end to end against real segmented installers but not yet against a wide spread of community mods. Expect rough edges, expect the UI to change, and keep a backup of anything you cannot re-download. The safety machinery (vault, journal, hash-guarded rollback) is the part that has had the most attention, because it is the part that can ruin your day if it is wrong.
 
 Phase 2 added the things a library needs once it stops being small: applying is interruptible and reports real progress, the game folder can be checked against the change log and repaired, load order has its own screen with per-file overrides, and the mod list windows itself so a few hundred mods stay smooth.
 
@@ -148,7 +148,7 @@ cargo run -p apoc-cli -- analyze "/path/to/SomeMod.zip"
 3. **Choose options.** If the archive is a segmented installer, the wizard opens with the options it found. Radio sets are clustered by their real relationships, so picking a body physics variant does not deselect an unrelated leg physics variant. Single-payload mods skip the wizard.
 4. **Enable it.** The mod appears in the list with a switch. Enabling adds it to the current profile's selection and computes its place in the load order. Still nothing written.
 5. **Preview, then apply.** The apply bar shows a dry run first: every source file, every destination, the placement method (reflink, hardlink, symlink or copy) and any conflicts with mods already deployed. If it looks right, apply. Displaced originals go to the vault before they are replaced, and each operation is appended to a journal as it completes.
-6. **Set up the loader.** For Monster Hunter Wilds, loose files only load through REFramework. Put `dinput8.dll` where Apocrypha asks for it, then use the loader panel: it writes the `dinput8=n,b` override into the Proton prefix's `user.reg` and shows you the equivalent Steam launch option (`WINEDLLOVERRIDES="dinput8=n,b" %command%`) if you prefer to set it there. Close Steam first; Apocrypha will refuse while it is running.
+6. **Set up the loader.** Most games need one, and which one comes from the game profile. For Monster Hunter Wilds it is REFramework; for Cyberpunk 2077 it is RED4ext, whose proxy lives at `bin/x64/winmm.dll` and which registers two overrides, because Cyber Engine Tweaks is a second proxy in the same folder. Taking Wilds as the example, loose files only load through REFramework. Put `dinput8.dll` where Apocrypha asks for it, then use the loader panel: it writes the `dinput8=n,b` override into the Proton prefix's `user.reg` and shows you the equivalent Steam launch option (`WINEDLLOVERRIDES="dinput8=n,b" %command%`) if you prefer to set it there. Close Steam first; Apocrypha will refuse while it is running.
 7. **Undo.** Every deployment has a journal entry. Undo replays it in reverse: deployed files removed, vaulted originals restored, empty directories pruned, the previous `user.reg` value put back. Any file whose hash no longer matches what was deployed is left in place and reported rather than deleted, because a changed hash means something other than Apocrypha wrote to it.
 
 ## How it works
@@ -197,6 +197,7 @@ $XDG_DATA_HOME/apocrypha/          (default ~/.local/share/apocrypha)
 | Game | ID | Engine | Status |
 | --- | --- | --- | --- |
 | Monster Hunter Wilds | `monster-hunter-wilds` | RE Engine | Primary target |
+| Cyberpunk 2077 | `cyberpunk-2077` | REDengine | Archive, REDmod, redscript, TweakXL, RED4ext and CET layouts |
 
 ### Adding a game
 
@@ -205,6 +206,12 @@ $XDG_DATA_HOME/apocrypha/          (default ~/.local/share/apocrypha)
 ```
 crates/apoc-gamedef/profiles/<your_game>.toml
 ```
+
+> **One TOML trap worth knowing.** A bare key belongs to the most recent
+> `[section]`, so `canonical_case = [...]` written below `[loader.proton]`
+> parses cleanly and is then silently ignored. Keep every top-level key above
+> the first section. The leaf structs set `deny_unknown_fields`, so a misplaced
+> key now fails to parse instead of doing nothing.
 
 The profile declares the app ID and executable used for detection, the payload roots and where they map to inside the game directory, which format detectors apply and in what order, the load-order and conflict policies, and the loader specification if the game needs one. Abridged, that looks like:
 

@@ -1,7 +1,7 @@
 /** Apocrypha desktop shell: title bar, rail navigation, screens, deploy bar. */
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ApplyDialog, type ApplyState } from "./components/ApplyDialog";
 import { ConfirmDialog, type Confirm } from "./components/ConfirmDialog";
 import { HealthCheck } from "./components/HealthCheck";
@@ -83,6 +83,14 @@ export default function App() {
   const maximized = useMaximized();
   const activeGame = games.find((g) => g.id === activeGameId) ?? null;
 
+  // Read by the `nxm://` handler, which is subscribed once for the life of the
+  // app: depending on the state directly would resubscribe on every change and
+  // could drop a link that arrives in between.
+  const gamesRef = useRef<GameView[]>(games);
+  const activeGameRef = useRef<string | null>(activeGameId);
+  gamesRef.current = games;
+  activeGameRef.current = activeGameId;
+
   const fail = useCallback(
     (e: unknown) => push(String(e instanceof Error ? e.message : e), "bad"),
     [push],
@@ -93,7 +101,11 @@ export default function App() {
   const refreshGames = useCallback(async () => {
     const list = await api.listGames();
     setGames(list);
-    setActiveGameId((cur) => cur ?? list[0]?.id ?? null);
+    // Prefer a game that is actually installed. With more than one profile
+    // shipping, opening on a game the user does not own reads as broken.
+    setActiveGameId(
+      (cur) => cur ?? list.find((g) => g.detected)?.id ?? list[0]?.id ?? null,
+    );
     return list;
   }, []);
 
@@ -174,6 +186,17 @@ export default function App() {
     return subscribe(() =>
       onNxmLink(async (url) => {
         try {
+          // A link names the game it came from. Now that more than one game
+          // ships, importing into whatever is on screen would quietly file a
+          // Cyberpunk mod under Monster Hunter, so switch first and say so.
+          const link = await api.parseNxmLink(url).catch(() => null);
+          const target = link ? await api.gameForDomain(link.domain) : null;
+          if (target && target !== activeGameRef.current) {
+            const name = gamesRef.current.find((g) => g.id === target)?.name;
+            setActiveGameId(target);
+            push(`Switched to ${name ?? target} for this download`, "info");
+          }
+
           const started = await api.startNxmDownload(url);
           setDownloads((prev) => [
             started,

@@ -9,6 +9,15 @@ engine = "re-engine"
 load_order = "priority"
 conflict_scope = "per-relative-path"
 case_sensitive = true
+nexus_domain = "monsterhunterwilds"
+
+# RE Engine resolves loose files under `natives/STM` with that exact casing.
+# Windows-authored archives ship every variant, and Linux is case-sensitive, so
+# these components are forced to canonical casing at import time.
+canonical_case = ["STM"]
+
+# Format detectors this game accepts, in priority order.
+formats = ["fluffy-aio", "fluffy-single", "loose-natives", "reframework-only", "pak"]
 
 [detection]
 steam_app_id = 2246340
@@ -22,9 +31,6 @@ target = "natives"
 [[deploy_targets]]
 source = "reframework"
 target = "reframework"
-
-# Format detectors this game accepts, in priority order.
-formats = ["fluffy-aio", "fluffy-single", "loose-natives", "reframework-only", "pak"]
 
 # Standalone `.pak` mods must join the engine's patch chain to be seen by the
 # game. Wilds uses the "sub" scheme; the index is assigned at deploy time above
@@ -44,11 +50,6 @@ data_dirs = ["reframework/data"]
 wine_dll_overrides = "dinput8=n,b"
 steam_launch_options = 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
 requires_prefix_write = true
-
-# RE Engine resolves loose files under `natives/STM` with that exact casing.
-# Windows-authored archives ship every variant, and Linux is case-sensitive, so
-# these components are forced to canonical casing at import time.
-canonical_case = ["STM"]
 
 # Archives packed from the inside out: a bare `autorun/` really means
 # `reframework/autorun/`. Without these a valid mod imports as zero files.

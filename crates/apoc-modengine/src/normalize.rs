@@ -94,6 +94,15 @@ fn detect(index: &ArchiveIndex, rules: &GameRules) -> InstallerModel {
                 .entries
                 .iter()
                 .any(|e| first_component(&e.path).eq_ignore_ascii_case("reframework"));
+            // Any root this game declares as payload, or one the rewrap rules
+            // can restore a prefix above. Asked of the profile rather than of a
+            // fixed list, so a game with different roots is still recognized
+            // instead of being reported as unclassifiable.
+            let has_declared_root = index.entries.iter().any(|e| {
+                let root = first_component(&e.path);
+                e.path.contains('/')
+                    && (rules.is_payload_root(root) || rules.rewrap_prefix(root).is_some())
+            });
             // A bare loader DLL at the archive root, e.g. REFramework's release zip.
             let has_loader = index
                 .entries
@@ -104,6 +113,8 @@ fn detect(index: &ArchiveIndex, rules: &GameRules) -> InstallerModel {
                 InstallerModel::FlatNatives
             } else if has_ref {
                 InstallerModel::ReframeworkOnly
+            } else if has_declared_root {
+                InstallerModel::LooseRoots
             } else if has_loader {
                 InstallerModel::Loader
             } else {
@@ -127,16 +138,20 @@ fn payload_for(index: &ArchiveIndex, folder: &str, rules: &GameRules) -> Vec<Fil
             }
         };
 
-        // A declared loader file sitting directly at the root deploys into the
-        // game directory itself, not under a payload folder.
-        if !rest.contains('/') && rules.is_root_file(rest) {
-            out.push(FilePayload {
-                archive_path: e.archive_path.clone(),
-                game_rel_path: rest.to_string(),
-                root: DeployRoot::GameRoot,
-                size: e.size,
-            });
-            continue;
+        // A declared loader file sitting directly at the root deploys to the
+        // path the game profile gives it, not under a payload folder. That is
+        // usually the game directory itself, but RED4ext's proxy belongs in
+        // `bin/x64/`, and dropping it at the root would simply never load.
+        if !rest.contains('/') {
+            if let Some(dest) = rules.root_file_dest(rest) {
+                out.push(FilePayload {
+                    archive_path: e.archive_path.clone(),
+                    game_rel_path: dest.to_string(),
+                    root: DeployRoot::GameRoot,
+                    size: e.size,
+                });
+                continue;
+            }
         }
 
         // A standalone `.pak` is the whole mod; it is renamed into the engine's

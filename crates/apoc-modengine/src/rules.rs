@@ -13,7 +13,10 @@ pub struct GameRules {
     pub payload_roots: Vec<String>,
     /// Files deployable when they sit at the archive root: loader proxy DLLs
     /// such as REFramework's `dinput8.dll`, which ship with no folder at all.
-    pub root_files: Vec<String>,
+    /// Each entry is `(archive file name, game-relative destination)`; the two
+    /// differ when the loader lives in a subdirectory, as RED4ext's
+    /// `winmm.dll` does at `bin/x64/winmm.dll`.
+    pub root_files: Vec<(String, String)>,
     /// Whether a bare `.pak` beside `modinfo.ini` is installable content. True
     /// only for engines whose profile declares a patch chain to slot it into.
     pub accepts_pak: bool,
@@ -50,11 +53,16 @@ impl GameRules {
             .collect::<Vec<_>>();
 
         // A loader's proxy DLL is content the manager must be able to install,
-        // because that is how the loader reaches the game at all.
+        // because that is how the loader reaches the game at all. The archive
+        // ships it as a bare file name; the profile says where it belongs.
         let root_files = profile
             .loader
             .as_ref()
             .and_then(|l| l.proxy_dll.clone())
+            .map(|dest| {
+                let name = dest.rsplit('/').next().unwrap_or(&dest).to_string();
+                (name, dest)
+            })
             .into_iter()
             .collect();
 
@@ -109,7 +117,15 @@ impl GameRules {
     }
 
     pub fn is_root_file(&self, name: &str) -> bool {
-        self.root_files.iter().any(|r| r.eq_ignore_ascii_case(name))
+        self.root_file_dest(name).is_some()
+    }
+
+    /// Where a recognized root file is deployed, relative to the game directory.
+    pub fn root_file_dest(&self, name: &str) -> Option<&str> {
+        self.root_files
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, dest)| dest.as_str())
     }
 
     /// True for a standalone `.pak` mod archive, when this game supports them.
@@ -134,6 +150,7 @@ mod tests {
             id: "g".into(),
             name: "G".into(),
             engine: Engine::ReEngine,
+            nexus_domain: None,
             detection: SteamDetection {
                 steam_app_id: 1,
                 executable: None,

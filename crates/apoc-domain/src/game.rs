@@ -43,6 +43,7 @@ pub enum ConflictScope {
 
 /// How a game is located on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SteamDetection {
     /// Steam application id, e.g. Monster Hunter Wilds = 2246340.
     pub steam_app_id: u32,
@@ -55,6 +56,7 @@ pub struct SteamDetection {
 /// the game install directory. `source` is the archive-side top-level directory
 /// (`natives`, `reframework`); `target` is the game-relative destination.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DeployTarget {
     pub source: String,
     pub target: String,
@@ -73,6 +75,7 @@ pub enum LoaderKind {
 /// Proton-specific loader provisioning knobs. These are the crux of Linux
 /// support: getting a Windows DLL loader to run under Proton.
 #[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProtonLoaderSpec {
     /// Value for `[Software\Wine\DllOverrides]`, e.g. `dinput8=n,b`.
     #[serde(default)]
@@ -90,7 +93,9 @@ pub struct ProtonLoaderSpec {
 pub struct LoaderSpec {
     pub name: String,
     pub kind: LoaderKind,
-    /// The proxy DLL filename that must exist in the game root (real copy, never linked).
+    /// The proxy DLL that must exist for the loader to run (real copy, never
+    /// linked). Game-relative, so it may name a subdirectory: REFramework wants
+    /// `dinput8.dll` in the game root, RED4ext wants `bin/x64/winmm.dll`.
     #[serde(default)]
     pub proxy_dll: Option<String>,
     /// Game-relative directories the loader reads its own data from.
@@ -100,6 +105,40 @@ pub struct LoaderSpec {
     pub proton: ProtonLoaderSpec,
 }
 
+impl LoaderSpec {
+    /// The registry key name for the proxy DLL: its file stem, never its path.
+    /// Wine's `DllOverrides` are keyed by module name, so `bin/x64/winmm.dll`
+    /// registers as `winmm`.
+    pub fn proxy_dll_stem(&self) -> Option<&str> {
+        let dll = self.proxy_dll.as_deref()?;
+        let name = dll.rsplit('/').next().unwrap_or(dll);
+        Some(name.strip_suffix(".dll").unwrap_or(name))
+    }
+
+    /// The DLL overrides this loader needs, as `(module, value)` pairs.
+    ///
+    /// `WINEDLLOVERRIDES` is a semicolon-separated list, and a game can need
+    /// more than one entry: Cyberpunk wants `winmm` for RED4ext and `version`
+    /// for Cyber Engine Tweaks, which are separate proxies in the same folder.
+    pub fn dll_overrides(&self) -> Vec<(String, String)> {
+        let raw = match self.proton.wine_dll_overrides.as_deref() {
+            Some(s) => s,
+            None => return Vec::new(),
+        };
+        raw.split(';')
+            .filter_map(|entry| {
+                let (name, value) = entry.trim().split_once('=')?;
+                let name = name.trim();
+                let value = value.trim();
+                if name.is_empty() || value.is_empty() {
+                    return None;
+                }
+                Some((name.to_string(), value.to_string()))
+            })
+            .collect()
+    }
+}
+
 /// How standalone `.pak` mods are slotted into an RE Engine patch chain.
 ///
 /// RE Engine loads a base archive plus numbered patch archives; a mod PAK is
@@ -107,6 +146,7 @@ pub struct LoaderSpec {
 /// uses the "sub" scheme, e.g. `re_chunk_000.pak.sub_000.pak.patch_003.pak`.
 /// The index is assigned at deploy time, above whatever already exists on disk.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PakChainSpec {
     /// Filename template; `{n}` is replaced by the zero-padded patch index.
     pub pattern: String,
@@ -145,6 +185,7 @@ impl PakChainSpec {
 /// zipped the *inside* of a payload directory. `autorun/` at the root really
 /// means `reframework/autorun/`, and without this the mod imports as zero files.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RewrapRule {
     /// Folder name found at the archive root.
     pub folder: String,
@@ -160,6 +201,11 @@ pub struct GameProfile {
     pub name: String,
     pub engine: Engine,
     pub detection: SteamDetection,
+    /// Nexus Mods game domain, e.g. `monsterhunterwilds`. This is the segment
+    /// an `nxm://` link carries, so it is how an incoming download is matched
+    /// to the game it belongs to rather than to whichever game is on screen.
+    #[serde(default)]
+    pub nexus_domain: Option<String>,
     pub load_order: LoadOrderPolicy,
     pub conflict_scope: ConflictScope,
     /// Linux ext4 is case-sensitive; RE Engine paths must be preserved verbatim.
@@ -199,4 +245,56 @@ impl GameProfile {
 
 fn default_true() -> bool {
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn loader(dll: &str, overrides: Option<&str>) -> LoaderSpec {
+        LoaderSpec {
+            name: "L".into(),
+            kind: LoaderKind::DllProxy,
+            proxy_dll: Some(dll.into()),
+            data_dirs: vec![],
+            proton: ProtonLoaderSpec {
+                wine_dll_overrides: overrides.map(str::to_string),
+                steam_launch_options: None,
+                requires_prefix_write: true,
+            },
+        }
+    }
+
+    #[test]
+    fn the_registry_key_is_the_module_name_not_the_path() {
+        // Wine keys DllOverrides by module, so a loader that lives in a
+        // subdirectory must still register as a bare name.
+        assert_eq!(loader("dinput8.dll", None).proxy_dll_stem(), Some("dinput8"));
+        assert_eq!(
+            loader("bin/x64/winmm.dll", None).proxy_dll_stem(),
+            Some("winmm")
+        );
+    }
+
+    #[test]
+    fn a_game_can_need_more_than_one_override() {
+        let l = loader("bin/x64/winmm.dll", Some("winmm=n,b;version=n,b"));
+        assert_eq!(
+            l.dll_overrides(),
+            vec![
+                ("winmm".to_string(), "n,b".to_string()),
+                ("version".to_string(), "n,b".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_override_entries_are_dropped_not_guessed() {
+        let l = loader("x.dll", Some("winmm=n,b; ; =n,b; version="));
+        assert_eq!(
+            l.dll_overrides(),
+            vec![("winmm".to_string(), "n,b".to_string())]
+        );
+        assert!(loader("x.dll", None).dll_overrides().is_empty());
+    }
 }
