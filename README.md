@@ -47,24 +47,17 @@ What works today:
 - **Downloads.** Nexus `nxm://` links download in the background with live progress, and wait on a Downloads screen until you choose to install them. The folder is configurable, and anything already in it is listed and installable, so archives saved from a browser or brought from another manager work the same way. Rows show which files are already in your library.
 - **Light and dark themes.** Every colour, size and radius is a CSS custom property, so the Appearance panel can retheme the whole app at runtime.
 
-## Screenshots
+## The screens
 
-> These are placeholders. The image files are not in the repository yet.
-
-| | |
+| Screen | What it is for |
 | --- | --- |
-| ![Library](docs/images/library.png) | ![Mods](docs/images/mods.png) |
-| Library: detected games, Steam root, Proton prefix | Mods: enable, disable, reorder, inspect |
-
-| | |
-| --- | --- |
-| ![Install wizard](docs/images/wizard.png) | ![Conflicts](docs/images/conflicts.png) |
-| Install wizard: options derived from mod metadata | Conflicts: who owns which path |
-
-| | |
-| --- | --- |
-| ![Apply](docs/images/apply.png) | ![Settings](docs/images/settings.png) |
-| Apply: dry run, then a journaled transaction | Settings: appearance, paths, loader |
+| Library | Detected games, the Steam root and Proton prefix found for each, and the mod loader setup. |
+| Mods | The library you browse: search, filter by state or category, enable, disable, reconfigure, remove. |
+| Load order | The sequence you arrange. Flat, always draggable, keyboard reachable, and it shows which contested files each mod wins and loses. |
+| Downloads | Transfers in progress, files ready to install, and anything already sitting in your downloads folder. |
+| Profiles | Independent sets of mods, options and order over the same installed library. |
+| Changes | The dry run before you apply, and the check that your game folder still matches what was written. |
+| Settings | Appearance, downloads and the Nexus account, where things live on disk, and the developer options. |
 
 ## Install
 
