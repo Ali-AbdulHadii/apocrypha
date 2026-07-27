@@ -213,7 +213,9 @@ crates/apoc-gamedef/profiles/<your_game>.toml
 > the first section. The leaf structs set `deny_unknown_fields`, so a misplaced
 > key now fails to parse instead of doing nothing.
 
-The profile declares the app ID and executable used for detection, the payload roots and where they map to inside the game directory, which format detectors apply and in what order, the load-order and conflict policies, and the loader specification if the game needs one. Abridged, that looks like:
+The profile declares the app ID and executable used for detection, the payload roots and where they map to inside the game directory, the load-order and conflict policies, and the loader specification if the game needs one. Abridged, that looks like:
+
+`formats` documents which archive shapes the game's mods actually come in. It is descriptive today: detection derives what it needs from the payload roots, the rewrap rules and the loader, so the list records intent rather than driving behaviour.
 
 ```toml
 id = "monster-hunter-wilds"
