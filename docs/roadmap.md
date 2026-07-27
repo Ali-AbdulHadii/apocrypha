@@ -30,30 +30,43 @@ broad. One game, one loader, one deployment model, taken all the way through.
 
 ## Phase 2: Trustworthy at scale
 
-The engine is correct on a handful of mods. This phase is about it staying
+Status: **mostly done.** Everything below is shipped except mod updates.
+
+The engine was correct on a handful of mods. This phase was about it staying
 correct, and staying legible, when someone has two hundred.
 
-**Deployment progress and cancellation.** Apply is currently one blocking call
-that reports phases rather than progress. The download queue already proved the
-pattern: run the work on a thread, emit events, let the interface show what is
-happening. Apply should be interruptible, and interrupting it should roll back
-rather than leave a half-written game folder.
+**Deployment progress and cancellation.** Done. Apply runs on its own thread and
+emits real file and byte counts, the same pattern the download queue proved.
+Cancelling rolls back everything already written, so stopping partway leaves the
+game folder as it was rather than half modded. The engine API is
+`apply_with(ctx, plan, sink)`, where the sink returns `Flow::Continue` or
+`Flow::Cancel`; the old blocking `apply` still exists and delegates to it.
 
-**Mod updates.** Detect that an installed mod has a newer file on Nexus, and
-re-deploy it without losing the options the user picked. This needs the mod
-record to keep its Nexus mod and file id, which downloads already know.
+**Verify and repair.** Done. `apoc_deploy::verify` compares the hash the journal
+recorded for each deployed file against what is on disk, and `repair` puts back
+what it can from staging. Two decisions worth knowing: repair never appends to
+the journal, because it only ever writes bytes matching the hash already
+recorded, which keeps rollback's guard working; and a file that something else
+changed is never repaired unless the user picks it explicitly, because putting it
+back discards that change.
 
-**Verify and repair.** Compare what the journal says is deployed against what is
-actually in the game folder, and offer to fix the difference. Games patch, other
-tools write files, users delete things by hand. Right now Apocrypha would not
-notice.
+**Conflict resolution that is a decision, not a side effect.** Done. A per-file
+override pins one contested path to a chosen mod, stored per profile and applied
+inside the planner rather than after it, so the winner the interface reports and
+the file actually written cannot disagree. A stale override naming a removed mod
+is ignored rather than breaking the deploy.
 
-**Conflict resolution that is a decision, not a side effect.** Today the load
-order decides who wins a contested path. It should be possible to override a
-single file without reordering two mods around it.
+**Large library ergonomics.** Done for the list itself: load order moved to its
+own screen so the mod list no longer has to be unfiltered to be reorderable, and
+the list windows itself past sixty rows. Row height is measured from a live row
+rather than hard-coded, because the spacing and text size are user-settable at
+runtime. Saved filters and bulk enable/disable are not done.
 
-**Large library ergonomics.** Virtualised mod list, saved filters, bulk enable
-and disable, and a search that covers option names rather than only mod names.
+**Mod updates.** Not done, and the remaining Phase 2 item. The groundwork is in:
+the mods table carries `nexus_mod_id` and `nexus_file_id`, and
+`Store::nexus_linked_mods` returns the mods that could be checked. What is
+missing is the client call that asks Nexus for the latest file, and a re-deploy
+that keeps the options the user already picked.
 
 ---
 
