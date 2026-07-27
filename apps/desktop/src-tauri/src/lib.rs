@@ -71,6 +71,8 @@ pub fn run() {
             commands::list_profiles,
             commands::create_profile,
             commands::switch_profile,
+            commands::duplicate_profile,
+            commands::delete_profile,
             commands::set_mod_order,
             commands::remove_mod,
             commands::preview_from_archive,

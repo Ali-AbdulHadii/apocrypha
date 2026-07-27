@@ -803,6 +803,67 @@ pub fn switch_profile(
     list_profiles(state, game_id)
 }
 
+/// Copy a profile, including which mods are on, their options and their order.
+///
+/// The usual reason to want a second profile is to try something without
+/// losing a setup that works, and building the working one again by hand is
+/// exactly what the user is trying to avoid.
+#[tauri::command(async)]
+pub fn duplicate_profile(
+    state: State<AppState>,
+    game_id: String,
+    profile_id: i64,
+    name: String,
+) -> CmdResult<Vec<ProfileView>> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("Give the copy a name.".into());
+    }
+    {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        let owned = store
+            .list_profiles(&game_id)
+            .map_err(err)?
+            .into_iter()
+            .any(|p| p.id == profile_id);
+        if !owned {
+            return Err("That profile belongs to a different game.".into());
+        }
+        store.clone_profile(profile_id, &name).map_err(err)?;
+    }
+    list_profiles(state, game_id)
+}
+
+/// Delete a profile.
+///
+/// The active profile is refused rather than silently reassigned: the game
+/// folder holds what that profile deployed, so removing it out from under the
+/// deployment would leave files nothing accounts for. Switch first, then
+/// delete.
+#[tauri::command(async)]
+pub fn delete_profile(
+    state: State<AppState>,
+    game_id: String,
+    profile_id: i64,
+) -> CmdResult<Vec<ProfileView>> {
+    {
+        let active = profile_of(&state, &game_id)?;
+        if active == profile_id {
+            return Err("That profile is in use. Switch to another one first.".into());
+        }
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        let profiles = store.list_profiles(&game_id).map_err(err)?;
+        if !profiles.iter().any(|p| p.id == profile_id) {
+            return Err("That profile belongs to a different game.".into());
+        }
+        if profiles.len() <= 1 {
+            return Err("A game keeps at least one profile.".into());
+        }
+        store.delete_profile(profile_id).map_err(err)?;
+    }
+    list_profiles(state, game_id)
+}
+
 /// Encode image bytes as a `data:` URI the webview can render directly.
 ///
 /// Images are served this way rather than over the asset protocol because they

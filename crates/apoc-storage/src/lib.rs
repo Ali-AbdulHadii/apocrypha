@@ -314,7 +314,26 @@ impl Store {
             .optional()?)
     }
 
+    /// Point a game at one of **its own** profiles.
+    ///
+    /// The profile must belong to this game. Without that check a mismatched
+    /// id would be accepted and every later lookup would silently read another
+    /// game's mod states, which looks like the profile simply doing nothing.
     pub fn set_active_profile(&self, game_id: &str, profile_id: i64) -> Result<()> {
+        let owned: bool = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM profiles WHERE id=?1 AND game_id=?2",
+                params![profile_id, game_id],
+                |_| Ok(true),
+            )
+            .optional()?
+            .unwrap_or(false);
+        if !owned {
+            return Err(StorageError::NotFound(format!(
+                "profile {profile_id} does not belong to game '{game_id}'"
+            )));
+        }
         self.conn.execute(
             "UPDATE games SET active_profile_id=?2 WHERE id=?1",
             params![game_id, profile_id],
@@ -1016,6 +1035,36 @@ mod tests {
             .unwrap();
         assert!(s.get_mod("mod-1").unwrap().is_none());
         assert!(s.list_profiles("monster-hunter-wilds").unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_game_cannot_be_pointed_at_another_games_profile() {
+        // Accepting a foreign id would make every later lookup read the wrong
+        // profile's mod states, which presents as the profile doing nothing.
+        let s = seeded();
+        s.upsert_game(&GameRecord {
+            id: "cyberpunk-2077".into(),
+            name: "Cyberpunk 2077".into(),
+            install_dir: None,
+            proton_prefix: None,
+            active_profile_id: None,
+        })
+        .unwrap();
+        let theirs = s.ensure_profile("cyberpunk-2077", "Default").unwrap();
+
+        assert!(matches!(
+            s.set_active_profile("monster-hunter-wilds", theirs),
+            Err(StorageError::NotFound(_))
+        ));
+
+        let ours = s.ensure_profile("monster-hunter-wilds", "Default").unwrap();
+        s.set_active_profile("monster-hunter-wilds", ours).unwrap();
+        assert_eq!(
+            s.get_game("monster-hunter-wilds")
+                .unwrap()
+                .and_then(|g| g.active_profile_id),
+            Some(ours)
+        );
     }
 
     #[test]

@@ -301,6 +301,10 @@ export const api = {
     call<ProfileView[]>("create_profile", { gameId, name }),
   switchProfile: (gameId: string, profileId: number) =>
     call<ProfileView[]>("switch_profile", { gameId, profileId }),
+  duplicateProfile: (gameId: string, profileId: number, name: string) =>
+    call<ProfileView[]>("duplicate_profile", { gameId, profileId, name }),
+  deleteProfile: (gameId: string, profileId: number) =>
+    call<ProfileView[]>("delete_profile", { gameId, profileId }),
 
   previewFromArchive: (gameId: string, archivePath: string, optionId: string) =>
     call<string | null>("preview_from_archive", { gameId, archivePath, optionId }),
