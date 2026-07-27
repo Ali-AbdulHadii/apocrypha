@@ -65,19 +65,36 @@ pub fn start_deploy(
 
     std::thread::spawn(move || {
         let state = app.state::<AppState>();
-        let outcome = run_deploy(&app, &state, &game_id, plan, deployed_ids, ctx, &cancel);
-        release(&state);
+        let outcome = {
+            // Held for the run, so the slot is freed even if the work panics.
+            // Without it a panic would leave the slot claimed and every later
+            // Apply would be refused until the app was restarted.
+            let _slot = SlotGuard(&state);
+            run_deploy(&app, &state, &game_id, plan, deployed_ids, ctx, &cancel)
+        };
         let _ = app.emit("deploy-finished", outcome);
     });
 
     Ok(())
 }
 
+/// Releases the in-flight deployment slot when dropped.
+struct SlotGuard<'a>(&'a AppState);
+
+impl Drop for SlotGuard<'_> {
+    fn drop(&mut self) {
+        release(self.0);
+    }
+}
+
 /// Give up the in-flight slot. Called on every exit path, including errors, or
 /// a failed deploy would lock out every later attempt until a restart.
 fn release(state: &AppState) {
-    if let Ok(mut slot) = state.deploy_cancel.lock() {
-        *slot = None;
+    // `lock` fails only if a previous holder panicked; recovering the guard is
+    // right here, because leaving the slot claimed is the worse outcome.
+    match state.deploy_cancel.lock() {
+        Ok(mut slot) => *slot = None,
+        Err(poisoned) => *poisoned.into_inner() = None,
     }
 }
 
