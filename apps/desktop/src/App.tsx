@@ -597,6 +597,23 @@ export default function App() {
     }
   }, [activeGameId, push, refreshMods, fail]);
 
+  // A profile owns which mods are on, their options and their order, so
+  // switching one changes the whole mod list. Reloading it is not cosmetic:
+  // the game folder still holds the previous profile's files, so the
+  // deployment is now stale and the footer has to say so.
+  const switchedProfile = useCallback(async () => {
+    if (!activeGameId) return;
+    try {
+      await Promise.all([
+        refreshMods(activeGameId),
+        refreshConflicts(activeGameId),
+      ]);
+      setDirty(true);
+    } catch (e) {
+      fail(e);
+    }
+  }, [activeGameId, refreshMods, refreshConflicts, fail]);
+
   const runLoaderSetup = useCallback(async () => {
     if (!activeGameId) return;
     setBusy(true);
@@ -710,6 +727,7 @@ export default function App() {
                     profiles={profiles}
                     gameId={activeGameId}
                     onChanged={setProfiles}
+                    onSwitched={switchedProfile}
                     onError={fail}
                   />
                 ) : screen === "conflicts" ? (
@@ -1106,32 +1124,82 @@ function ProfilesScreen({
   profiles,
   gameId,
   onChanged,
+  onSwitched,
   onError,
 }: {
   profiles: ProfileView[];
   gameId: string | null;
   onChanged: (p: ProfileView[]) => void;
+  onSwitched: () => void;
   onError: (e: unknown) => void;
 }) {
   const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
   if (!gameId) return <div className="empty">Select a game first.</div>;
 
+  const taken = (candidate: string) =>
+    profiles.some(
+      (p) => p.name.toLowerCase() === candidate.trim().toLowerCase(),
+    );
+
   async function create() {
-    if (!name.trim() || !gameId) return;
+    const wanted = name.trim();
+    if (!wanted || !gameId) return;
+    // Creating a name that already exists returns the existing profile, which
+    // looks like the button did nothing. Say so instead.
+    if (taken(wanted)) {
+      onError(`There is already a profile called ${wanted}.`);
+      return;
+    }
+    setBusy(true);
     try {
-      onChanged(await api.createProfile(gameId, name.trim()));
+      onChanged(await api.createProfile(gameId, wanted));
       setName("");
     } catch (e) {
       onError(e);
+    } finally {
+      setBusy(false);
     }
   }
 
   async function switchTo(id: number) {
     if (!gameId) return;
+    setBusy(true);
     try {
       onChanged(await api.switchProfile(gameId, id));
+      // The mod list belongs to the profile, so it has to be reloaded here.
+      onSwitched();
     } catch (e) {
       onError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function duplicate(p: ProfileView) {
+    if (!gameId) return;
+    // Enough to be unique without making the user think of a name for a copy.
+    let copy = `${p.name} copy`;
+    for (let n = 2; taken(copy); n++) copy = `${p.name} copy ${n}`;
+    setBusy(true);
+    try {
+      onChanged(await api.duplicateProfile(gameId, p.id, copy));
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(p: ProfileView) {
+    if (!gameId) return;
+    setBusy(true);
+    try {
+      onChanged(await api.deleteProfile(gameId, p.id));
+    } catch (e) {
+      onError(e);
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -1148,12 +1216,17 @@ function ProfilesScreen({
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && create()}
           />
-          <button className="btn primary" onClick={create} disabled={!name.trim()}>
+          <button
+            className="btn primary"
+            onClick={create}
+            disabled={!name.trim() || busy}
+          >
             Create
           </button>
         </div>
         <div className="card-hint">
-          Each profile remembers its own mods, options, and order.
+          Each profile remembers its own mods, options, and order. Creating one
+          does not switch to it.
         </div>
       </div>
 
@@ -1166,11 +1239,36 @@ function ProfilesScreen({
                 {p.active && <Chip kind="ok">in use</Chip>}
               </div>
             </div>
-            {!p.active && (
-              <button className="btn sm" onClick={() => switchTo(p.id)}>
-                Use this
+            <div className="row" style={{ gap: "var(--sp-2)" }}>
+              {!p.active && (
+                <button
+                  className="btn sm"
+                  disabled={busy}
+                  onClick={() => switchTo(p.id)}
+                >
+                  Use this
+                </button>
+              )}
+              <button
+                className="btn sm"
+                disabled={busy}
+                onClick={() => duplicate(p)}
+                title="Copy this profile, including its mods and order"
+              >
+                Duplicate
               </button>
-            )}
+              {/* The profile in use is what the game folder currently holds,
+                  so deleting it would orphan the deployment. */}
+              {!p.active && profiles.length > 1 && (
+                <button
+                  className="btn sm"
+                  disabled={busy}
+                  onClick={() => remove(p)}
+                >
+                  Delete
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>
