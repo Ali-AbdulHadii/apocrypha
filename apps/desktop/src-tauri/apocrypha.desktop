@@ -1,0 +1,12 @@
+[Desktop Entry]
+Categories={{categories}}
+Comment={{comment}}
+Exec={{exec}} {{exec_arg}}
+Icon={{icon}}
+Name={{name}}
+Terminal=false
+Type=Application
+StartupWMClass={{name}}
+StartupNotify=true
+Keywords=mods;modding;nexus;proton;steam;monster hunter;
+MimeType=x-scheme-handler/nxm;
