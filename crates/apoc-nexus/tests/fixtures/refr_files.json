@@ -1,0 +1,292 @@
+{
+  "file_updates": [
+    {
+      "old_file_id": 111,
+      "new_file_id": 259,
+      "old_file_name": "REFramework-93-Nightly01072-1740782715.zip",
+      "new_file_name": "REFramework-93-Nightly01073-1740880810.zip",
+      "uploaded_timestamp": 1740880810,
+      "uploaded_time": "2025-03-02T02:00:10.000+00:00"
+    },
+    {
+      "old_file_id": 259,
+      "new_file_id": 350,
+      "old_file_name": "REFramework-93-Nightly01073-1740880810.zip",
+      "new_file_name": "REFramework-93-Nightly01077-1740970026.zip",
+      "uploaded_timestamp": 1740970026,
+      "uploaded_time": "2025-03-03T02:47:06.000+00:00"
+    },
+    {
+      "old_file_id": 350,
+      "new_file_id": 503,
+      "old_file_name": "REFramework-93-Nightly01077-1740970026.zip",
+      "new_file_name": "REFramework-93-Nightly01081-1741091564.zip",
+      "uploaded_timestamp": 1741091564,
+      "uploaded_time": "2025-03-04T12:32:44.000+00:00"
+    },
+    {
+      "old_file_id": 503,
+      "new_file_id": 611,
+      "old_file_name": "REFramework-93-Nightly01081-1741091564.zip",
+      "new_file_name": "REFramework-93-Nightly01086-1741182594.zip",
+      "uploaded_timestamp": 1741182594,
+      "uploaded_time": "2025-03-05T13:49:54.000+00:00"
+    },
+    {
+      "old_file_id": 611,
+      "new_file_id": 796,
+      "old_file_name": "REFramework-93-Nightly01086-1741182594.zip",
+      "new_file_name": "REFramework-93-Nightly01089-1741298727.zip",
+      "uploaded_timestamp": 1741298727,
+      "uploaded_time": "2025-03-06T22:05:27.000+00:00"
+    },
+    {
+      "old_file_id": 796,
+      "new_file_id": 1418,
+      "old_file_name": "REFramework-93-Nightly01089-1741298727.zip",
+      "new_file_name": "REFramework-93-Nightly01105-1741588266.zip",
+      "uploaded_timestamp": 1741588266,
+      "uploaded_time": "2025-03-10T06:31:06.000+00:00"
+    },
+    {
+      "old_file_id": 1418,
+      "new_file_id": 2659,
+      "old_file_name": "REFramework-93-Nightly01105-1741588266.zip",
+      "new_file_name": "REFramework-93-Nightly01132-1742264476.zip",
+      "uploaded_timestamp": 1742264476,
+      "uploaded_time": "2025-03-18T02:21:16.000+00:00"
+    },
+    {
+      "old_file_id": 2659,
+      "new_file_id": 3710,
+      "old_file_name": "REFramework-93-Nightly01132-1742264476.zip",
+      "new_file_name": "REFramework-93-Nightly01152-1742851517.zip",
+      "uploaded_timestamp": 1742851517,
+      "uploaded_time": "2025-03-24T21:25:17.000+00:00"
+    },
+    {
+      "old_file_id": 3710,
+      "new_file_id": 13263,
+      "old_file_name": "REFramework-93-Nightly01152-1742851517.zip",
+      "new_file_name": "REFramework-93-Nightly01187-1759187548.zip",
+      "uploaded_timestamp": 1759187548,
+      "uploaded_time": "2025-09-29T23:12:28.000+00:00"
+    },
+    {
+      "old_file_id": 13263,
+      "new_file_id": 13363,
+      "old_file_name": "REFramework-93-Nightly01187-1759187548.zip",
+      "new_file_name": "REFramework-93-Nightly01188-1759231417.zip",
+      "uploaded_timestamp": 1759231417,
+      "uploaded_time": "2025-09-30T11:23:37.000+00:00"
+    },
+    {
+      "old_file_id": 13363,
+      "new_file_id": 13531,
+      "old_file_name": "REFramework-93-Nightly01188-1759231417.zip",
+      "new_file_name": "REFramework-93-Nightly01189-1759301934.zip",
+      "uploaded_timestamp": 1759301934,
+      "uploaded_time": "2025-10-01T06:58:54.000+00:00"
+    },
+    {
+      "old_file_id": 13531,
+      "new_file_id": 16218,
+      "old_file_name": "REFramework-93-Nightly01189-1759301934.zip",
+      "new_file_name": "REFramework-93-Nightly01208-1766904549.zip",
+      "uploaded_timestamp": 1766904549,
+      "uploaded_time": "2025-12-28T06:49:09.000+00:00"
+    },
+    {
+      "old_file_id": 16218,
+      "new_file_id": 19603,
+      "old_file_name": "REFramework-93-Nightly01208-1766904549.zip",
+      "new_file_name": "REFramework-93-Nightly01240-1771999635.zip",
+      "uploaded_timestamp": 1771999635,
+      "uploaded_time": "2026-02-25T06:07:15.000+00:00"
+    }
+  ],
+  "files": [
+    {
+      "file_id": 111,
+      "name": "REFramework",
+      "version": "Nightly01072",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 4481,
+      "file_name": "REFramework-93-Nightly01072-1740782715.zip",
+      "uploaded_timestamp": 1740782715,
+      "mod_version": "Nightly01072",
+      "size_in_bytes": 4588234
+    },
+    {
+      "file_id": 259,
+      "name": "REFramework",
+      "version": "Nightly01073",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 4486,
+      "file_name": "REFramework-93-Nightly01073-1740880810.zip",
+      "uploaded_timestamp": 1740880810,
+      "mod_version": "Nightly01073",
+      "size_in_bytes": 4593567
+    },
+    {
+      "file_id": 350,
+      "name": "REFramework",
+      "version": "Nightly01077",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 4487,
+      "file_name": "REFramework-93-Nightly01077-1740970026.zip",
+      "uploaded_timestamp": 1740970026,
+      "mod_version": "Nightly01077",
+      "size_in_bytes": 4595005
+    },
+    {
+      "file_id": 503,
+      "name": "REFramework",
+      "version": "Nightly01081",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 4489,
+      "file_name": "REFramework-93-Nightly01081-1741091564.zip",
+      "uploaded_timestamp": 1741091564,
+      "mod_version": "Nightly01081",
+      "size_in_bytes": 4596798
+    },
+    {
+      "file_id": 611,
+      "name": "REFramework",
+      "version": "Nightly01086",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 4489,
+      "file_name": "REFramework-93-Nightly01086-1741182594.zip",
+      "uploaded_timestamp": 1741182594,
+      "mod_version": "Nightly01086",
+      "size_in_bytes": 4597116
+    },
+    {
+      "file_id": 796,
+      "name": "REFramework",
+      "version": "Nightly01089",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 4491,
+      "file_name": "REFramework-93-Nightly01089-1741298727.zip",
+      "uploaded_timestamp": 1741298727,
+      "mod_version": "Nightly01089",
+      "size_in_bytes": 4598373
+    },
+    {
+      "file_id": 1418,
+      "name": "REFramework",
+      "version": "Nightly01105",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 4515,
+      "file_name": "REFramework-93-Nightly01105-1741588266.zip",
+      "uploaded_timestamp": 1741588266,
+      "mod_version": "Nightly01105",
+      "size_in_bytes": 4623760
+    },
+    {
+      "file_id": 2659,
+      "name": "REFramework",
+      "version": "Nightly01132",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 12522,
+      "file_name": "REFramework-93-Nightly01132-1742264476.zip",
+      "uploaded_timestamp": 1742264476,
+      "mod_version": "Nightly01132",
+      "size_in_bytes": 12822805
+    },
+    {
+      "file_id": 3710,
+      "name": "REFramework",
+      "version": "Nightly01152",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 12571,
+      "file_name": "REFramework-93-Nightly01152-1742851517.zip",
+      "uploaded_timestamp": 1742851517,
+      "mod_version": "Nightly01152",
+      "size_in_bytes": 12872451
+    },
+    {
+      "file_id": 13263,
+      "name": "REFramework",
+      "version": "Nightly01187",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 12574,
+      "file_name": "REFramework-93-Nightly01187-1759187548.zip",
+      "uploaded_timestamp": 1759187548,
+      "mod_version": "Nightly01187",
+      "size_in_bytes": 12875805
+    },
+    {
+      "file_id": 13363,
+      "name": "REFramework",
+      "version": "Nightly01188",
+      "category_id": 7,
+      "category_name": "ARCHIVED",
+      "is_primary": false,
+      "size": 12574,
+      "file_name": "REFramework-93-Nightly01188-1759231417.zip",
+      "uploaded_timestamp": 1759231417,
+      "mod_version": "Nightly01188",
+      "size_in_bytes": 12875798
+    },
+    {
+      "file_id": 13531,
+      "name": "REFramework",
+      "version": "Nightly01189",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 12573,
+      "file_name": "REFramework-93-Nightly01189-1759301934.zip",
+      "uploaded_timestamp": 1759301934,
+      "mod_version": "Nightly01189",
+      "size_in_bytes": 12875158
+    },
+    {
+      "file_id": 16218,
+      "name": "REFramework",
+      "version": "Nightly01208",
+      "category_id": 4,
+      "category_name": "OLD_VERSION",
+      "is_primary": false,
+      "size": 12588,
+      "file_name": "REFramework-93-Nightly01208-1766904549.zip",
+      "uploaded_timestamp": 1766904549,
+      "mod_version": "Nightly01208",
+      "size_in_bytes": 12889677
+    },
+    {
+      "file_id": 19603,
+      "name": "REFramework",
+      "version": "Nightly01240",
+      "category_id": 1,
+      "category_name": "MAIN",
+      "is_primary": false,
+      "size": 12607,
+      "file_name": "REFramework-93-Nightly01240-1771999635.zip",
+      "uploaded_timestamp": 1771999635,
+      "mod_version": "Nightly01240",
+      "size_in_bytes": 12909902
+    }
+  ]
+}
