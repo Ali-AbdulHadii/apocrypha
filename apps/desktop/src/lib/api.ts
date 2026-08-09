@@ -274,6 +274,11 @@ export async function pickDirectory(): Promise<string | null> {
 export const api = {
   listGames: () => call<GameView[]>("list_games"),
   detectGame: (gameId: string) => call<GameView>("detect_game", { gameId }),
+  /**
+   * Steam's cached cover for a game, as a data URI, or null when Steam has
+   * none. Never hits the network.
+   */
+  gameArt: (gameId: string) => call<string | null>("game_art", { gameId }),
   // Which game a Nexus domain belongs to, so a download lands under the right
   // one instead of whichever game happens to be on screen.
   gameForDomain: (domain: string) =>

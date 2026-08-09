@@ -7,3 +7,6 @@ rust-version.workspace = true
 description = "Steam and Proton discovery on Linux: roots, libraries, install dirs, compatdata prefixes."
 
 [dependencies]
+
+[dev-dependencies]
+tempfile = "3"

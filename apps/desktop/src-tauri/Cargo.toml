@@ -29,6 +29,7 @@ tauri-plugin-deep-link = "2"
 tauri-plugin-single-instance = { version = "2", features = ["deep-link"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+base64 = "0.22"
 ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
 
 [dev-dependencies]

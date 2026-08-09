@@ -145,6 +145,9 @@ dependencies = [
 [[package]]
 name = "apoc-steam"
 version = "0.4.0"
+dependencies = [
+ "tempfile",
+]
 
 [[package]]
 name = "apoc-storage"
@@ -169,6 +172,7 @@ dependencies = [
  "apoc-nexus",
  "apoc-steam",
  "apoc-storage",
+ "base64 0.22.1",
  "serde",
  "serde_json",
  "tauri",

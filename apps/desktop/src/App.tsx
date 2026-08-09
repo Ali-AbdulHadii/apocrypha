@@ -86,6 +86,7 @@ export default function App() {
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateBusyId, setUpdateBusyId] = useState<string | null>(null);
   const [nexusPremium, setNexusPremium] = useState(false);
+  const [gameArt, setGameArt] = useState<Record<string, string | null>>({});
 
   const { push } = useToast();
   const appearance = useAppearance();
@@ -176,6 +177,29 @@ export default function App() {
       }
     })();
   }, [activeGameId, refreshMods, refreshProfiles, refreshConflicts, fail]);
+
+  // Steam's cover art, fetched once per game and kept. Failure is silent: a
+  // missing cover falls back to the generic mark, and a toast about artwork
+  // would be noise about something nobody asked for.
+  useEffect(() => {
+    if (!IS_TAURI || games.length === 0) return;
+    let alive = true;
+    (async () => {
+      const pairs = await Promise.all(
+        games.map(async (g) => {
+          try {
+            return [g.id, await api.gameArt(g.id)] as const;
+          } catch {
+            return [g.id, null] as const;
+          }
+        }),
+      );
+      if (alive) setGameArt(Object.fromEntries(pairs));
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [games]);
 
   // Re-scan on arrival, so a file saved from a browser while the app was open
   // is already listed by the time the user looks.
@@ -740,6 +764,7 @@ export default function App() {
               <motion.div key={screen} {...pageMotion}>
                 {screen === "library" ? (
                   <LibraryScreen
+                    art={gameArt}
                     games={games}
                     activeId={activeGameId}
                     onSelect={setActiveGameId}
@@ -1054,6 +1079,7 @@ function DeployBar({
 /* ============================================================= screens === */
 
 function LibraryScreen({
+  art,
   games,
   activeId,
   onSelect,
@@ -1064,6 +1090,8 @@ function LibraryScreen({
   enabledCount,
   busy,
 }: {
+  /** Steam cover art per game id, absent or null when there is none. */
+  art: Record<string, string | null>;
   games: GameView[];
   activeId: string | null;
   onSelect: (id: string) => void;
@@ -1075,79 +1103,124 @@ function LibraryScreen({
   busy: boolean;
 }) {
   const active = games.find((g) => g.id === activeId);
+
+  // What used to be four stat tiles. Read as a sentence, these are facts about
+  // the game rather than measurements worth their own boxes.
+  const facts = active
+    ? [
+        active.engine,
+        `${active.loadOrder.toLowerCase()} load order`,
+        `${modCount} ${modCount === 1 ? "mod" : "mods"}`,
+        `${enabledCount} on`,
+      ].join(" · ")
+    : null;
+
   return (
     <div className="stack">
-      {games.map((g) => (
-        <button
-          key={g.id}
-          className={`game-card ${g.id === activeId ? "selected" : ""}`}
-          onClick={() => onSelect(g.id)}
-        >
-          <span className="game-art">
-            <Icon.package size={22} />
-          </span>
-          <span style={{ minWidth: 0, flex: 1 }}>
+      {active && (
+        <div className="lib-section lib-hero">
+          {art[active.id] ? (
+            <img className="lib-hero-art" src={art[active.id]!} alt="" />
+          ) : (
+            <span className={`lib-hero-art ${active.detected ? "present" : ""}`}>
+              <Icon.package size={26} />
+            </span>
+          )}
+          <span className="lib-hero-text">
             <span className="row" style={{ gap: "var(--sp-3)" }}>
-              <span style={{ fontWeight: 600, fontSize: "var(--text-lg)" }}>
-                {g.name}
-              </span>
-              {g.detected ? (
+              <span className="lib-hero-name">{active.name}</span>
+              {active.detected ? (
                 <Chip kind="ok">
                   <span className="dot" /> found
                 </Chip>
               ) : (
                 <Chip kind="warn">not found</Chip>
               )}
-              {g.loaderOverrideActive && <Chip kind="accent">loader ready</Chip>}
             </span>
-            <span
-              className="card-hint mono"
-              style={{ display: "block", marginTop: 4 }}
-            >
-              {g.installDir
-                ? truncatePath(g.installDir, 64)
-                : `Steam app ${g.steamAppId}`}
-            </span>
+            <span className="lib-hero-facts">{facts}</span>
           </span>
-          <Icon.chevronRight />
-        </button>
-      ))}
+        </div>
+      )}
+
+      {games.length > 1 && (
+        <div className="lib-section">
+          <div className="lib-group-label">Games</div>
+          <div className="lib-group">
+            {games.map((g) => {
+              const selected = g.id === activeId;
+              return (
+                <button
+                  key={g.id}
+                  className="lib-row tappable"
+                  onClick={() => onSelect(g.id)}
+                  aria-current={selected ? "true" : undefined}
+                >
+                  {art[g.id] ? (
+                    <img className="lib-row-art" src={art[g.id]!} alt="" />
+                  ) : (
+                    <span className="lib-row-art">
+                      <Icon.package size={16} />
+                    </span>
+                  )}
+                  <span className="lib-row-text">
+                    <span className="lib-row-label">{g.name}</span>
+                  </span>
+                  <span className="lib-row-value">
+                    {g.detected ? "installed" : "not found"}
+                  </span>
+                  {selected ? (
+                    <span className="lib-row-check">
+                      <Icon.check size={16} />
+                    </span>
+                  ) : (
+                    <span className="lib-row-chevron">
+                      <Icon.chevronRight size={16} />
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {active && (
-        <>
-          <div className="stat-grid">
-            <Stat label="Engine" value={active.engine} />
-            <Stat label="Load order" value={active.loadOrder} />
-            <Stat label="Mods" value={String(modCount)} />
-            <Stat label="Turned on" value={String(enabledCount)} />
+        <div className="lib-section">
+          <div className="row lib-group-label" style={{ alignItems: "baseline" }}>
+            <span>Linux and Proton</span>
+            <span className="row" style={{ marginLeft: "auto", gap: "var(--sp-2)" }}>
+              <button className="btn sm" onClick={onBrowse} disabled={busy}>
+                <Icon.folder size={14} /> Choose folder
+              </button>
+              <button className="btn sm" onClick={onDetect} disabled={busy}>
+                <Icon.refresh size={14} /> Find again
+              </button>
+            </span>
           </div>
 
-          <div className="card stack">
-            <div className="row">
-              <div className="card-title">Linux and Proton</div>
-              <div style={{ marginLeft: "auto" }} className="row">
-                <button className="btn sm" onClick={onBrowse} disabled={busy}>
-                  <Icon.folder size={14} /> Choose folder
-                </button>
-                <button className="btn sm" onClick={onDetect} disabled={busy}>
-                  <Icon.refresh size={14} /> Find again
-                </button>
-              </div>
+          <div className="lib-group">
+            <div className="lib-row">
+              <span className="lib-row-label">Game folder</span>
+              <span className="lib-row-value mono" title={active.installDir ?? undefined}>
+                {active.installDir ? truncatePath(active.installDir, 44) : "not set"}
+              </span>
             </div>
-            <dl className="kv">
-              <dt>Game folder</dt>
-              <dd className="mono">{active.installDir ?? "not set"}</dd>
-              <dt>Proton files</dt>
-              <dd className="mono">{active.protonPrefix ?? "not found"}</dd>
-              <dt>Proton version</dt>
-              <dd className="mono">{active.protonTool ?? "default"}</dd>
-              <dt>Mod loader</dt>
-              <dd>
+            <div className="lib-row">
+              <span className="lib-row-label">Proton files</span>
+              <span className="lib-row-value mono" title={active.protonPrefix ?? undefined}>
+                {active.protonPrefix ? truncatePath(active.protonPrefix, 44) : "not found"}
+              </span>
+            </div>
+            <div className="lib-row">
+              <span className="lib-row-label">Proton version</span>
+              <span className="lib-row-value">{active.protonTool ?? "default"}</span>
+            </div>
+            <div className="lib-row">
+              <span className="lib-row-label">Mod loader</span>
+              <span className="lib-row-value">
                 {active.loaderName ? (
-                  <span className="row" style={{ gap: "var(--sp-3)" }}>
-                    <span className="mono">
-                      {active.loaderName} ({active.loaderDll})
-                    </span>
+                  <span className="row" style={{ gap: "var(--sp-3)", justifyContent: "flex-end" }}>
+                    <span className="mono">{active.loaderName}</span>
                     {active.loaderOverrideActive ? (
                       <Chip kind="ok">ready</Chip>
                     ) : (
@@ -1157,16 +1230,26 @@ function LibraryScreen({
                 ) : (
                   "none needed"
                 )}
-              </dd>
-              {active.steamLaunchOptions && (
-                <>
-                  <dt>Steam launch options</dt>
-                  <dd className="mono">{active.steamLaunchOptions}</dd>
-                </>
-              )}
-            </dl>
-            {active.loaderName && !active.loaderOverrideActive && (
-              <div className="row">
+              </span>
+            </div>
+            {active.steamLaunchOptions && (
+              <div className="lib-row">
+                <span className="lib-row-label">Steam launch options</span>
+                <span className="lib-row-value mono" title={active.steamLaunchOptions}>
+                  {active.steamLaunchOptions}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {active.loaderName && !active.loaderOverrideActive && (
+            <>
+              <div className="lib-group-note">
+                {active.protonPrefix
+                  ? "Tells Proton to load the mod loader. Close Steam first."
+                  : "Run the game once through Steam so Proton creates its files."}
+              </div>
+              <div className="row" style={{ marginTop: "var(--sp-3)" }}>
                 <button
                   className="btn primary"
                   onClick={onLoaderSetup}
@@ -1174,15 +1257,10 @@ function LibraryScreen({
                 >
                   Set up {active.loaderName}
                 </button>
-                <span className="card-hint">
-                  {active.protonPrefix
-                    ? "Tells Proton to load the mod loader. Close Steam first."
-                    : "Run the game once through Steam so Proton creates its files."}
-                </span>
               </div>
-            )}
-          </div>
-        </>
+            </>
+          )}
+        </div>
       )}
     </div>
   );

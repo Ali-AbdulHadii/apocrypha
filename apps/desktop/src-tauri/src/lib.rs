@@ -99,6 +99,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::list_games,
             commands::detect_game,
+            commands::game_art,
             commands::game_for_domain,
             commands::set_game_path,
             commands::analyze_archive,

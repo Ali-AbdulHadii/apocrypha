@@ -64,6 +64,33 @@ fn rules_for(game_id: &str) -> apoc_modengine::GameRules {
         .unwrap_or_default()
 }
 
+/// Steam's own cached cover art for a game, as a data URI.
+///
+/// Returned inline rather than as a path because the webview cannot read
+/// arbitrary files from disk, and widening the asset scope to all of Steam's
+/// cache to show a thumbnail is a poor trade. The images are tens of
+/// kilobytes and are fetched once per game.
+///
+/// `None` simply means Steam has not cached any, which is normal for a game
+/// the account does not own. Nothing here reaches the network: a mod manager
+/// should not be making requests to a storefront to decorate a list.
+#[tauri::command(async)]
+pub fn game_art(game_id: String) -> CmdResult<Option<String>> {
+    use base64::Engine as _;
+
+    let profile = builtin_profile(&game_id)?;
+    let Some(path) = apoc_steam::library_art(profile.detection.steam_app_id) else {
+        return Ok(None);
+    };
+    let bytes = std::fs::read(&path).map_err(err)?;
+    let mime = match path.extension().and_then(|e| e.to_str()) {
+        Some("png") => "image/png",
+        _ => "image/jpeg",
+    };
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(Some(format!("data:{mime};base64,{encoded}")))
+}
+
 /// List all known games, merged with detection and stored configuration.
 #[tauri::command(async)]
 pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {

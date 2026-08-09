@@ -254,3 +254,122 @@ mod tests {
         assert!(find_game(1).is_none() || find_game(1).is_some());
     }
 }
+
+/// Cached library artwork for a game, if Steam has downloaded any.
+///
+/// Steam keeps this under `appcache/librarycache/<appid>/`, and the layout
+/// changed: it used to be flat files named `<appid>_library_600x900.jpg`, and
+/// is now one directory per app containing content-hash directories with
+/// plainly named files inside. Both are searched, newest layout first.
+///
+/// The art is present for games the account *owns*, not only games installed,
+/// so a game showing as not found can still have a cover.
+///
+/// Nothing here downloads anything. If Steam has not cached the art, there is
+/// no art — a mod manager should not be making requests to a storefront.
+pub fn library_art(app_id: u32) -> Option<PathBuf> {
+    for root in discover_steam_roots() {
+        if let Some(p) = library_art_in(&root.path, app_id) {
+            return Some(p);
+        }
+    }
+    None
+}
+
+/// Preference order. Portrait cover first: it is what Steam's own library shows
+/// and what a player recognises. The wide header is a reasonable second, and
+/// the logo is a transparent wordmark that reads poorly at list size, so it is
+/// the last resort rather than a choice.
+const ART_NAMES: [&str; 3] = ["library_600x900.jpg", "library_header.jpg", "logo.png"];
+
+fn library_art_in(steam_root: &Path, app_id: u32) -> Option<PathBuf> {
+    let cache = steam_root.join("appcache/librarycache");
+    let per_app = cache.join(app_id.to_string());
+
+    for name in ART_NAMES {
+        // Current layout: librarycache/<appid>/<hash>/<name>
+        if let Ok(entries) = std::fs::read_dir(&per_app) {
+            for e in entries.flatten() {
+                let candidate = e.path().join(name);
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+        // Older flat layout: librarycache/<appid>_<name>
+        let flat = cache.join(format!("{app_id}_{name}"));
+        if flat.is_file() {
+            return Some(flat);
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod art_tests {
+    use super::*;
+
+    fn touch(p: &Path) {
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, b"x").unwrap();
+    }
+
+    #[test]
+    fn finds_art_in_the_current_hashed_layout() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        touch(&root.join("appcache/librarycache/42/abc123/library_600x900.jpg"));
+        assert_eq!(
+            library_art_in(root, 42),
+            Some(root.join("appcache/librarycache/42/abc123/library_600x900.jpg"))
+        );
+    }
+
+    #[test]
+    fn finds_art_in_the_older_flat_layout() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        touch(&root.join("appcache/librarycache/42_library_600x900.jpg"));
+        assert_eq!(
+            library_art_in(root, 42),
+            Some(root.join("appcache/librarycache/42_library_600x900.jpg"))
+        );
+    }
+
+    #[test]
+    fn the_portrait_cover_wins_over_the_header_and_the_logo() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        touch(&root.join("appcache/librarycache/42/a/logo.png"));
+        touch(&root.join("appcache/librarycache/42/b/library_header.jpg"));
+        touch(&root.join("appcache/librarycache/42/c/library_600x900.jpg"));
+        let found = library_art_in(root, 42).unwrap();
+        assert!(found.ends_with("library_600x900.jpg"), "got {found:?}");
+    }
+
+    #[test]
+    fn the_header_is_preferred_to_the_logo() {
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        touch(&root.join("appcache/librarycache/42/a/logo.png"));
+        touch(&root.join("appcache/librarycache/42/b/library_header.jpg"));
+        let found = library_art_in(root, 42).unwrap();
+        assert!(found.ends_with("library_header.jpg"), "got {found:?}");
+    }
+
+    #[test]
+    fn a_game_with_no_cached_art_reports_none() {
+        let d = tempfile::tempdir().unwrap();
+        assert_eq!(library_art_in(d.path(), 42), None);
+    }
+
+    #[test]
+    fn another_games_art_is_not_returned() {
+        // The cache is one directory per app; matching loosely would put the
+        // wrong cover on a game, which is worse than showing no cover.
+        let d = tempfile::tempdir().unwrap();
+        let root = d.path();
+        touch(&root.join("appcache/librarycache/99/a/library_600x900.jpg"));
+        assert_eq!(library_art_in(root, 42), None);
+    }
+}

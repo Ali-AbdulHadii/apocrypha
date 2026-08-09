@@ -875,25 +875,66 @@ never both.
 
 ### 6.4 Card
 
-**Class:** `.card`, `.card-title`, `.card-hint`; variants `.game-card`, `.game-art`
+**Class:** `.card`, `.card-title`, `.card-hint`
 
 **Anatomy.** `--bg-surface`, 1px `--border`, `--radius-lg`, padding `--sp-4`. Usually
 composed with `.stack` so children space at `--sp-4`, or `.stack.tight` at `--sp-3`.
 `.card-title` is 14px / 600 / `-0.01em`. `.card-hint` is 13px `--text-tertiary` at
 `--leading`, used for the explanatory sentence under a title.
 
-**States.** A plain card is not interactive and has no hover. `.game-card` is the
-interactive variant: `display: flex`, gap `--sp-4`, a 48px `.game-art` tile
-(`--radius-sm`, `--bg-sunken`, 1px border, centred glyph), then a text block, then a
-trailing chevron. Hover raises the border to `--border-strong` and the fill to
-`--bg-raised` over `--dur`, plus a framer-motion `whileHover={{ y: -2 }}` and
-`whileTap={{ scale: 0.995 }}` spring. Selected sets `border-color: --accent-border`.
+**States.** A plain card is not interactive and has no hover. For an interactive
+row, use the grouped list in 6.4a rather than making a card clickable: a card that
+responds to a click reads as a button the size of a paragraph.
 
 **Spacing.** Card padding `--sp-4`; never `--sp-5` (that is page padding) and never
 `--sp-3` (that is inside-card spacing).
 
 **Rule.** Cards do not nest inside cards. If you need a second level, use a `.divider`
 and a `.card-title`, or promote the inner block to its own card in the same `.stack`.
+
+---
+
+### 6.4a Grouped list
+
+**Class:** `.lib-group`, `.lib-group-label`, `.lib-group-note`, `.lib-row`,
+`.lib-row-art`, `.lib-row-label`, `.lib-row-value`, `.lib-row-chevron`,
+`.lib-row-check`; hero variant `.lib-hero`, `.lib-hero-art`, `.lib-hero-name`,
+`.lib-hero-facts`
+
+**Anatomy.** The iOS Settings inset grouped list, which is the right shape whenever
+the content is a set of facts about one subject or a list to choose from. A group is
+`--bg-surface` at `--radius-lg` with `overflow: hidden` and **no border**; rows are
+separated by a 1px `--border` hairline inset `--sp-4` from the left so it begins
+where the row content does. A full-bleed rule slices the group into bands instead of
+reading as one object, which is the whole difference between this and a stack of
+strips.
+
+A row is `--sp-3` / `--sp-4` padding, which lands on a 44px height with a 28px
+`.lib-row-art` tile. Label left in `--text-primary`, value right in
+`--text-secondary`, `margin-left: auto`, truncated with an ellipsis and never
+wrapped — a wrapped path turns a scannable list into a paragraph. A trailing
+`.lib-row-chevron` means "this leads somewhere"; a `.lib-row-check` in `--accent`
+means "this one is selected". Use one or the other, never both.
+
+`.lib-group-label` is the uppercase footnote header above a group, padded to align
+with the row text. `.lib-group-note` is the explanatory sentence *below* a group,
+the way iOS explains a setting under its row rather than above it.
+
+**Hero.** `.lib-hero` is the same fill and radius with a 56px tile and the subject's
+name at `--text-xl`. It exists to answer "what am I looking at" before any of the
+groups answer "what about it". `.lib-hero-facts` carries the secondary facts as one
+sentence; do not promote them to tiles, which is what the four-stat grid used to do
+and what made the page read as a dashboard rather than as a subject.
+
+**Artwork.** `img.lib-hero-art` / `img.lib-row-art` take Steam's own cached cover,
+`object-fit: cover` at `object-position: center 30%` — the top of a game cover holds
+the key art and wordmark, the bottom holds a rating badge. When there is no cover the
+tile falls back to a glyph, and `.lib-hero-art.present` tints it with the accent to
+carry the found/not-found state in colour as well as words.
+
+**States.** Only rows that do something take `.tappable`: `--bg-hover` on hover,
+`--bg-active` on press, over `--dur-fast`. A row that only states a fact has no
+hover, because a hover that leads nowhere is a promise the interface does not keep.
 
 ---
 

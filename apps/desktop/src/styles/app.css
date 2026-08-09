@@ -279,43 +279,6 @@
   line-height: var(--leading);
 }
 
-.game-card {
-  display: flex;
-  gap: var(--sp-4);
-  align-items: center;
-  padding: var(--sp-4);
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  cursor: pointer;
-  width: 100%;
-  text-align: left;
-  transition:
-    border-color var(--dur) var(--ease-out),
-    background var(--dur) var(--ease-out);
-}
-
-.game-card:hover {
-  border-color: var(--border-strong);
-  background: var(--bg-raised);
-}
-
-.game-card.selected {
-  border-color: var(--accent-border);
-}
-
-.game-art {
-  width: 48px;
-  height: 48px;
-  border-radius: var(--radius-sm);
-  display: grid;
-  place-items: center;
-  background: var(--bg-sunken);
-  border: 1px solid var(--border);
-  flex-shrink: 0;
-  color: var(--text-tertiary);
-}
-
 /* ---------------------------------------------------------------- stats --- */
 .stat-grid {
   display: grid;
@@ -1557,4 +1520,218 @@
 .range {
   width: 100%;
   accent-color: var(--accent);
+}
+
+/* ---------------------------------------------------------------- library --- */
+/*
+ * The Library page follows iOS Settings rather than a dashboard: inset grouped
+ * lists, hairline separators that stop short of the container edge so they
+ * align with the text above them, and fills instead of a border around every
+ * element. The previous version put a border on the game cards, on four stat
+ * tiles and on the detail card, which reads as six competing rectangles when
+ * the content is really one subject with facts about it.
+ */
+
+/* The active game, presented the way iOS Settings presents the account row:
+   the largest thing on the page, because it is what the page is about. */
+.lib-hero {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  padding: var(--sp-4);
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+}
+
+.lib-hero-art {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+}
+
+.lib-hero-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.lib-hero-name {
+  font-size: var(--text-xl, var(--text-lg));
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+/* One line replacing what used to be four stat tiles. The facts are secondary
+   to the game itself, and four bordered boxes said otherwise. */
+.lib-hero-facts {
+  margin-top: 2px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+
+/* Group header. Footnote-sized, uppercase, quiet — it labels the group without
+   competing with the rows inside it. */
+.lib-group-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+  padding: 0 var(--sp-4);
+  margin-bottom: var(--sp-2);
+}
+
+.lib-group {
+  background: var(--bg-surface);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.lib-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--sp-4);
+  width: 100%;
+  padding: var(--sp-3) var(--sp-4);
+  text-align: left;
+  color: var(--text-primary);
+  font-size: var(--text-sm);
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+
+/* The separator is inset from the left so it starts where the row's content
+   does, which is the detail that makes a grouped list read as one object rather
+   than as stacked strips. A full-bleed rule slices the group into bands. */
+.lib-row + .lib-row::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: var(--sp-4);
+  right: 0;
+  height: 1px;
+  background: var(--border);
+}
+
+.lib-row.tappable {
+  cursor: pointer;
+}
+
+.lib-row.tappable:hover {
+  background: var(--bg-hover);
+}
+
+.lib-row.tappable:active {
+  background: var(--bg-active);
+}
+
+.lib-row-art {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-xs);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+}
+
+.lib-row-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.lib-row-label {
+  color: var(--text-primary);
+}
+
+/* Values sit right, quiet, and truncate rather than wrap: a wrapped path turns
+   a scannable list into a paragraph. */
+.lib-row-value {
+  margin-left: auto;
+  min-width: 0;
+  color: var(--text-secondary);
+  text-align: right;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.lib-row-chevron {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+  display: grid;
+  place-items: center;
+}
+
+/* The selected game is marked with the accent rather than with a border, so
+   the list stays one object. */
+.lib-row-check {
+  flex-shrink: 0;
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+}
+
+/* A footer note under a group, the way iOS explains a setting below its row. */
+.lib-group-note {
+  padding: var(--sp-2) var(--sp-4) 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  line-height: var(--leading);
+}
+
+/* Sections arrive in order rather than all at once. Small, once, on mount. */
+.lib-section {
+  animation: lib-rise var(--dur) var(--ease-out) both;
+}
+
+.lib-section:nth-child(2) {
+  animation-delay: 40ms;
+}
+.lib-section:nth-child(3) {
+  animation-delay: 80ms;
+}
+
+@keyframes lib-rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .lib-section {
+    animation: none;
+  }
+}
+
+/* The tile is the one place colour appears on this page, and it is doing work:
+   accent when the game is on disk, inert when it is not. That is the same fact
+   the chip beside it states in words, which is the point — the page should be
+   readable at a glance and on a second look. */
+.lib-hero-art.present {
+  background: var(--accent-muted);
+  color: var(--accent);
+}
+
+/* Steam's own cover art. Portrait 600x900 cropped to a square tile: the top of
+   a cover is where the key art and wordmark are, so cropping to the centre
+   keeps the recognisable part rather than the ESRB rating along the bottom. */
+img.lib-hero-art,
+img.lib-row-art {
+  object-fit: cover;
+  object-position: center 30%;
+  background: var(--bg-sunken);
 }
