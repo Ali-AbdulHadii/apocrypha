@@ -107,6 +107,24 @@ On Fedora the equivalents are `webkit2gtk4.1-devel`, `gtk3-devel`, `libappindica
 
 ### Build and run
 
+Rust and Node can live inside the checkout rather than on the machine, so a
+build does not depend on what the system happens to have. Source the activation
+script for your shell first — `env.fish` for fish, `env.sh` for bash and zsh.
+Sourcing the wrong one fails on its first line, because `export VAR=value` is a
+syntax error in fish and the resulting message reads like a broken toolchain
+rather than a wrong file:
+
+```bash
+source env.sh      # bash, zsh
+```
+
+```fish
+source env.fish    # fish
+```
+
+Skip this if Rust and Node are already installed system-wide; the commands below
+work either way.
+
 ```bash
 git clone https://github.com/Ali-AbdulHadii/apocrypha.git
 cd apocrypha
