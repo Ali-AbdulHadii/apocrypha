@@ -168,7 +168,11 @@
   z-index: 0;
 }
 
-.nav-item > * {
+/* Everything except the pill sits above it. Without the :not(), this rule also
+   matches .nav-pill — same specificity, later in the file — and turns the
+   absolutely positioned pill into a relatively positioned, zero-size element.
+   The pill then never renders, and selecting a tab animates nothing. */
+.nav-item > *:not(.nav-pill) {
   position: relative;
   z-index: 1;
 }
@@ -1501,7 +1505,9 @@
   z-index: 0;
 }
 
-.segmented button > span {
+/* The pill is itself a <span>, so this has to exclude it or it wins on
+   specificity and flattens the pill out of existence. */
+.segmented button > span:not(.seg-pill) {
   position: relative;
   z-index: 1;
 }

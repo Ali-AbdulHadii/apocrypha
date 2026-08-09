@@ -61,7 +61,9 @@
   color: var(--text-primary);
 }
 
-.set-tab > span {
+/* Excludes the pill, which is also a <span> and would otherwise be given
+   position: relative by this rule and disappear. */
+.set-tab > span:not(.set-tab-pill) {
   position: relative;
   z-index: 1;
 }

@@ -22,8 +22,16 @@ apps/desktop/src-tauri/gen/schemas/
 *.log
 .DS_Store
 
-# Working notes kept alongside the repo but not part of it. `docs/` holds
-# design briefs, brand notes and correspondence drafts: useful locally, not
-# something to publish.
+# Working notes kept alongside the repo but not part of it.
 notes/
-docs/
+
+# docs/ holds design briefs, brand notes and correspondence drafts: useful
+# locally, not something to publish. Ignored entry by entry rather than as a
+# directory, because git cannot re-include a file whose parent directory is
+# excluded, and one file in here does need tracking.
+docs/*
+
+# The design system is the source of truth for tokens, components and motion,
+# and it says to update it in the same commit as the code it governs. That is
+# not possible while it is unversioned.
+!docs/design-system.md
