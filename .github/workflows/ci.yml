@@ -1,0 +1,89 @@
+name: CI
+
+# The gate this repository has never had. Every check here is one that was
+# previously only ever run by hand on one laptop, which is also the only machine
+# with the toolchain installed.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push supersedes the first: nothing is learned from finishing a run
+# against code that has already been replaced.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  # A failed build should not also be a slow one.
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  rust:
+    name: Rust
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      # apps/desktop/src-tauri is a workspace member, so `--workspace` compiles
+      # the Tauri crate and therefore needs its system libraries even though
+      # nothing here launches a window.
+      - name: Install GTK and WebKit
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            build-essential
+
+      # rust-toolchain.toml pins the channel and asks for rustfmt and clippy, so
+      # the components come from there rather than being named twice.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Formatting first: it is the cheapest check and the most annoying one to
+      # discover after a twenty-minute compile.
+      - name: Formatting
+        run: cargo fmt --all --check
+
+      # Denies warnings. The project's rule is that clippy is clean, not nearly
+      # clean, and a warning nobody fails on is a warning that accumulates.
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Tests
+        run: cargo test --workspace
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: apps/desktop
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # `npm ci` rather than `npm install`: the lock file is the input, and a
+      # build that quietly resolves something else is not the build that was
+      # tested.
+      - run: npm ci
+
+      # There is no separate lint step because `npm run build` already runs
+      # `tsc --noEmit` before vite. Typechecking is the lint here.
+      - run: npm run build

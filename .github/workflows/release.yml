@@ -1,0 +1,116 @@
+name: Release
+
+# Cutting a release used to be a sequence run by hand: bump two version files,
+# build with two environment variables that are not obvious, tag, upload two
+# artifacts. Every step of that is a step to forget at the wrong moment, and it
+# tied releases to one laptop having a Rust toolchain.
+#
+# Push a tag and this does it. The version in the tag must match the version in
+# Cargo.toml, and the job checks that rather than trusting it.
+
+on:
+  push:
+    tags: ["v*"]
+  # Buildable without publishing, so the packaging can be exercised without
+  # burning a version number.
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: Build and publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK and WebKit
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            build-essential
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      # A tag that disagrees with Cargo.toml produces artifacts named after one
+      # version and reporting another, which is discovered by a user rather than
+      # by us.
+      - name: Tag matches the crate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          crate="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$crate" != "$tag" ]; then
+            echo "tag $tag does not match Cargo.toml version $crate" >&2
+            exit 1
+          fi
+          echo "version=$crate" >> "$GITHUB_ENV"
+
+      # The same gate CI runs. A tag can be pushed without a green CI run, and
+      # the release is the last place to find out.
+      - name: Gate
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      # Both variables work around linuxdeploy, which builds the AppImage.
+      # It ships as an AppImage itself and mounts through FUSE 2, which a CI
+      # runner does not have, so it has to unpack and run instead. NO_STRIP skips
+      # its pass over the bundled GTK and WebKit libraries, which fails on some
+      # toolchains and takes the whole bundle down with it. The application
+      # binary is stripped either way by the release profile.
+      - name: Build bundles
+        working-directory: apps/desktop
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: 1
+          NO_STRIP: 1
+        run: npm run tauri build
+
+      - name: List what was produced
+        run: ls -lh target/release/bundle/appimage/*.AppImage target/release/bundle/deb/*.deb
+
+      # Keeps the artifacts for a dispatch run, where there is no release to
+      # attach them to.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundles
+          path: |
+            target/release/bundle/appimage/*.AppImage
+            target/release/bundle/deb/*.deb
+          if-no-files-found: error
+
+      # Draft, deliberately. The notes for every release so far have been
+      # written by hand and are worth more than a list of commit subjects, so
+      # this stages the artifacts and leaves publishing as a human act.
+      - name: Draft the release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Apocrypha ${GITHUB_REF_NAME#v}" \
+            --draft \
+            --generate-notes \
+            target/release/bundle/appimage/*.AppImage \
+            target/release/bundle/deb/*.deb
