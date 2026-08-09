@@ -3,6 +3,7 @@
 //! Tauri is a thin adapter over `apoc-*`: it owns no mod-management logic, so the
 //! UI layer can be replaced without touching the engines.
 
+mod app_update;
 mod commands;
 mod deploy_cmds;
 mod downloads;
@@ -52,6 +53,18 @@ fn apply_linux_rendering_workarounds() {
     if should_disable_dmabuf(wayland, std::env::var_os(KEY).is_some()) {
         std::env::set_var(KEY, "1");
     }
+}
+
+
+/// Whether a newer Apocrypha has been released.
+///
+/// Deliberately a command rather than something done at startup in Rust: the
+/// interface decides when to ask and how loudly to say it, and a check that
+/// blocks the window appearing would be the wrong trade for information this
+/// low-stakes.
+#[tauri::command(async)]
+fn check_app_update() -> app_update::AppUpdateView {
+    app_update::check(env!("CARGO_PKG_VERSION"))
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -135,6 +148,7 @@ pub fn run() {
             nexus_cmds::remove_download,
             nexus_cmds::nexus_sign_in,
             nexus_cmds::set_sso_application,
+            check_app_update,
         ])
         .setup(|app| {
             use tauri::{Emitter, Manager};

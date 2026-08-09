@@ -26,6 +26,7 @@ import {
   formatBytes,
   pickDirectory,
   truncatePath,
+  type AppUpdateView,
   type GameView,
   type NexusStatusView,
   type SettingsView,
@@ -907,6 +908,75 @@ function LibrarySection({
 
 /* ============================================================ advanced === */
 
+
+/**
+ * Whether a newer Apocrypha exists.
+ *
+ * Checks once when the section is opened rather than at startup: it is a
+ * network call for information nobody is waiting on, and an app that reaches
+ * out before its window has finished appearing is doing the wrong thing with
+ * someone's first second.
+ *
+ * A failed check says nothing. Offline, rate-limited and GitHub-down all mean
+ * "we do not know", and complaining about that every time is worse than
+ * silence.
+ */
+function AppUpdateGroup() {
+  const [state, setState] = useState<AppUpdateView | null>(null);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .checkAppUpdate()
+      .then((r) => alive && setState(r))
+      .catch(() => {})
+      .finally(() => alive && setChecking(false));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const how =
+    state?.installKind === "appImage"
+      ? "Download the new AppImage and replace this one."
+      : state?.installKind === "package"
+        ? "Update through your package manager, or install the new package from the releases page."
+        : "This is a development build. Pull and rebuild.";
+
+  return (
+    <Group title="Apocrypha">
+      <Row
+        label="Version"
+        desc={
+          checking
+            ? "Checking for a newer release."
+            : !state
+              ? "Could not reach GitHub, so whether a newer release exists is unknown."
+              : state.available
+                ? `${state.latest} is available. ${how}`
+                : "This is the newest release."
+        }
+        control={
+          <div className="row" style={{ gap: "var(--sp-2)" }}>
+            <Chip kind={state?.available ? "ok" : undefined}>
+              {state?.current ?? "—"}
+            </Chip>
+            {state?.available ? (
+              <button
+                className="btn primary sm"
+                onClick={() => void api.openUrl(state.url)}
+              >
+                Get it
+              </button>
+            ) : null}
+          </div>
+        }
+      />
+    </Group>
+  );
+}
+
 function AdvancedSection({
   status,
   onStatus,
@@ -927,6 +997,7 @@ function AdvancedSection({
 
   return (
     <>
+      <AppUpdateGroup />
       <Group title="Nexus Mods">
         <Row
           stacked

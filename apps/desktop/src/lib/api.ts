@@ -154,6 +154,16 @@ export interface UpdateCheckView {
   uncheckable: number;
 }
 
+export type InstallKind = "appImage" | "package" | "source";
+
+export interface AppUpdateView {
+  current: string;
+  latest: string | null;
+  available: boolean;
+  url: string;
+  installKind: InstallKind;
+}
+
 export type DownloadState = "downloading" | "ready" | "failed" | "cancelled";
 
 export interface DownloadView {
@@ -339,6 +349,12 @@ export const api = {
     call<string | null>("preview_from_mod", { gameId, modId, optionId }),
 
   steamDiagnostics: () => call<unknown>("steam_diagnostics"),
+
+  /**
+   * Whether a newer Apocrypha exists. Never throws for a network problem:
+   * "we do not know" comes back as available: false.
+   */
+  checkAppUpdate: () => call<AppUpdateView>("check_app_update"),
 
   /* Nexus Mods */
   nexusStatus: () => call<NexusStatusView>("nexus_status"),
