@@ -75,12 +75,21 @@ fn full_install_deploy_and_rollback_cycle() {
             }
         }
     }
-    assert!(per_set.values().all(|&n| n == 1), "one choice per radio set");
+    assert!(
+        per_set.values().all(|&n| n == 1),
+        "one choice per radio set"
+    );
     assert!(per_set.len() >= 6, "physics body+leg are separate sets");
 
     // No info-only option is ever selected.
-    for o in bundle.options().filter(|o| o.select_mode == SelectMode::Info) {
-        assert!(!selection.contains(&o.id), "info options are never installed");
+    for o in bundle
+        .options()
+        .filter(|o| o.select_mode == SelectMode::Info)
+    {
+        assert!(
+            !selection.contains(&o.id),
+            "info options are never installed"
+        );
     }
 
     // ---- 4. Plan --------------------------------------------------------
@@ -89,7 +98,11 @@ fn full_install_deploy_and_rollback_cycle() {
     assert!(plan.file_count() > 0);
 
     // Every destination is unique and lands under a known payload root.
-    let dests: BTreeSet<&str> = plan.files.iter().map(|f| f.game_rel_path.as_str()).collect();
+    let dests: BTreeSet<&str> = plan
+        .files
+        .iter()
+        .map(|f| f.game_rel_path.as_str())
+        .collect();
     assert_eq!(dests.len(), plan.files.len(), "one file per destination");
     assert!(plan
         .files
@@ -97,7 +110,10 @@ fn full_install_deploy_and_rollback_cycle() {
         .all(|f| f.game_rel_path.starts_with("natives/")
             || f.game_rel_path.starts_with("reframework/")));
     // RE Engine versioned extensions survive planning verbatim.
-    assert!(plan.files.iter().any(|f| f.game_rel_path.contains(".mesh.")));
+    assert!(plan
+        .files
+        .iter()
+        .any(|f| f.game_rel_path.contains(".mesh.")));
 
     let ctx = DeployContext {
         game_id: game_id.to_string(),
@@ -111,15 +127,26 @@ fn full_install_deploy_and_rollback_cycle() {
 
     // ---- 5. Dry run changes nothing -------------------------------------
     let dr = dry_run(&ctx, &plan).expect("dry run");
-    assert!(dr.missing.is_empty(), "staged files missing: {:?}", dr.missing);
+    assert!(
+        dr.missing.is_empty(),
+        "staged files missing: {:?}",
+        dr.missing
+    );
     assert_eq!(dr.file_count(), plan.file_count());
-    assert!(!game_dir.join("natives").exists(), "dry run must not deploy");
+    assert!(
+        !game_dir.join("natives").exists(),
+        "dry run must not deploy"
+    );
 
     // ---- 6. Apply -------------------------------------------------------
     let journal = apply(&ctx, &plan).expect("apply");
     for f in &plan.files {
         let deployed = game_dir.join(&f.game_rel_path);
-        assert!(deployed.is_file(), "missing deployed file {}", f.game_rel_path);
+        assert!(
+            deployed.is_file(),
+            "missing deployed file {}",
+            f.game_rel_path
+        );
     }
     assert!(game_dir.join("natives/stm").is_dir());
     assert_eq!(journal.ops().len(), plan.file_count());
@@ -137,7 +164,10 @@ fn full_install_deploy_and_rollback_cycle() {
     assert_eq!(report.removed.len(), plan.file_count());
 
     assert!(!game_dir.join("natives").exists(), "natives/ fully removed");
-    assert!(!game_dir.join("reframework").exists(), "reframework/ fully removed");
+    assert!(
+        !game_dir.join("reframework").exists(),
+        "reframework/ fully removed"
+    );
     assert_eq!(
         std::fs::read(&pristine_marker).unwrap(),
         b"do not touch",

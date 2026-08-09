@@ -76,11 +76,7 @@ pub fn write_override(user_reg: &Path, dll_name: &str, value: &str) -> io::Resul
 }
 
 /// Remove our override, or restore a previous value if there was one.
-pub fn restore_override(
-    user_reg: &Path,
-    dll_name: &str,
-    previous: Option<&str>,
-) -> io::Result<()> {
+pub fn restore_override(user_reg: &Path, dll_name: &str, previous: Option<&str>) -> io::Result<()> {
     let existing = match fs::read_to_string(user_reg) {
         Ok(t) => t,
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),

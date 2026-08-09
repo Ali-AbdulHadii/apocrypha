@@ -83,10 +83,7 @@ fn cmd_game(id: &str) -> Result<(), String> {
         for (name, value) in l.dll_overrides() {
             println!("      override  : {name}={value}");
         }
-        println!(
-            "      prefix    : write={}",
-            l.proton.requires_prefix_write
-        );
+        println!("      prefix    : write={}", l.proton.requires_prefix_write);
     }
     Ok(())
 }
@@ -149,15 +146,29 @@ fn print_bundle(b: &ModBundle) {
 
         // Non-exclusive options first (forced / addon / info), in order.
         for o in g.options.iter().filter(|o| o.radio_set.is_none()) {
-            println!("     {}{:<40} {}", role_glyph(o.select_mode), truncate(&o.name, 40), files_label(o));
+            println!(
+                "     {}{:<40} {}",
+                role_glyph(o.select_mode),
+                truncate(&o.name, 40),
+                files_label(o)
+            );
         }
         // Then each radio set under its own "pick one of" sub-header.
         for (i, key) in radio_sets.iter().enumerate() {
-            let members: Vec<_> = g.options.iter().filter(|o| o.radio_set.as_ref() == Some(key)).collect();
+            let members: Vec<_> = g
+                .options
+                .iter()
+                .filter(|o| o.radio_set.as_ref() == Some(key))
+                .collect();
             let sub = key.split_once(':').map(|x| x.1).unwrap_or(key);
             println!("     ┌ pick one of {} ({} options):", sub, members.len());
             for o in members {
-                println!("     │ {}{:<38} {}", role_glyph(o.select_mode), truncate(&o.name, 38), files_label(o));
+                println!(
+                    "     │ {}{:<38} {}",
+                    role_glyph(o.select_mode),
+                    truncate(&o.name, 38),
+                    files_label(o)
+                );
             }
             if i + 1 == radio_sets.len() {
                 // no-op; keep output compact

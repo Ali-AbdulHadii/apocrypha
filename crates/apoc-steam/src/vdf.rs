@@ -277,6 +277,9 @@ mod tests {
     #[test]
     fn handles_comments_and_bare_tokens() {
         let v = parse("// leading comment\n\"root\" { key value }");
-        assert_eq!(v.path(&["root", "key"]).and_then(Value::as_str), Some("value"));
+        assert_eq!(
+            v.path(&["root", "key"]).and_then(Value::as_str),
+            Some("value")
+        );
     }
 }

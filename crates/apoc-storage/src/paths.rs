@@ -126,7 +126,9 @@ mod tests {
             .any(|c| matches!(c, std::path::Component::ParentDir)));
         assert_eq!(
             staged.components().count(),
-            PathBuf::from("/data/games/x/staging/y").components().count()
+            PathBuf::from("/data/games/x/staging/y")
+                .components()
+                .count()
         );
     }
 

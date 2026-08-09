@@ -219,7 +219,11 @@ mod tests {
         write!(f, "{{\"op\":\"crea").unwrap();
 
         let loaded = Journal::load(j.path()).unwrap();
-        assert_eq!(loaded.ops().len(), 1, "partial line ignored, valid ops kept");
+        assert_eq!(
+            loaded.ops().len(),
+            1,
+            "partial line ignored, valid ops kept"
+        );
     }
 
     #[test]

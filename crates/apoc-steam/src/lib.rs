@@ -173,8 +173,14 @@ fn read_manifest(path: &Path) -> Option<(String, Option<String>)> {
     let text = std::fs::read_to_string(path).ok()?;
     let v = vdf::parse(&text);
     let state = v.get("AppState")?;
-    let installdir = state.get("installdir").and_then(vdf::Value::as_str)?.to_string();
-    let name = state.get("name").and_then(vdf::Value::as_str).map(str::to_string);
+    let installdir = state
+        .get("installdir")
+        .and_then(vdf::Value::as_str)?
+        .to_string();
+    let name = state
+        .get("name")
+        .and_then(vdf::Value::as_str)
+        .map(str::to_string);
     Some((installdir, name))
 }
 

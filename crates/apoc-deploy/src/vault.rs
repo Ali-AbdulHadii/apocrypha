@@ -137,6 +137,9 @@ mod tests {
         let vault = Vault::new(dir.path().join("vault"));
         let dest = dir.path().join("out");
         assert!(vault.restore("deadbeef", &dest).is_err());
-        assert!(!dest.exists(), "failed restore must not leave a file behind");
+        assert!(
+            !dest.exists(),
+            "failed restore must not leave a file behind"
+        );
     }
 }

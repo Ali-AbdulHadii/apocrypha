@@ -124,8 +124,12 @@ pub fn set_nexus_api_key(state: State<AppState>, api_key: String) -> CmdResult<N
 
     {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
-        store.set_setting(KEY_API, &trimmed).map_err(|e| e.to_string())?;
-        store.set_setting(KEY_USER, &user.name).map_err(|e| e.to_string())?;
+        store
+            .set_setting(KEY_API, &trimmed)
+            .map_err(|e| e.to_string())?;
+        store
+            .set_setting(KEY_USER, &user.name)
+            .map_err(|e| e.to_string())?;
         store
             .set_setting(KEY_PREMIUM, if user.is_premium { "true" } else { "false" })
             .map_err(|e| e.to_string())?;
@@ -170,8 +174,8 @@ pub fn nexus_sign_in(app: tauri::AppHandle, state: State<AppState>) -> CmdResult
         }
     }
 
-    let result = apoc_nexus::sign_in(&slug, previous.as_deref(), &Opener(app))
-        .map_err(|e| e.to_string())?;
+    let result =
+        apoc_nexus::sign_in(&slug, previous.as_deref(), &Opener(app)).map_err(|e| e.to_string())?;
 
     // Validate straight away so the stored account details are real rather than
     // assumed from a successful handshake.
@@ -183,7 +187,9 @@ pub fn nexus_sign_in(app: tauri::AppHandle, state: State<AppState>) -> CmdResult
         store
             .set_setting(KEY_API, &result.api_key)
             .map_err(|e| e.to_string())?;
-        store.set_setting(KEY_USER, &user.name).map_err(|e| e.to_string())?;
+        store
+            .set_setting(KEY_USER, &user.name)
+            .map_err(|e| e.to_string())?;
         store
             .set_setting(KEY_PREMIUM, if user.is_premium { "true" } else { "false" })
             .map_err(|e| e.to_string())?;
@@ -305,7 +311,9 @@ pub fn check_mod_updates(state: State<AppState>, game_id: String) -> CmdResult<U
     // take seconds each and must not hold the store while they run.
     let (linked, names, total_mods) = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
-        let linked = store.nexus_linked_mods(&game_id).map_err(|e| e.to_string())?;
+        let linked = store
+            .nexus_linked_mods(&game_id)
+            .map_err(|e| e.to_string())?;
         let mods = store.list_mods(&game_id).map_err(|e| e.to_string())?;
         let total = mods.len();
         let names: std::collections::HashMap<String, (String, Option<String>)> = mods
@@ -516,10 +524,9 @@ pub fn start_nxm_download(
     // here rather than surfacing a confusing 400.
     {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
-        if let (Some(link_user), Some(stored)) = (
-            link.user_id,
-            store.get_setting(KEY_USER_ID).ok().flatten(),
-        ) {
+        if let (Some(link_user), Some(stored)) =
+            (link.user_id, store.get_setting(KEY_USER_ID).ok().flatten())
+        {
             if stored.parse::<u64>().ok() == Some(link_user) || stored.is_empty() {
                 // Same account, or we do not know yet. Continue.
             } else {
@@ -610,5 +617,3 @@ fn spawn_download(
 
     Ok(entry)
 }
-
-

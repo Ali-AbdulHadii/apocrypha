@@ -272,7 +272,10 @@ mod tests {
     fn the_registry_key_is_the_module_name_not_the_path() {
         // Wine keys DllOverrides by module, so a loader that lives in a
         // subdirectory must still register as a bare name.
-        assert_eq!(loader("dinput8.dll", None).proxy_dll_stem(), Some("dinput8"));
+        assert_eq!(
+            loader("dinput8.dll", None).proxy_dll_stem(),
+            Some("dinput8")
+        );
         assert_eq!(
             loader("bin/x64/winmm.dll", None).proxy_dll_stem(),
             Some("winmm")

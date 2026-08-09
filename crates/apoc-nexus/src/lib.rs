@@ -27,9 +27,9 @@ pub mod url;
 pub use api::{
     DownloadLink, FileUpdate, ModFile, ModFiles, NexusClient, NexusError, RateLimits, UserInfo,
 };
-pub use updates::{pick_update, UpdateStatus};
 pub use protocol::{register, status as protocol_status, unregister, Registration};
 pub use sso::{sign_in, SsoError, SsoObserver, SsoResult};
+pub use updates::{pick_update, UpdateStatus};
 pub use url::{parse as parse_nxm, NxmError, NxmLink, NxmTarget};
 
 use serde::{Deserialize, Serialize};
@@ -68,9 +68,9 @@ impl DownloadSource {
 /// is the control that fires the `nxm://` link back at this application.
 pub fn mod_page_url(domain: &str, mod_id: u64, file_id: Option<u64>) -> String {
     match file_id {
-        Some(f) => format!(
-            "https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files&file_id={f}&nmm=1"
-        ),
+        Some(f) => {
+            format!("https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files&file_id={f}&nmm=1")
+        }
         None => format!("https://www.nexusmods.com/{domain}/mods/{mod_id}?tab=files&nmm=1"),
     }
 }
@@ -92,7 +92,10 @@ mod tests {
 
     #[test]
     fn download_source_round_trips() {
-        assert_eq!(DownloadSource::parse("apocrypha"), DownloadSource::Apocrypha);
+        assert_eq!(
+            DownloadSource::parse("apocrypha"),
+            DownloadSource::Apocrypha
+        );
         assert_eq!(DownloadSource::parse("nexus"), DownloadSource::Nexus);
         assert_eq!(DownloadSource::parse("nonsense"), DownloadSource::Nexus);
     }

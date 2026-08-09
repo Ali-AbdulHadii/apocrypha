@@ -166,8 +166,8 @@ fn safe_dest(game_dir: &Path, rel: &str) -> Result<PathBuf> {
 
 /// Compute what applying `plan` would change. Makes no modifications.
 pub fn dry_run(ctx: &DeployContext, plan: &DeploymentPlan) -> Result<DryRun> {
-    let method = place::probe(&ctx.ladder, &ctx.staging_dir, &ctx.game_dir)
-        .unwrap_or(DeployMethod::Copy);
+    let method =
+        place::probe(&ctx.ladder, &ctx.staging_dir, &ctx.game_dir).unwrap_or(DeployMethod::Copy);
 
     let mut creates = Vec::new();
     let mut replaces = Vec::new();
@@ -378,10 +378,7 @@ pub fn provision_loader(
     if let Some(reg) = user_reg {
         // Wine keys DllOverrides by module name. A proxy that lives in a
         // subdirectory (`bin/x64/winmm.dll`) still registers as `winmm`.
-        let file_name = proxy_dll_name
-            .rsplit('/')
-            .next()
-            .unwrap_or(proxy_dll_name);
+        let file_name = proxy_dll_name.rsplit('/').next().unwrap_or(proxy_dll_name);
         let dll_stem = file_name.trim_end_matches(".dll");
         let previous = loader::write_override(reg, dll_stem, override_value)?;
         journal.append(JournalOp::RegistryOverride {
@@ -588,7 +585,11 @@ mod tests {
     fn deploys_then_rolls_back_to_pristine() {
         let f = fixture();
         stage(&f.ctx, "opt/natives/stm/a.mesh.241111606", b"modded");
-        let plan = plan_of(&[("opt/natives/stm/a.mesh.241111606", "natives/stm/a.mesh.241111606", 6)]);
+        let plan = plan_of(&[(
+            "opt/natives/stm/a.mesh.241111606",
+            "natives/stm/a.mesh.241111606",
+            6,
+        )]);
 
         let journal = apply(&f.ctx, &plan).unwrap();
         let deployed = f.ctx.game_dir.join("natives/stm/a.mesh.241111606");
@@ -612,7 +613,11 @@ mod tests {
         fs::write(&target, b"VANILLA").unwrap();
 
         stage(&f.ctx, "opt/natives/stm/shared.mdf2.45", b"MODDED");
-        let plan = plan_of(&[("opt/natives/stm/shared.mdf2.45", "natives/stm/shared.mdf2.45", 6)]);
+        let plan = plan_of(&[(
+            "opt/natives/stm/shared.mdf2.45",
+            "natives/stm/shared.mdf2.45",
+            6,
+        )]);
 
         let journal = apply(&f.ctx, &plan).unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"MODDED");
@@ -747,7 +752,10 @@ mod tests {
 
         // The mod's own filename is never what lands in the game directory.
         assert!(!f.ctx.game_dir.join("VerRBodyTextures-0-basic.pak").exists());
-        let deployed = f.ctx.game_dir.join("re_chunk_000.pak.sub_000.pak.patch_001.pak");
+        let deployed = f
+            .ctx
+            .game_dir
+            .join("re_chunk_000.pak.sub_000.pak.patch_001.pak");
         assert!(deployed.is_file(), "pak must join the chain to be loaded");
         assert_eq!(fs::read(&deployed).unwrap(), b"PAKDATA");
 
@@ -763,11 +771,7 @@ mod tests {
         f.ctx.pak_chain = Some(wilds_chain());
         // Vanilla/other-mod patches already present.
         for i in [1u32, 2, 5] {
-            fs::write(
-                f.ctx.game_dir.join(wilds_chain().filename(i)),
-                b"existing",
-            )
-            .unwrap();
+            fs::write(f.ctx.game_dir.join(wilds_chain().filename(i)), b"existing").unwrap();
         }
         stage(&f.ctx, "opt/a.pak", b"A");
         stage(&f.ctx, "opt/b.pak", b"B");
@@ -806,11 +810,7 @@ mod tests {
     /// Every file under `dir`, keyed by path relative to it, so a whole game
     /// directory can be compared before and after in one assertion.
     fn snapshot(dir: &Path) -> std::collections::BTreeMap<String, Vec<u8>> {
-        fn walk(
-            dir: &Path,
-            root: &Path,
-            out: &mut std::collections::BTreeMap<String, Vec<u8>>,
-        ) {
+        fn walk(dir: &Path, root: &Path, out: &mut std::collections::BTreeMap<String, Vec<u8>>) {
             let Ok(entries) = fs::read_dir(dir) else {
                 return;
             };
@@ -906,7 +906,11 @@ mod tests {
         };
         assert_eq!(reports, 2, "no further files are placed after the cancel");
         assert!(rollback.is_clean(), "{rollback:?}");
-        assert_eq!(journal.ops().len(), 2, "only the placed files are journaled");
+        assert_eq!(
+            journal.ops().len(),
+            2,
+            "only the placed files are journaled"
+        );
 
         assert_eq!(
             fs::read(&vanilla).unwrap(),
@@ -975,6 +979,9 @@ mod tests {
             message: "missing required option".into(),
             option_ids: vec![],
         });
-        assert!(matches!(apply(&f.ctx, &plan), Err(DeployError::InvalidPlan(_))));
+        assert!(matches!(
+            apply(&f.ctx, &plan),
+            Err(DeployError::InvalidPlan(_))
+        ));
     }
 }

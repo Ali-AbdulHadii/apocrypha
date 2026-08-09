@@ -12,9 +12,7 @@ pub mod deploy;
 pub mod game;
 pub mod modpack;
 
-pub use deploy::{
-    Conflict, DeployMethod, DeploymentPlan, PlannedFile, Selection, ValidationIssue,
-};
+pub use deploy::{Conflict, DeployMethod, DeploymentPlan, PlannedFile, Selection, ValidationIssue};
 pub use game::{
     ConflictScope, DeployTarget, Engine, GameProfile, LoadOrderPolicy, LoaderKind, LoaderSpec,
     PakChainSpec, ProtonLoaderSpec, RewrapRule, SteamDetection,

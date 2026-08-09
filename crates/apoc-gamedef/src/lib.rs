@@ -118,7 +118,10 @@ mod tests {
         assert_eq!(g.engine, Engine::ReEngine);
         assert_eq!(g.detection.steam_app_id, 2246340);
         assert_eq!(g.load_order, LoadOrderPolicy::Priority);
-        assert!(g.case_sensitive, "RE Engine paths are case-sensitive on Linux");
+        assert!(
+            g.case_sensitive,
+            "RE Engine paths are case-sensitive on Linux"
+        );
 
         // Deploy targets cover both real payload roots seen in the sample mod.
         assert_eq!(g.target_for("natives"), Some("natives"));
@@ -129,7 +132,10 @@ mod tests {
         assert_eq!(loader.kind, LoaderKind::DllProxy);
         assert_eq!(loader.proxy_dll.as_deref(), Some("dinput8.dll"));
         assert!(loader.proton.requires_prefix_write);
-        assert_eq!(loader.proton.wine_dll_overrides.as_deref(), Some("dinput8=n,b"));
+        assert_eq!(
+            loader.proton.wine_dll_overrides.as_deref(),
+            Some("dinput8=n,b")
+        );
     }
 
     #[test]

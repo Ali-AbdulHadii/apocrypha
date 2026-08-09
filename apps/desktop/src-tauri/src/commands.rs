@@ -94,7 +94,9 @@ pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
             });
 
         let loader = p.loader.as_ref();
-        let user_reg = proton_prefix.as_ref().map(|p| PathBuf::from(p).join("user.reg"));
+        let user_reg = proton_prefix
+            .as_ref()
+            .map(|p| PathBuf::from(p).join("user.reg"));
         // "Ready" means every override the loader declares is registered, not
         // just the first: Cyberpunk needs both RED4ext's and CET's, and half a
         // stack reported as ready is worse than reported as missing.
@@ -161,7 +163,9 @@ pub fn detect_game(state: State<AppState>, game_id: String) -> CmdResult<GameVie
             .upsert_game(&GameRecord {
                 id: p.id.clone(),
                 name: p.name.clone(),
-                install_dir: detected.as_ref().map(|d| d.install_dir.display().to_string()),
+                install_dir: detected
+                    .as_ref()
+                    .map(|d| d.install_dir.display().to_string()),
                 proton_prefix: detected
                     .as_ref()
                     .and_then(|d| d.proton_prefix.as_ref())
@@ -212,8 +216,8 @@ pub fn set_game_path(
 /// Analyze an archive without importing it: powers the wizard preview.
 #[tauri::command(async)]
 pub fn analyze_archive(game_id: String, path: String) -> CmdResult<ModView> {
-    let bundle =
-        apoc_modengine::analyze_archive_with(Path::new(&path), &rules_for(&game_id)).map_err(err)?;
+    let bundle = apoc_modengine::analyze_archive_with(Path::new(&path), &rules_for(&game_id))
+        .map_err(err)?;
     let selection = apoc_modengine::default_selection(&bundle);
     Ok(ModView {
         id: String::new(),
@@ -242,8 +246,7 @@ pub fn import_mod(
     selection: Vec<String>,
 ) -> CmdResult<ModView> {
     let path = PathBuf::from(&archive_path);
-    let bundle =
-        apoc_modengine::analyze_archive_with(&path, &rules_for(&game_id)).map_err(err)?;
+    let bundle = apoc_modengine::analyze_archive_with(&path, &rules_for(&game_id)).map_err(err)?;
 
     let mod_id = format!(
         "mod-{}",
@@ -489,7 +492,11 @@ pub(crate) fn plan_for_profile(
 /// Roll back whatever is currently applied, so an Apply always reconciles the
 /// game directory to exactly the current profile rather than layering onto a
 /// previous deployment.
-pub(crate) fn revert_current(state: &AppState, game_id: &str, ctx: &DeployContext) -> CmdResult<()> {
+pub(crate) fn revert_current(
+    state: &AppState,
+    game_id: &str,
+    ctx: &DeployContext,
+) -> CmdResult<()> {
     let outstanding = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
         store.applied_deployments(game_id).map_err(err)?
@@ -611,7 +618,8 @@ pub fn rollback_last(state: State<AppState>, game_id: String) -> CmdResult<Rollb
             .map_err(err)?
             .ok_or_else(|| "game not configured".to_string())?;
         (
-            g.install_dir.ok_or_else(|| "install dir unknown".to_string())?,
+            g.install_dir
+                .ok_or_else(|| "install dir unknown".to_string())?,
             g.proton_prefix,
         )
     };
@@ -688,7 +696,9 @@ pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String
             .get_game(&game_id)
             .map_err(err)?
             .and_then(|g| g.proton_prefix)
-            .ok_or_else(|| "Proton prefix not found: run the game once via Steam first.".to_string())?
+            .ok_or_else(|| {
+                "Proton prefix not found: run the game once via Steam first.".to_string()
+            })?
     };
     let user_reg = PathBuf::from(prefix).join("user.reg");
     let mut written = Vec::new();
@@ -803,7 +813,9 @@ pub fn switch_profile(
 ) -> CmdResult<Vec<ProfileView>> {
     {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
-        store.set_active_profile(&game_id, profile_id).map_err(err)?;
+        store
+            .set_active_profile(&game_id, profile_id)
+            .map_err(err)?;
     }
     list_profiles(state, game_id)
 }
@@ -875,7 +887,12 @@ pub fn delete_profile(
 /// live inside archives or the private staging library, neither of which should
 /// be exposed to the frontend as a browsable filesystem scope.
 fn to_data_uri(bytes: &[u8], filename: &str) -> String {
-    let mime = match filename.rsplit('.').next().map(|e| e.to_ascii_lowercase()).as_deref() {
+    let mime = match filename
+        .rsplit('.')
+        .next()
+        .map(|e| e.to_ascii_lowercase())
+        .as_deref()
+    {
         Some("png") => "image/png",
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
@@ -898,8 +915,16 @@ fn base64_encode(input: &[u8]) -> String {
         let n = ((b[0] as u32) << 16) | ((b[1] as u32) << 8) | b[2] as u32;
         out.push(T[(n >> 18) as usize & 63] as char);
         out.push(T[(n >> 12) as usize & 63] as char);
-        out.push(if chunk.len() > 1 { T[(n >> 6) as usize & 63] as char } else { '=' });
-        out.push(if chunk.len() > 2 { T[n as usize & 63] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            T[(n >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            T[n as usize & 63] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -912,8 +937,8 @@ pub fn preview_from_archive(
     option_id: String,
 ) -> CmdResult<Option<String>> {
     let path = PathBuf::from(&archive_path);
-    let bundle = apoc_modengine::analyze_archive_no_hash_with(&path, &rules_for(&game_id))
-        .map_err(err)?;
+    let bundle =
+        apoc_modengine::analyze_archive_no_hash_with(&path, &rules_for(&game_id)).map_err(err)?;
     let Some(opt) = bundle.options().find(|o| o.id == option_id) else {
         return Ok(None);
     };

@@ -291,7 +291,9 @@ pub fn clear_conflict_override(
 ) -> CmdResult<()> {
     let profile_id = profile_of(&state, &game_id)?;
     let store = state.store.lock().map_err(|_| "state poisoned")?;
-    store.clear_conflict_override(profile_id, &path).map_err(err)
+    store
+        .clear_conflict_override(profile_id, &path)
+        .map_err(err)
 }
 
 #[tauri::command(async)]
@@ -330,20 +332,25 @@ pub fn verify_deployment(state: State<AppState>, game_id: String) -> CmdResult<V
     let mut problems = Vec::new();
     for path in journals {
         let Ok(journal) = apoc_deploy::journal::Journal::load(&path) else {
-            return Err(format!("Could not read the change log at {}.", path.display()));
+            return Err(format!(
+                "Could not read the change log at {}.",
+                path.display()
+            ));
         };
         let report = verify::verify(&ctx, &journal);
         checked += report.checked;
         ok += report.ok;
-        problems.extend(report.problems.into_iter().map(|p| FileVerdictView {
-            path: p.game_rel_path,
-            state: match p.state {
-                verify::FileState::Ok => "ok",
-                verify::FileState::Missing => "missing",
-                verify::FileState::Modified => "modified",
+        problems.extend(report.problems.into_iter().map(|p| {
+            FileVerdictView {
+                path: p.game_rel_path,
+                state: match p.state {
+                    verify::FileState::Ok => "ok",
+                    verify::FileState::Missing => "missing",
+                    verify::FileState::Modified => "modified",
+                }
+                .to_string(),
+                repairable: p.repairable,
             }
-            .to_string(),
-            repairable: p.repairable,
         }));
     }
 
@@ -377,8 +384,10 @@ pub fn repair_deployment(
     };
     for path in journals {
         let Ok(journal) = apoc_deploy::journal::Journal::load(&path) else {
-            out.errors
-                .push(format!("Could not read the change log at {}.", path.display()));
+            out.errors.push(format!(
+                "Could not read the change log at {}.",
+                path.display()
+            ));
             continue;
         };
         // Re-verify per journal rather than trusting the paths blindly: the

@@ -133,7 +133,11 @@ mod tests {
         assert_eq!(method, DeployMethod::Copy);
 
         fs::write(&src, b"two").unwrap();
-        assert_eq!(fs::read(&dest).unwrap(), b"one", "copy is independent of source");
+        assert_eq!(
+            fs::read(&dest).unwrap(),
+            b"one",
+            "copy is independent of source"
+        );
     }
 
     #[test]

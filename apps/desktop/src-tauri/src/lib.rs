@@ -55,7 +55,6 @@ fn apply_linux_rendering_workarounds() {
     }
 }
 
-
 /// Whether a newer Apocrypha has been released.
 ///
 /// Deliberately a command rather than something done at startup in Rust: the

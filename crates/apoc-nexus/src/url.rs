@@ -221,7 +221,10 @@ mod tests {
 
     #[test]
     fn rejects_malformed_links() {
-        assert_eq!(parse("https://example.com").unwrap_err(), NxmError::WrongScheme);
+        assert_eq!(
+            parse("https://example.com").unwrap_err(),
+            NxmError::WrongScheme
+        );
         assert!(matches!(
             parse("nxm://game/mods/abc/files/2"),
             Err(NxmError::BadId(_))

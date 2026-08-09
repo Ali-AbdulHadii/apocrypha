@@ -113,7 +113,11 @@ fn every_enabled_mod_is_deployed_in_one_transaction() {
     };
 
     let dr = dry_run(&ctx, &combined).unwrap();
-    assert!(dr.missing.is_empty(), "staged files missing: {:?}", dr.missing);
+    assert!(
+        dr.missing.is_empty(),
+        "staged files missing: {:?}",
+        dr.missing
+    );
 
     let journal = apply(&ctx, &combined).unwrap();
 
@@ -125,9 +129,7 @@ fn every_enabled_mod_is_deployed_in_one_transaction() {
     );
     // Casing is normalised to what RE Engine resolves, so a Windows-authored
     // archive lands in one tree on a case-sensitive filesystem.
-    assert!(game_dir
-        .join("natives/STM/art/x.mesh.241111606")
-        .is_file());
+    assert!(game_dir.join("natives/STM/art/x.mesh.241111606").is_file());
     assert!(game_dir.join("reframework/data/x.json").is_file());
     assert!(
         game_dir.join(wilds_chain().filename(16)).is_file(),
@@ -153,7 +155,10 @@ fn every_enabled_mod_is_deployed_in_one_transaction() {
         "only the vanilla patch chain remains"
     );
 
-    eprintln!("multi-mod deploy ok: {} files, rolled back clean", combined.file_count());
+    eprintln!(
+        "multi-mod deploy ok: {} files, rolled back clean",
+        combined.file_count()
+    );
 }
 
 /// A second apply must not double-count the pak chain if the first was reverted.

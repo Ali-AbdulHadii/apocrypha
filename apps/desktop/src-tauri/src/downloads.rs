@@ -362,7 +362,11 @@ mod tests {
         }
         assert_eq!(safe_name("a/b.zip"), "a_b.zip");
         assert_eq!(safe_name("   "), "download.bin");
-        assert_eq!(safe_name("Mod-1-2.zip"), "Mod-1-2.zip", "ordinary names pass through");
+        assert_eq!(
+            safe_name("Mod-1-2.zip"),
+            "Mod-1-2.zip",
+            "ordinary names pass through"
+        );
     }
 
     #[test]

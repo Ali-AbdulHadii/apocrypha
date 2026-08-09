@@ -121,7 +121,10 @@ fn an_archive_packed_from_the_inside_out_still_imports() {
         vec!["red4ext/plugins/thing/thing.dll"]
     );
     assert_eq!(
-        all_dests(&analyze(&[("x64/plugins/cyber_engine_tweaks/mods/t/init.lua", b"L")])),
+        all_dests(&analyze(&[(
+            "x64/plugins/cyber_engine_tweaks/mods/t/init.lua",
+            b"L"
+        )])),
         vec!["bin/x64/plugins/cyber_engine_tweaks/mods/t/init.lua"]
     );
 }

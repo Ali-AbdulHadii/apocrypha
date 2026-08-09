@@ -160,7 +160,9 @@ pub struct OptionGroup {
 impl OptionGroup {
     /// True if this group contains at least one mutually-exclusive (radio) option.
     pub fn has_exclusive(&self) -> bool {
-        self.options.iter().any(|o| o.select_mode == SelectMode::Exclusive)
+        self.options
+            .iter()
+            .any(|o| o.select_mode == SelectMode::Exclusive)
     }
 
     /// The distinct radio-set keys present in this group, in first-seen order.

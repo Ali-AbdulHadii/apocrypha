@@ -228,9 +228,8 @@ impl NexusClient {
         file_id: u64,
         token: Option<(&str, u64)>,
     ) -> Result<(Vec<DownloadLink>, RateLimits), NexusError> {
-        let mut url = format!(
-            "{API_BASE}/games/{domain}/mods/{mod_id}/files/{file_id}/download_link.json"
-        );
+        let mut url =
+            format!("{API_BASE}/games/{domain}/mods/{mod_id}/files/{file_id}/download_link.json");
         if let Some((key, expires)) = token {
             url.push_str(&format!("?key={key}&expires={expires}"));
         }

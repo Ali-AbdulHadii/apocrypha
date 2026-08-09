@@ -139,8 +139,8 @@ pub fn sign_in(
         return Err(SsoError::NoApplicationSlug);
     }
 
-    let (mut socket, _) = tungstenite::connect(SSO_WS)
-        .map_err(|e| SsoError::Connect(e.to_string()))?;
+    let (mut socket, _) =
+        tungstenite::connect(SSO_WS).map_err(|e| SsoError::Connect(e.to_string()))?;
 
     let uuid = uuid_v4();
     let request = SsoRequest {
@@ -150,8 +150,7 @@ pub fn sign_in(
     };
     socket
         .send(tungstenite::Message::Text(
-            serde_json::to_string(&request)
-                .map_err(|e| SsoError::Protocol(e.to_string()))?,
+            serde_json::to_string(&request).map_err(|e| SsoError::Protocol(e.to_string()))?,
         ))
         .map_err(|e| SsoError::Connect(e.to_string()))?;
 
@@ -168,7 +167,9 @@ pub fn sign_in(
         let text = match msg {
             tungstenite::Message::Text(t) => t.to_string(),
             tungstenite::Message::Close(_) => {
-                return Err(SsoError::Protocol("the service closed the connection".into()))
+                return Err(SsoError::Protocol(
+                    "the service closed the connection".into(),
+                ))
             }
             _ => continue,
         };
