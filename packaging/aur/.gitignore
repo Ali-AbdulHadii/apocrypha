@@ -1,0 +1,7 @@
+# makepkg working files and build output. Only PKGBUILD, .SRCINFO and README
+# belong in version control.
+src/
+pkg/
+*.pkg.tar.*
+*.deb
+LICENSE-*

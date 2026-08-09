@@ -1,0 +1,48 @@
+# Maintainer: Ali AbdulHadi <ali.abdulhadii@outlook.com>
+
+# Packages the published .deb rather than building from source. A source
+# package would pull the whole Rust and Node toolchain onto every user's
+# machine to reproduce a binary that is already built and published; -bin is
+# the honest shape for a release artifact that ships this way. If a
+# from-source `apocrypha` package is wanted later it can live beside this one.
+
+pkgname=apocrypha-bin
+_appname=Apocrypha
+pkgver=0.4.0
+pkgrel=1
+pkgdesc="Linux-first mod manager for Steam and Proton games, with journaled, reversible deployment"
+arch=('x86_64')
+url="https://github.com/Ali-AbdulHadii/apocrypha"
+license=('MIT')
+
+# webkit2gtk-4.1 also provides libjavascriptcoregtk-4.1, which the binary links
+# against. Confirmed with ldd rather than copied from another PKGBUILD.
+depends=('webkit2gtk-4.1' 'gtk3')
+optdepends=(
+  'steam: game and Proton prefix discovery'
+  'xdg-utils: opening mod pages and folders in your browser and file manager'
+)
+
+provides=('apocrypha')
+conflicts=('apocrypha')
+
+# The upstream binary is already stripped by the release profile, and the
+# debug package would be empty.
+options=('!strip' '!debug')
+
+source=(
+  "$pkgname-$pkgver.deb::$url/releases/download/v$pkgver/${_appname}_${pkgver}_amd64.deb"
+  "LICENSE-$pkgver::https://raw.githubusercontent.com/Ali-AbdulHadii/apocrypha/v$pkgver/LICENSE"
+)
+sha256sums=(
+  '08fc7e104ecd33af2d6ae8a3170407297a2f1a0055eb5a1a8d92aef571389585'
+  'c26ee76fd1a151b20ad7008b3e5850fb395541ecaa10b96e7d68b14da5823034'
+)
+
+package() {
+  # makepkg unpacks the .deb with bsdtar, leaving its members in $srcdir.
+  tar -xf "$srcdir/data.tar.gz" -C "$pkgdir"
+
+  install -Dm644 "$srcdir/LICENSE-$pkgver" \
+    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
