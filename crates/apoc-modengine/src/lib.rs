@@ -7,6 +7,7 @@
 //! and returns a uniform bundle regardless of source shape.
 
 mod archive;
+pub mod carry;
 mod error;
 mod extract;
 mod modinfo;
@@ -15,6 +16,7 @@ mod normalize;
 pub mod plan;
 mod rules;
 
+pub use carry::{carry_selection, CarriedSelection};
 pub use error::{ModEngineError, Result};
 pub use extract::{
     preview_rel_path, read_archive_entry, stage_bundle, staged_preview, StageReport, PREVIEW_DIR,
