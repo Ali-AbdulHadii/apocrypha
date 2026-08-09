@@ -909,7 +909,11 @@ function Rail({
                 <motion.span
                   layoutId="nav-pill"
                   className="nav-pill"
-                  transition={{ type: "spring", stiffness: 540, damping: 42 }}
+                  /* Softer than it was. At 540 the pill arrived before the eye
+                     could follow it, which reads as the selection teleporting
+                     rather than moving — the one thing a shared-layout pill
+                     exists to prevent. */
+                  transition={{ type: "spring", stiffness: 360, damping: 34 }}
                 />
               )}
               <span className="nav-icon">

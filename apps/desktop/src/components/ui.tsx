@@ -75,7 +75,10 @@ export function Segmented<T extends string>({
             <motion.span
               layoutId={`${idPrefix}-seg-pill`}
               className="seg-pill"
-              transition={{ type: "spring", stiffness: 500, damping: 40 }}
+              /* Softer than it was, and slightly stiffer than the nav pill:
+                 this one travels a shorter distance, so a stiffer spring lands
+                 in about the same perceived time. */
+              transition={{ type: "spring", stiffness: 420, damping: 34 }}
             />
           )}
           <span>{o.label}</span>
@@ -173,10 +176,31 @@ export function Spinner() {
   return <span className="spinner" aria-label="Loading" />;
 }
 
-/** Standard page transition for the main content pane. */
+const EASE = [0.16, 1, 0.3, 1] as const;
+
+/**
+ * Standard page transition for the main content pane.
+ *
+ * Asymmetric on purpose. The pane lives inside `AnimatePresence mode="wait"`,
+ * so the outgoing screen has to finish before the incoming one starts, and
+ * every millisecond of exit is dead time between a click and anything
+ * appearing. Leaving is therefore quick and arriving is unhurried, which reads
+ * as responsive and smooth rather than as one slow thing.
+ *
+ * The travel is 8px rather than the 4px this used to be: at 4px over 180ms the
+ * movement was too small and too brief to register, so switching screens looked
+ * like an instant swap with a flicker rather than a transition.
+ */
 export const pageMotion = {
-  initial: { opacity: 0, y: 4 },
-  animate: { opacity: 1, y: 0 },
-  exit: { opacity: 0, y: -4 },
-  transition: { duration: 0.18, ease: [0.16, 1, 0.3, 1] as const },
+  initial: { opacity: 0, y: 8 },
+  animate: {
+    opacity: 1,
+    y: 0,
+    transition: { duration: 0.26, ease: EASE },
+  },
+  exit: {
+    opacity: 0,
+    y: -6,
+    transition: { duration: 0.12, ease: EASE },
+  },
 };

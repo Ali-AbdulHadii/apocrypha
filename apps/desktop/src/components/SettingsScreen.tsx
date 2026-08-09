@@ -138,7 +138,9 @@ export function SettingsScreen({
                     layoutId="set-tab-pill"
                     className="set-tab-pill"
                     transition={
-                      still ? { duration: 0 } : { type: "spring", stiffness: 500, damping: 40 }
+                      still
+                        ? { duration: 0 }
+                        : { type: "spring", stiffness: 420, damping: 34 }
                     }
                   />
                 )}
