@@ -42,9 +42,38 @@ pub(crate) fn profile_of(state: &AppState, game_id: &str) -> CmdResult<i64> {
     if let Some(id) = game.and_then(|g| g.active_profile_id) {
         return Ok(id);
     }
+    // `profiles.game_id` is a foreign key onto `games`, so the game has to be a
+    // row before a profile can point at it. Nothing guaranteed that: the row was
+    // only written by detection, so on a fresh database every profile operation
+    // failed with "FOREIGN KEY constraint failed" until the user happened to
+    // press Find game. Detection is about where a game is installed, not about
+    // whether it exists.
+    ensure_game_row(&store, game_id)?;
     let id = store.ensure_profile(game_id, "Default").map_err(err)?;
     store.set_active_profile(game_id, id).map_err(err)?;
     Ok(id)
+}
+
+/// Make sure the game exists as a row, without claiming to know where it is
+/// installed.
+///
+/// Writes only the identity — id and name, both from the bundled profile — and
+/// leaves the paths null for detection to fill in. Overwriting a detected path
+/// with a null here would undo the user's own Choose folder.
+pub(crate) fn ensure_game_row(store: &apoc_storage::Store, game_id: &str) -> CmdResult<()> {
+    if store.get_game(game_id).map_err(err)?.is_some() {
+        return Ok(());
+    }
+    let profile = builtin_profile(game_id)?;
+    store
+        .upsert_game(&GameRecord {
+            id: profile.id.clone(),
+            name: profile.name.clone(),
+            install_dir: None,
+            proton_prefix: None,
+            active_profile_id: None,
+        })
+        .map_err(err)
 }
 
 fn builtin_profile(game_id: &str) -> CmdResult<GameProfile> {
@@ -240,12 +269,52 @@ pub fn set_game_path(
         .ok_or_else(|| "game not found".to_string())
 }
 
+/// The selection currently in force for a mod of this name, if one is installed.
+///
+/// Matched on the bundle name, which is the only identity shared between an
+/// archive on disk and a mod in the library — the id is derived from the
+/// archive hash and so differs for every release by definition. An author who
+/// renames their mod loses the match and gets a fresh wizard, which is the safe
+/// direction to fail in.
+fn previous_selection(
+    state: &AppState,
+    game_id: &str,
+    bundle_name: &str,
+) -> CmdResult<Option<apoc_domain::Selection>> {
+    let profile_id = profile_of(state, game_id)?;
+    let store = state.store.lock().map_err(|_| "state poisoned")?;
+    let Some(existing) = store
+        .list_mods(game_id)
+        .map_err(err)?
+        .into_iter()
+        .find(|m| m.name == bundle_name)
+    else {
+        return Ok(None);
+    };
+    Ok(store
+        .get_mod_state(profile_id, &existing.id)
+        .map_err(err)?
+        .map(|s| s.selection))
+}
+
 /// Analyze an archive without importing it: powers the wizard preview.
 #[tauri::command(async)]
-pub fn analyze_archive(game_id: String, path: String) -> CmdResult<ModView> {
+pub fn analyze_archive(
+    state: State<AppState>,
+    game_id: String,
+    path: String,
+) -> CmdResult<ModView> {
     let bundle = apoc_modengine::analyze_archive_with(Path::new(&path), &rules_for(&game_id))
         .map_err(err)?;
-    let selection = apoc_modengine::default_selection(&bundle);
+
+    // If this archive is a newer release of something already installed, open
+    // the wizard on the choices that were made last time rather than on a blank
+    // slate. Rebuilding a body variant and three addons from memory on every
+    // update is the difference between updating being a click and a chore.
+    let selection = match previous_selection(&state, &game_id, &bundle.name)? {
+        Some(previous) => apoc_modengine::carry_selection(&bundle, &previous).selection,
+        None => apoc_modengine::default_selection(&bundle),
+    };
     Ok(ModView {
         id: String::new(),
         name: bundle.name.clone(),
@@ -827,6 +896,9 @@ pub fn create_profile(
 ) -> CmdResult<Vec<ProfileView>> {
     {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
+        // Same foreign key as profile_of: naming a new profile for a game that
+        // has never been detected must not fail on the constraint.
+        ensure_game_row(&store, &game_id)?;
         store.ensure_profile(&game_id, &name).map_err(err)?;
     }
     list_profiles(state, game_id)

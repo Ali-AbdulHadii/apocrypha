@@ -738,6 +738,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn a_profile_cannot_be_created_for_a_game_that_is_not_a_row() {
+        // profiles.game_id is a foreign key onto games. This is the constraint
+        // that surfaced as "database error: FOREIGN KEY constraint failed" on a
+        // fresh database, because nothing wrote the game row until detection
+        // ran. The failure is correct — the caller must create the game first —
+        // so this pins the behaviour rather than the bug.
+        let s = Store::open_in_memory().unwrap();
+        assert!(
+            s.ensure_profile("never-seen", "Default").is_err(),
+            "a profile must not attach to a game that does not exist"
+        );
+    }
+
+    #[test]
+    fn a_profile_can_be_created_once_the_game_exists() {
+        let s = Store::open_in_memory().unwrap();
+        s.upsert_game(&GameRecord {
+            id: "cyberpunk-2077".into(),
+            name: "Cyberpunk 2077".into(),
+            // Undetected: identity without a path is exactly the state the app
+            // is in before anyone presses Find game.
+            install_dir: None,
+            proton_prefix: None,
+            active_profile_id: None,
+        })
+        .unwrap();
+        assert!(s.ensure_profile("cyberpunk-2077", "Default").is_ok());
+    }
+
     fn seeded() -> Store {
         let s = Store::open_in_memory().unwrap();
         s.upsert_game(&GameRecord {
