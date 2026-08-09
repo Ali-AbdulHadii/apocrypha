@@ -1266,15 +1266,6 @@ function LibraryScreen({
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="stat">
-      <div className="stat-label">{label}</div>
-      <div className="stat-value">{value}</div>
-    </div>
-  );
-}
-
 function ProfilesScreen({
   profiles,
   gameId,
@@ -1473,11 +1464,23 @@ function ChangesScreen({
   }
   return (
     <div className="stack">
-      <div className="stat-grid">
-        <Stat label="Method" value={preview.method} />
-        <Stat label="New files" value={String(preview.creates.length)} />
-        <Stat label="Replaced" value={String(preview.replaces.length)} />
-        <Stat label="Total size" value={formatBytes(preview.totalBytes)} />
+      <div className="lib-group">
+        <div className="lib-row">
+          <span className="lib-row-label">Method</span>
+          <span className="lib-row-value">{preview.method}</span>
+        </div>
+        <div className="lib-row">
+          <span className="lib-row-label">New files</span>
+          <span className="lib-row-value">{preview.creates.length}</span>
+        </div>
+        <div className="lib-row">
+          <span className="lib-row-label">Replaced</span>
+          <span className="lib-row-value">{preview.replaces.length}</span>
+        </div>
+        <div className="lib-row">
+          <span className="lib-row-label">Total size</span>
+          <span className="lib-row-value">{formatBytes(preview.totalBytes)}</span>
+        </div>
       </div>
 
       {preview.issues.length > 0 && (

@@ -279,36 +279,6 @@
   line-height: var(--leading);
 }
 
-/* ---------------------------------------------------------------- stats --- */
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(144px, 1fr));
-  gap: var(--sp-3);
-}
-
-.stat {
-  background: var(--bg-surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  padding: var(--sp-3) var(--sp-4);
-}
-
-.stat-label {
-  font-size: var(--text-xs);
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-tertiary);
-  font-weight: 600;
-}
-
-.stat-value {
-  font-size: var(--text-xl);
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  font-variant-numeric: tabular-nums;
-  margin-top: var(--sp-1);
-}
-
 /* -------------------------------------------------------------- buttons --- */
 .btn {
   display: inline-flex;
