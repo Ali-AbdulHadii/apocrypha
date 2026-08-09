@@ -10,6 +10,14 @@ dist/
 # Tauri generated
 apps/desktop/src-tauri/gen/schemas/
 
+# Project-contained toolchains, installed by env.sh rather than by the machine.
+# Hundreds of megabytes of compiler and runtime; the pinned versions live in
+# rust-toolchain.toml and package-lock.json, which are what actually need
+# committing.
+.rustup/
+.cargo/
+.node/
+
 # Local
 *.log
 .DS_Store

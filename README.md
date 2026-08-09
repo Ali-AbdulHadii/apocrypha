@@ -124,8 +124,18 @@ For a release build:
 
 ```bash
 cd apps/desktop
-npm run tauri build
+APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 npm run tauri build
 ```
+
+Both variables work around `linuxdeploy`, which builds the AppImage. It ships as
+an AppImage itself and mounts through FUSE 2, so on a distribution that carries
+only `fuse3` it cannot start at all; `APPIMAGE_EXTRACT_AND_RUN=1` makes it
+unpack and run instead of mounting. `NO_STRIP=1` skips its pass over the
+bundled GTK and WebKit libraries, which fails on some toolchains and takes the
+AppImage down with it. The application binary is stripped either way — the
+release profile in `Cargo.toml` sets `strip = true` — so the cost is symbols
+left in the bundled system libraries and roughly 20 MB of AppImage. Plain
+`npm run tauri build` is correct wherever `linuxdeploy` runs.
 
 Packaging targets are AppImage (primary) and `.deb`. Flatpak is deferred: the sandbox fights writes into the Steam directory and the Proton prefix, which is exactly what a mod manager has to do.
 
