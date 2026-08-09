@@ -15,8 +15,50 @@ async fn tokio_sleep() {
     std::thread::sleep(std::time::Duration::from_millis(600));
 }
 
+/// Whether WebKit's DMABUF renderer should be turned off for this session.
+///
+/// Split out from the setting of it so the rule is testable: the decision is
+/// what matters and the environment is awkward to fake.
+#[cfg(target_os = "linux")]
+fn should_disable_dmabuf(wayland: bool, already_set: bool) -> bool {
+    // Never override a value the user chose. Someone debugging this wants their
+    // setting to win, including when they set it to 0.
+    wayland && !already_set
+}
+
+/// Work around a WebKitGTK crash on Wayland before GTK is initialized.
+///
+/// On Wayland, recent WebKitGTK dies during window creation with
+/// `Gdk-Message: Error 71 (Protocol error) dispatching to Wayland display`,
+/// and the process exits before any of this application's code runs. It
+/// reproduces on Hyprland with WebKitGTK 2.52 and a transparent, undecorated
+/// window, which is exactly the window this app asks for — the custom chrome
+/// depends on it, so the window is not the thing to change.
+///
+/// Disabling the DMABUF renderer avoids it. `WEBKIT_DISABLE_COMPOSITING_MODE`
+/// and falling back to X11 through `GDK_BACKEND` also avoid it; this one is
+/// preferred because it gives up the least — the compositing switch disables
+/// more of the rendering path, and XWayland costs native Wayland behaviour
+/// including fractional scaling.
+///
+/// The cost is DMABUF-accelerated buffer sharing in the web view. For a UI that
+/// is lists and forms, that is not measurable; a crash on launch is.
+///
+/// Must run before GTK initializes, which means before `tauri::Builder`.
+#[cfg(target_os = "linux")]
+fn apply_linux_rendering_workarounds() {
+    const KEY: &str = "WEBKIT_DISABLE_DMABUF_RENDERER";
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    if should_disable_dmabuf(wayland, std::env::var_os(KEY).is_some()) {
+        std::env::set_var(KEY, "1");
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(target_os = "linux")]
+    apply_linux_rendering_workarounds();
+
     let app_state = match AppState::new() {
         Ok(s) => s,
         Err(e) => {
@@ -111,4 +153,28 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Apocrypha");
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::should_disable_dmabuf;
+
+    #[test]
+    fn wayland_without_an_existing_setting_gets_the_workaround() {
+        assert!(should_disable_dmabuf(true, false));
+    }
+
+    #[test]
+    fn x11_is_left_alone() {
+        // The crash is a Wayland protocol error. An X11 session does not need
+        // the workaround and should keep the faster rendering path.
+        assert!(!should_disable_dmabuf(false, false));
+    }
+
+    #[test]
+    fn a_value_the_user_already_chose_is_never_overridden() {
+        // Including when they set it to 0 to reproduce the crash deliberately.
+        assert!(!should_disable_dmabuf(true, true));
+        assert!(!should_disable_dmabuf(false, true));
+    }
 }
