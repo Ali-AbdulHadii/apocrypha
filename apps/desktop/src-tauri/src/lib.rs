@@ -86,6 +86,8 @@ pub fn run() {
             nexus_cmds::parse_nxm_link,
             nexus_cmds::open_mod_page,
             nexus_cmds::start_nxm_download,
+            nexus_cmds::check_mod_updates,
+            nexus_cmds::download_mod_update,
             nexus_cmds::list_downloads,
             nexus_cmds::cancel_download,
             nexus_cmds::remove_download,

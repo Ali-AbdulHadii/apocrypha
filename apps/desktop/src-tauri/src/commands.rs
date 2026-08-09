@@ -51,6 +51,11 @@ fn builtin_profile(game_id: &str) -> CmdResult<GameProfile> {
     LocalBuiltin::new().get(game_id).map_err(err)
 }
 
+/// The bundled profile for a game, for callers outside this module.
+pub(crate) fn game_profile(game_id: &str) -> CmdResult<GameProfile> {
+    builtin_profile(game_id)
+}
+
 /// Payload-recognition rules for a game, so loader DLLs and engine-specific
 /// payload roots are recognized. Falls back to defaults for an unknown game.
 fn rules_for(game_id: &str) -> apoc_modengine::GameRules {

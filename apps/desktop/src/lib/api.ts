@@ -127,6 +127,33 @@ export interface NxmLinkView {
   modPageUrl: string;
 }
 
+export type UpdateStatus = "upToDate" | "available" | "unknown" | "error";
+
+export interface ModUpdateView {
+  /** The local mod id, not the Nexus one. */
+  id: string;
+  name: string;
+  currentVersion: string | null;
+  status: UpdateStatus;
+  domain: string;
+  nexusModId: number;
+  newFileId: number | null;
+  newVersion: string | null;
+  newFileName: string | null;
+  error: string | null;
+}
+
+export interface UpdateCheckView {
+  results: ModUpdateView[];
+  /** Mods the quota ran out before reaching. The answer is partial when > 0. */
+  skipped: number;
+  stoppedForQuota: boolean;
+  hourlyRemaining: number | null;
+  dailyRemaining: number | null;
+  /** Mods imported from a local file, which carry no Nexus ids to check. */
+  uncheckable: number;
+}
+
 export type DownloadState = "downloading" | "ready" | "failed" | "cancelled";
 
 export interface DownloadView {
@@ -327,6 +354,15 @@ export const api = {
   /** Queues a download and returns immediately; progress arrives as events. */
   startNxmDownload: (url: string) =>
     call<DownloadView>("start_nxm_download", { url }),
+  /**
+   * Ask Nexus whether any installed mod has a newer file. One request per
+   * linked mod, so it is slow and quota-hungry: call it when asked, never on
+   * a screen mount.
+   */
+  checkModUpdates: (gameId: string) =>
+    call<UpdateCheckView>("check_mod_updates", { gameId }),
+  downloadModUpdate: (domain: string, nexusModId: number, fileId: number) =>
+    call<DownloadView>("download_mod_update", { domain, nexusModId, fileId }),
   listDownloads: () => call<DownloadView[]>("list_downloads"),
   cancelDownload: (id: string) => call<void>("cancel_download", { id }),
   removeDownload: (id: string) => call<void>("remove_download", { id }),

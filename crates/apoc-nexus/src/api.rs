@@ -90,6 +90,46 @@ pub struct FileInfo {
     pub size: u64,
 }
 
+/// One entry in a mod's file listing.
+///
+/// Distinct from [`FileInfo`], which is the single-file endpoint: that one is
+/// asked about a file you already know, this one is what you get when asking
+/// what a mod has. `category_name` is optional because Nexus reports `null` for
+/// archived files rather than omitting them.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct ModFile {
+    pub file_id: u64,
+    pub name: String,
+    pub file_name: String,
+    #[serde(default)]
+    pub version: Option<String>,
+    #[serde(default)]
+    pub category_name: Option<String>,
+    #[serde(default)]
+    pub uploaded_timestamp: i64,
+    /// Nexus reports this in kilobytes, not bytes.
+    #[serde(default)]
+    pub size: u64,
+}
+
+/// An author's declaration that one file replaces another.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub struct FileUpdate {
+    pub old_file_id: u64,
+    pub new_file_id: u64,
+    #[serde(default)]
+    pub uploaded_timestamp: i64,
+}
+
+/// Everything the files endpoint returns for one mod.
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+pub struct ModFiles {
+    #[serde(default)]
+    pub files: Vec<ModFile>,
+    #[serde(default)]
+    pub file_updates: Vec<FileUpdate>,
+}
+
 pub struct NexusClient {
     api_key: String,
     app_name: String,
@@ -215,6 +255,26 @@ impl NexusClient {
             .into_json()
             .map_err(|e| NexusError::Decode(e.to_string()))?;
         Ok((info, limits))
+    }
+
+    /// Every file a mod has, plus the author's replacement links.
+    ///
+    /// One request per mod, which is what makes an update check expensive: a
+    /// library of two hundred linked mods is two hundred requests against an
+    /// hourly quota. Callers are expected to watch [`RateLimits::exhausted`]
+    /// and stop, rather than discovering the limit by being refused.
+    pub fn mod_files(
+        &self,
+        domain: &str,
+        mod_id: u64,
+    ) -> Result<(ModFiles, RateLimits), NexusError> {
+        let (res, limits) = self.get(&format!(
+            "{API_BASE}/games/{domain}/mods/{mod_id}/files.json"
+        ))?;
+        let files: ModFiles = res
+            .into_json()
+            .map_err(|e| NexusError::Decode(e.to_string()))?;
+        Ok((files, limits))
     }
 }
 

@@ -13,6 +13,7 @@ import { SettingsScreen } from "./components/SettingsScreen";
 import { Splash } from "./components/Splash";
 import { TitleBar } from "./components/TitleBar";
 import { DownloadsScreen } from "./components/DownloadsScreen";
+import { UpdatesScreen } from "./components/UpdatesScreen";
 import { Chip, Spinner, pageMotion, useToast } from "./components/ui";
 import {
   api,
@@ -30,10 +31,12 @@ import {
   type DownloadView,
   type DryRunView,
   type GameView,
+  type ModUpdateView,
   type ModView,
   type PreviewSource,
   type ProfileView,
   type SettingsView,
+  type UpdateCheckView,
 } from "./lib/api";
 import { useAppearance } from "./lib/appearance";
 import { useMaximized } from "./lib/window";
@@ -44,6 +47,7 @@ type Screen =
   | "mods"
   | "order"
   | "downloads"
+  | "updates"
   | "profiles"
   | "conflicts"
   | "settings";
@@ -53,6 +57,7 @@ const NAV: { id: Screen; label: string; icon: IconName }[] = [
   { id: "mods", label: "Mods", icon: "mods" },
   { id: "order", label: "Load order", icon: "order" },
   { id: "downloads", label: "Downloads", icon: "downloads" },
+  { id: "updates", label: "Updates", icon: "refresh" },
   { id: "profiles", label: "Profiles", icon: "profiles" },
   { id: "conflicts", label: "Changes", icon: "conflicts" },
   { id: "settings", label: "Settings", icon: "settings" },
@@ -77,6 +82,10 @@ export default function App() {
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<ConflictView[]>([]);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [updates, setUpdates] = useState<UpdateCheckView | null>(null);
+  const [checkingUpdates, setCheckingUpdates] = useState(false);
+  const [updateBusyId, setUpdateBusyId] = useState<string | null>(null);
+  const [nexusPremium, setNexusPremium] = useState(false);
 
   const { push } = useToast();
   const appearance = useAppearance();
@@ -174,6 +183,59 @@ export default function App() {
     if (!IS_TAURI || screen !== "downloads") return;
     refreshDownloads().catch(fail);
   }, [screen, refreshDownloads, fail]);
+
+
+  /* ---------------------------------------------------------- updates --- */
+
+  // Deliberately not run on mount or on a screen change: this is one Nexus API
+  // request per linked mod, against an hourly quota shared with downloads.
+  const checkUpdates = useCallback(async () => {
+    const gameId = activeGameRef.current;
+    if (!gameId) return;
+    setCheckingUpdates(true);
+    try {
+      // Premium decides whether the manager may fetch the file itself or has to
+      // send the user to the mod page, so the row cannot be drawn without it.
+      const [status, result] = await Promise.all([
+        api.nexusStatus(),
+        api.checkModUpdates(gameId),
+      ]);
+      setNexusPremium(status.isPremium);
+      setUpdates(result);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setCheckingUpdates(false);
+    }
+  }, [fail]);
+
+  const downloadUpdate = useCallback(
+    async (u: ModUpdateView) => {
+      if (u.newFileId === null) return;
+      setUpdateBusyId(u.id);
+      try {
+        await api.downloadModUpdate(u.domain, u.nexusModId, u.newFileId);
+        await refreshDownloads();
+        push(`Downloading ${u.name}. It will wait in Downloads.`, "ok");
+      } catch (e) {
+        fail(e);
+      } finally {
+        setUpdateBusyId(null);
+      }
+    },
+    [fail, push, refreshDownloads],
+  );
+
+  const openUpdatePage = useCallback(
+    async (u: ModUpdateView) => {
+      try {
+        await api.openModPage(u.domain, u.nexusModId, u.newFileId ?? undefined);
+      } catch (e) {
+        fail(e);
+      }
+    },
+    [fail],
+  );
 
   /* ------------------------------------------------- nexus download link --- */
 
@@ -722,6 +784,16 @@ export default function App() {
                     onRemove={removeDownload}
                     onRefresh={() => refreshDownloads().catch(fail)}
                   />
+                ) : screen === "updates" ? (
+                  <UpdatesScreen
+                    result={updates}
+                    checking={checkingUpdates}
+                    isPremium={nexusPremium}
+                    busyId={updateBusyId}
+                    onCheck={() => void checkUpdates()}
+                    onDownload={(u) => void downloadUpdate(u)}
+                    onOpenPage={(u) => void openUpdatePage(u)}
+                  />
                 ) : screen === "profiles" ? (
                   <ProfilesScreen
                     profiles={profiles}
@@ -902,6 +974,7 @@ function TopBar({
     mods: "Mods",
     order: "Load order",
     downloads: "Downloads",
+    updates: "Updates",
     profiles: "Profiles",
     conflicts: "Changes",
     settings: "Settings",

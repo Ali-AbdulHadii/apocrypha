@@ -21,9 +21,13 @@
 pub mod api;
 pub mod protocol;
 pub mod sso;
+pub mod updates;
 pub mod url;
 
-pub use api::{DownloadLink, NexusClient, NexusError, RateLimits, UserInfo};
+pub use api::{
+    DownloadLink, FileUpdate, ModFile, ModFiles, NexusClient, NexusError, RateLimits, UserInfo,
+};
+pub use updates::{pick_update, UpdateStatus};
 pub use protocol::{register, status as protocol_status, unregister, Registration};
 pub use sso::{sign_in, SsoError, SsoObserver, SsoResult};
 pub use url::{parse as parse_nxm, NxmError, NxmLink, NxmTarget};

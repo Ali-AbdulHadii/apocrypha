@@ -245,6 +245,174 @@ pub fn parse_nxm_link(url: String) -> CmdResult<NxmLinkView> {
     })
 }
 
+/// What a check found for one mod.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModUpdateView {
+    /// The local mod id, not the Nexus one.
+    pub id: String,
+    pub name: String,
+    pub current_version: Option<String>,
+    /// `upToDate`, `available`, `unknown`, or `error`.
+    pub status: String,
+    pub domain: String,
+    pub nexus_mod_id: u64,
+    pub new_file_id: Option<u64>,
+    pub new_version: Option<String>,
+    pub new_file_name: Option<String>,
+    pub error: Option<String>,
+}
+
+/// The outcome of checking a whole library.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateCheckView {
+    pub results: Vec<ModUpdateView>,
+    /// Mods that were not checked because the quota ran out first. Reported so
+    /// the interface can say the answer is partial rather than implying that
+    /// everything else is up to date.
+    pub skipped: usize,
+    pub stopped_for_quota: bool,
+    pub hourly_remaining: Option<u32>,
+    pub daily_remaining: Option<u32>,
+    /// Mods with no Nexus provenance — imported from a local file — which can
+    /// never be checked.
+    pub uncheckable: usize,
+}
+
+/// Leave a little quota unspent so a check does not consume the budget the
+/// download it suggests will need.
+const QUOTA_HEADROOM: u32 = 5;
+
+/// Ask Nexus whether any installed mod has a newer file.
+///
+/// One request per mod, so this is the most quota-expensive thing the app does.
+/// It stops as soon as the remaining hourly or daily allowance reaches
+/// [`QUOTA_HEADROOM`] and reports how many mods it never got to, because a
+/// check that silently examined half a library and said "all up to date" would
+/// be worse than one that admits it ran out.
+#[tauri::command(async)]
+pub fn check_mod_updates(state: State<AppState>, game_id: String) -> CmdResult<UpdateCheckView> {
+    let profile = crate::commands::game_profile(&game_id)?;
+    let domain = profile.nexus_domain.clone().ok_or_else(|| {
+        format!(
+            "{} has no Nexus Mods domain, so it cannot be checked.",
+            profile.name
+        )
+    })?;
+
+    // Snapshot what needs checking, then release the lock: the HTTP calls below
+    // take seconds each and must not hold the store while they run.
+    let (linked, names, total_mods) = {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        let linked = store.nexus_linked_mods(&game_id).map_err(|e| e.to_string())?;
+        let mods = store.list_mods(&game_id).map_err(|e| e.to_string())?;
+        let total = mods.len();
+        let names: std::collections::HashMap<String, (String, Option<String>)> = mods
+            .into_iter()
+            .map(|m| (m.id, (m.name, m.version)))
+            .collect();
+        (linked, names, total)
+    };
+
+    let client = client(&state)?;
+    let mut results = Vec::new();
+    let mut stopped_for_quota = false;
+    let mut hourly_remaining = None;
+    let mut daily_remaining = None;
+    let mut checked = 0usize;
+
+    for (local_id, nexus_mod_id, nexus_file_id) in &linked {
+        let (name, current_version) = names
+            .get(local_id)
+            .cloned()
+            .unwrap_or_else(|| (local_id.clone(), None));
+
+        let mut view = ModUpdateView {
+            id: local_id.clone(),
+            name,
+            current_version,
+            status: "upToDate".into(),
+            domain: domain.clone(),
+            nexus_mod_id: *nexus_mod_id as u64,
+            new_file_id: None,
+            new_version: None,
+            new_file_name: None,
+            error: None,
+        };
+
+        match client.mod_files(&domain, *nexus_mod_id as u64) {
+            Ok((files, limits)) => {
+                hourly_remaining = limits.hourly_remaining.or(hourly_remaining);
+                daily_remaining = limits.daily_remaining.or(daily_remaining);
+
+                match apoc_nexus::pick_update(&files, *nexus_file_id as u64) {
+                    apoc_nexus::UpdateStatus::UpToDate => {}
+                    apoc_nexus::UpdateStatus::Available(f) => {
+                        view.status = "available".into();
+                        view.new_file_id = Some(f.file_id);
+                        view.new_version = f.version.clone();
+                        view.new_file_name = Some(f.file_name.clone());
+                    }
+                    apoc_nexus::UpdateStatus::Unknown => view.status = "unknown".into(),
+                }
+                checked += 1;
+
+                let low = |v: Option<u32>| v.is_some_and(|r| r <= QUOTA_HEADROOM);
+                if low(limits.hourly_remaining) || low(limits.daily_remaining) {
+                    results.push(view);
+                    stopped_for_quota = true;
+                    break;
+                }
+            }
+            Err(e) => {
+                // One mod failing is not the check failing. A deleted mod page
+                // returns 404 and should be reported against that row rather
+                // than abandoning every mod after it.
+                let rate_limited = matches!(e, apoc_nexus::NexusError::RateLimited(_));
+                view.status = "error".into();
+                view.error = Some(e.to_string());
+                checked += 1;
+                results.push(view);
+                if rate_limited {
+                    stopped_for_quota = true;
+                    break;
+                }
+                continue;
+            }
+        }
+
+        results.push(view);
+    }
+
+    Ok(UpdateCheckView {
+        skipped: linked.len().saturating_sub(checked),
+        stopped_for_quota,
+        hourly_remaining,
+        daily_remaining,
+        uncheckable: total_mods.saturating_sub(linked.len()),
+        results,
+    })
+}
+
+/// Download a newer file for a mod already in the library.
+///
+/// Only a premium account can reach this: the API refuses an unattended
+/// download-link request without a website-minted token, which is the same
+/// constraint the initial download has. A free account is sent to the mod page
+/// instead, exactly as it is for a first download.
+#[tauri::command(async)]
+pub fn download_mod_update(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    domain: String,
+    nexus_mod_id: u64,
+    file_id: u64,
+) -> CmdResult<Download> {
+    let client = client(&state)?;
+    spawn_download(app, &state, &client, &domain, nexus_mod_id, file_id, None)
+}
+
 /// Open a mod page in the browser so the user can press "Mod Manager Download".
 #[tauri::command(async)]
 pub fn open_mod_page(domain: String, mod_id: u64, file_id: Option<u64>) -> CmdResult<String> {
@@ -369,15 +537,33 @@ pub fn start_nxm_download(
         _ => None,
     };
 
+    spawn_download(app, &state, &client, &link.domain, mod_id, file_id, token)
+}
+
+/// Resolve a file to a CDN URL and start fetching it on its own thread.
+///
+/// Shared by the `nxm://` handler and the update flow, which differ only in
+/// where the file id came from and whether a token is needed: a link from the
+/// website carries one, a premium account does not need one.
+#[allow(clippy::too_many_arguments)]
+fn spawn_download(
+    app: tauri::AppHandle,
+    state: &AppState,
+    client: &NexusClient,
+    domain: &str,
+    mod_id: u64,
+    file_id: u64,
+    token: Option<(&str, u64)>,
+) -> CmdResult<Download> {
     let (links, _limits) = client
-        .download_link(&link.domain, mod_id, file_id, token)
+        .download_link(domain, mod_id, file_id, token)
         .map_err(|e| e.to_string())?;
     let cdn = links
         .first()
         .ok_or_else(|| "Nexus Mods returned no download location.".to_string())?;
 
     let file_name = client
-        .file_info(&link.domain, mod_id, file_id)
+        .file_info(domain, mod_id, file_id)
         .map(|(info, _)| info.file_name)
         .unwrap_or_else(|_| format!("nexus-{mod_id}-{file_id}.zip"));
 
