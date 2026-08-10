@@ -136,6 +136,18 @@
 
   --shadow-sm: 0 1px 2px hsl(190 30% 1% / 0.5);
   --shadow: 0 2px 8px hsl(190 30% 1% / 0.5);
+  /* Cover art. The hue comes per-card from the mod's slug; every other value
+     is the theme's. Fixed near-black values here would put a dark slab on
+     every card in light mode, which is what made this the one element on the
+     website that ignored the theme entirely. */
+  --cover-tint-l: 20%;
+  --cover-tint-l2: 15%;
+  --cover-base-s: 22%;
+  --cover-base-l: 9%;
+  --cover-mark: hsl(var(--cover-h, 190) 55% 72% / 0.16);
+  --cover-sheen: linear-gradient(180deg, hsl(0 0% 100% / 0.04), transparent 40%,
+    hsl(190 30% 2% / 0.35));
+
   --shadow-lg: 0 8px 32px hsl(190 30% 1% / 0.6);
 
   --scrim: hsl(190 30% 2% / 0.72);
@@ -185,6 +197,16 @@
 
   --shadow-sm: 0 1px 2px hsl(190 16% 40% / 0.08);
   --shadow: 0 2px 8px hsl(190 16% 40% / 0.08);
+  /* Covers become pale washes rather than dark slabs: the same per-card hue,
+     read as tinted paper instead of tinted ink. */
+  --cover-tint-l: 88%;
+  --cover-tint-l2: 92%;
+  --cover-base-s: 30%;
+  --cover-base-l: 96%;
+  --cover-mark: hsl(var(--cover-h, 190) 45% 32% / 0.14);
+  --cover-sheen: linear-gradient(180deg, hsl(0 0% 100% / 0.5), transparent 45%,
+    hsl(190 20% 40% / 0.12));
+
   --shadow-lg: 0 8px 32px hsl(190 16% 30% / 0.14);
 
   --scrim: hsl(190 16% 20% / 0.32);

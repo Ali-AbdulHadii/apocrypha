@@ -1705,3 +1705,155 @@ img.lib-row-art {
   object-position: center 30%;
   background: var(--bg-sunken);
 }
+
+/* ------------------------------------------------------------- browse --- */
+
+/* The option-grid shape from the design system (4.3), widened so it lands on
+   four across at a normal window and reflows to three, then two, as the window
+   narrows. `auto-fill` rather than `auto-fit` for the same reason options use
+   it: a single result should stay card-sized instead of stretching to 900px. */
+.browse-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--sp-4);
+  align-items: start;
+}
+
+.browse-card {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  /* So the cover's corners follow the card's. */
+  overflow: hidden;
+}
+
+/* 16:9, which is the ratio the service's own image variants will be cut to.
+   Fixing it now means real artwork drops in without the grid reflowing. */
+.browse-card-art {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: var(--bg-sunken);
+}
+
+.browse-card-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  padding: var(--sp-3) var(--sp-4);
+  /* Pushes the footer down so buttons line up across a row of cards whose
+     summaries are different lengths. */
+  flex: 1;
+}
+
+.browse-card-name {
+  margin: 0;
+  font-size: var(--text-md);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  /* One line: a wrapped title makes every card in the row a different height,
+     and the ellipsis is recoverable through the tooltip. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browse-card-by,
+.browse-card-facts {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+}
+
+.browse-card-summary {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: var(--leading);
+  /* Two lines, then stop. Summaries are creator-written and range from a phrase
+     to a paragraph; without a clamp one verbose mod sets the height of its
+     whole row. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.browse-card-facts {
+  margin-top: auto;
+  padding-top: var(--sp-2);
+}
+
+.browse-card-foot {
+  display: flex;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-4) var(--sp-4);
+}
+.browse-card-foot .btn {
+  flex: 1;
+}
+
+.browse-card-files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-3) var(--sp-4) var(--sp-4);
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
+
+.browse-file {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+
+.browse-file-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+}
+
+.browse-file-name {
+  font-size: var(--text-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The explanatory sentence under the grid, matching the grouped list's note. */
+.browse-note {
+  font-size: var(--text-xs);
+  color: var(--text-tertiary);
+  max-width: 60ch;
+}
+
+/* --- Procedural cover ----------------------------------------------------- */
+
+/* --cover-h / --cover-h2 come from the card; every other value is the theme's. */
+.cover {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(120% 100% at 0% 0%,
+      hsl(var(--cover-h, 190) 42% var(--cover-tint-l) / 0.95), transparent 62%),
+    radial-gradient(120% 100% at 100% 100%,
+      hsl(var(--cover-h2, 236) 46% var(--cover-tint-l2) / 0.85), transparent 58%),
+    hsl(var(--cover-h, 190) var(--cover-base-s) var(--cover-base-l));
+}
+
+.cover-mark {
+  position: absolute;
+  right: -12px;
+  bottom: -18px;
+  color: var(--cover-mark);
+  line-height: 0;
+}
+
+.cover-sheen {
+  position: absolute;
+  inset: 0;
+  background: var(--cover-sheen);
+}

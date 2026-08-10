@@ -174,6 +174,20 @@ export interface CatalogPageView {
   total: number;
 }
 
+/**
+ * A game as the service lists it. Its slug is the service's, which is not this
+ * app's game id — the catalogues are maintained separately, so anything
+ * filtering by game matches against this rather than assuming the two
+ * identifier spaces agree.
+ */
+export interface CatalogGameView {
+  id: string;
+  slug: string;
+  name: string;
+  summary: string;
+  modCount: number;
+}
+
 export interface CatalogFileView {
   id: string;
   fileName: string;
@@ -474,6 +488,7 @@ export const api = {
   browseApocryphaMods: (game: string | null, search: string | null, page: number) =>
     call<CatalogPageView>("browse_apocrypha_mods", { game, search, page }),
   /** One mod with its releases and files. A second request, made on demand. */
+  apocryphaGames: () => call<CatalogGameView[]>("apocrypha_games"),
   apocryphaModDetail: (gameSlug: string, modSlug: string) =>
     call<CatalogModDetailView>("apocrypha_mod_detail", { gameSlug, modSlug }),
   apocryphaDownloadQuota: () => call<DownloadQuotaView>("apocrypha_download_quota"),

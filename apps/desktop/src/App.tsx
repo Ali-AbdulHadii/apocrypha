@@ -893,6 +893,10 @@ export default function App() {
                 ) : screen === "browse" ? (
                   <BrowseScreen
                     signedIn={apocryphaSignedIn}
+                    // Scoped to whatever Library is on, so the catalogue is
+                    // about the game the rest of the window is about.
+                    gameId={activeGameId}
+                    gameName={activeGame?.name ?? null}
                     onSignIn={() => setScreen("account")}
                     onError={fail}
                   />
