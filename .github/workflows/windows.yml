@@ -103,17 +103,46 @@ jobs:
       # The bundle targets in tauri.conf.json are appimage and deb, which are
       # the shipping targets and are left alone. Windows bundles are named here
       # instead, so this workflow cannot change what a Linux release produces.
+      # Signing, when there is something to sign with.
+      #
+      # Unsigned, SmartScreen warns on first run and most people stop there —
+      # which is the correct instinct about an unsigned installer from the
+      # internet. Fixing it needs a certificate tied to a real identity, and no
+      # amount of code produces one: an OV certificate means business
+      # verification, EV adds a hardware token, and Azure Trusted Signing means
+      # an Azure subscription and an identity check. A self-signed certificate
+      # is worse than none, because it still warns and additionally looks like
+      # somebody impersonating the publisher.
+      #
+      # So the wiring is here and inert. Add WINDOWS_CERTIFICATE (a base64 PFX)
+      # and WINDOWS_CERTIFICATE_PASSWORD as repository secrets and every build
+      # from then on is signed, with no other change. Without them the build
+      # still succeeds and still produces an installer — it just warns, and the
+      # step below says so out loud rather than leaving it to be discovered.
+      - name: Report signing status
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.WINDOWS_CERTIFICATE }}" ]; then
+            echo "Signing certificate present; the installer will be signed."
+          else
+            echo "::warning::No signing certificate configured. The installer is UNSIGNED and SmartScreen will warn on first run. Set the WINDOWS_CERTIFICATE and WINDOWS_CERTIFICATE_PASSWORD secrets to change that."
+          fi
+
       - name: Build
         working-directory: apps/desktop
+        env:
+          # Tauri picks these up and signs the bundle itself. Empty is the same
+          # as absent to it, so this is safe with no secrets set.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.WINDOWS_CERTIFICATE }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         run: npm run tauri build -- --bundles nsis
 
-      # Uploaded rather than released. It is unsigned, so Windows will warn on
-      # first run, and nothing about it has been tried by a person yet — that is
-      # what it is for.
+      # Uploaded rather than released. Nothing about it has been tried by a
+      # person yet, which is what it is for.
       - name: Collect installer
         uses: actions/upload-artifact@v4
         with:
-          name: apocrypha-windows-unsigned
+          name: apocrypha-windows
           # The workspace root's target/, not the crate's: apps/desktop/src-tauri
           # is a workspace member, so cargo puts its artifacts alongside every
           # other crate's rather than under the app.
