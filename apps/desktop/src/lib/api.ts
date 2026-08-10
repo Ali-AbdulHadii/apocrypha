@@ -154,6 +154,25 @@ export interface UpdateCheckView {
   uncheckable: number;
 }
 
+export interface ApocryphaAccountView {
+  signedIn: boolean;
+  deviceName: string | null;
+  expiresAt: string | null;
+  serviceOrigin: string;
+}
+
+export interface PairingStartedView {
+  deviceCode: string;
+  userCodeDisplay: string;
+  approvalUrl: string;
+  expiresInSeconds: number;
+  pollIntervalSeconds: number;
+}
+
+export interface PairingPollView {
+  status: "pending" | "slowDown" | "granted";
+}
+
 export type InstallKind = "appImage" | "package" | "source";
 
 export interface AppUpdateView {
@@ -360,6 +379,14 @@ export const api = {
    * "we do not know" comes back as available: false.
    */
   checkAppUpdate: () => call<AppUpdateView>("check_app_update"),
+
+  /* Apocrypha account */
+  apocryphaAccount: () => call<ApocryphaAccountView>("apocrypha_account"),
+  startApocryphaPairing: () => call<PairingStartedView>("start_apocrypha_pairing"),
+  /** One poll. The token never comes back here; Rust stores it. */
+  pollApocryphaPairing: (deviceCode: string) =>
+    call<PairingPollView>("poll_apocrypha_pairing", { deviceCode }),
+  signOutApocrypha: () => call<ApocryphaAccountView>("sign_out_apocrypha"),
 
   /* Nexus Mods */
   nexusStatus: () => call<NexusStatusView>("nexus_status"),

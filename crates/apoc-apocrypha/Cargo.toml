@@ -1,0 +1,21 @@
+[package]
+name = "apoc-apocrypha"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Client for the Apocrypha service: device pairing, and the catalogue behind it."
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+# rustls rather than native-tls so the build does not depend on system OpenSSL,
+# matching apoc-nexus.
+ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
+
+[features]
+# Points the client at a local API instead of the real service. A compile-time
+# feature rather than a setting, so a release build cannot be aimed at plain
+# HTTP on localhost by a config file or a crafted link.
+local-service = []

@@ -21,6 +21,7 @@ apoc-steam = { path = "../../../crates/apoc-steam" }
 apoc-deploy = { path = "../../../crates/apoc-deploy" }
 apoc-storage = { path = "../../../crates/apoc-storage" }
 apoc-nexus = { path = "../../../crates/apoc-nexus" }
+apoc-apocrypha = { path = "../../../crates/apoc-apocrypha" }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"

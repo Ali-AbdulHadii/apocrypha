@@ -71,6 +71,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
+name = "apoc-apocrypha"
+version = "0.5.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "ureq",
+]
+
+[[package]]
 name = "apoc-cli"
 version = "0.5.0"
 dependencies = [
@@ -165,6 +175,7 @@ dependencies = [
 name = "apocrypha-desktop"
 version = "0.5.0"
 dependencies = [
+ "apoc-apocrypha",
  "apoc-deploy",
  "apoc-domain",
  "apoc-gamedef",

@@ -3,6 +3,7 @@
 //! Tauri is a thin adapter over `apoc-*`: it owns no mod-management logic, so the
 //! UI layer can be replaced without touching the engines.
 
+mod account_cmds;
 mod app_update;
 mod commands;
 mod deploy_cmds;
@@ -149,6 +150,10 @@ pub fn run() {
             nexus_cmds::nexus_sign_in,
             nexus_cmds::set_sso_application,
             check_app_update,
+            account_cmds::apocrypha_account,
+            account_cmds::start_apocrypha_pairing,
+            account_cmds::poll_apocrypha_pairing,
+            account_cmds::sign_out_apocrypha,
         ])
         .setup(|app| {
             use tauri::{Emitter, Manager};

@@ -14,6 +14,7 @@ import { Splash } from "./components/Splash";
 import { TitleBar } from "./components/TitleBar";
 import { DownloadsScreen } from "./components/DownloadsScreen";
 import { UpdatesScreen } from "./components/UpdatesScreen";
+import { ApocryphaAccount } from "./components/ApocryphaAccount";
 import { Chip, Spinner, pageMotion, useToast } from "./components/ui";
 import {
   api,
@@ -49,6 +50,7 @@ type Screen =
   | "downloads"
   | "updates"
   | "profiles"
+  | "account"
   | "conflicts"
   | "settings";
 
@@ -59,6 +61,7 @@ const NAV: { id: Screen; label: string; icon: IconName }[] = [
   { id: "downloads", label: "Downloads", icon: "downloads" },
   { id: "updates", label: "Updates", icon: "refresh" },
   { id: "profiles", label: "Profiles", icon: "profiles" },
+  { id: "account", label: "Account", icon: "account" },
   { id: "conflicts", label: "Changes", icon: "conflicts" },
   { id: "settings", label: "Settings", icon: "settings" },
 ];
@@ -819,6 +822,13 @@ export default function App() {
                     onDownload={(u) => void downloadUpdate(u)}
                     onOpenPage={(u) => void openUpdatePage(u)}
                   />
+                ) : screen === "account" ? (
+                  <div className="stack">
+                    <div className="lib-section">
+                      <div className="lib-group-label">Apocrypha</div>
+                      <ApocryphaAccount onError={fail} onInfo={push} />
+                    </div>
+                  </div>
                 ) : screen === "profiles" ? (
                   <ProfilesScreen
                     profiles={profiles}
@@ -1005,6 +1015,7 @@ function TopBar({
     downloads: "Downloads",
     updates: "Updates",
     profiles: "Profiles",
+    account: "Account",
     conflicts: "Changes",
     settings: "Settings",
   };

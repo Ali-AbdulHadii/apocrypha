@@ -224,3 +224,38 @@
 .set-total {
   background: var(--bg-sunken);
 }
+
+/* ------------------------------------------------------ device pairing --- */
+/*
+ * While a pairing is in flight the code is the only thing on screen worth
+ * looking at, because the only thing to do with it is compare it against the
+ * browser. Everything else is caption.
+ */
+.pair-panel {
+  padding: var(--sp-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-3);
+}
+
+.pair-eyebrow {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-tertiary);
+}
+
+.pair-code {
+  font-family: var(--font-mono);
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--text-primary);
+  user-select: all;
+}
+
+.pair-hint {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: var(--leading);
+}

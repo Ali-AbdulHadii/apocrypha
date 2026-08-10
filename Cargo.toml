@@ -8,6 +8,7 @@ members = [
     "crates/apoc-deploy",
     "crates/apoc-storage",
     "crates/apoc-nexus",
+    "crates/apoc-apocrypha",
     "crates/apoc-cli",
     "apps/desktop/src-tauri",
 ]

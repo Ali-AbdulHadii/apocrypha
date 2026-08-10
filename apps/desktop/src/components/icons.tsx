@@ -98,6 +98,13 @@ export const Icon = {
       <path d="M5 12h14" />
     </>,
   ),
+  account: make(
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <circle cx="12" cy="10" r="3" />
+      <path d="M6.2 18.4a6.5 6.5 0 0 1 11.6 0" />
+    </>,
+  ),
   check: make(<path d="m5 13 4 4L19 7" />),
   search: make(
     <>
