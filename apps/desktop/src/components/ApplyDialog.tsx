@@ -15,11 +15,13 @@ import { motion } from "framer-motion";
 import { Icon } from "./icons";
 import { Spinner } from "./ui";
 import {
+  api,
   formatBytes,
   type ApplyProgressView,
   type DeployResultView,
   type RollbackView,
 } from "../lib/api";
+import { supportMailto } from "../lib/support";
 
 export interface ApplyState {
   /** "reverting" and "linking" come from the engine; the rest are local. */
@@ -123,6 +125,25 @@ export function ApplyDialog({
               <div>
                 <div className="notice-title">Nothing was changed</div>
                 <div className="notice-body">{state.error}</div>
+                {/* A failed apply is the one place the app cannot tell someone
+                    what to do next: the cause is usually outside it — a
+                    permission, a full disk, a game updating underneath. The
+                    journal is the evidence anyone helping will ask for, so it
+                    is named here rather than left to be discovered. */}
+                <div className="card-hint" style={{ marginTop: "var(--sp-2)" }}>
+                  The journal under ~/.local/share/apocrypha/ records exactly what
+                  was attempted.{" "}
+                  <a
+                    href={supportMailto("apply failed")}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void api.openUrl(supportMailto("apply failed"));
+                    }}
+                  >
+                    Get in touch
+                  </a>{" "}
+                  if this keeps happening.
+                </div>
               </div>
             </div>
           ) : state.cancelled ? (

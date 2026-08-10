@@ -11,12 +11,11 @@
  * else changed overwrites that change, and only the person using the app can
  * decide that is what they want.
  */
-
 import { useState } from "react";
 import { api, type FileVerdictView, type VerifyReportView } from "../lib/api";
 import { Icon } from "./icons";
 import { Chip, Spinner } from "./ui";
-
+import { supportMailto } from "../lib/support";
 export function HealthCheck({
   gameId,
   onError,
@@ -30,7 +29,6 @@ export function HealthCheck({
   const [checking, setChecking] = useState(false);
   const [repairing, setRepairing] = useState(false);
   const [chosen, setChosen] = useState<Set<string>>(new Set());
-
   async function check() {
     if (!gameId) return;
     setChecking(true);
@@ -48,7 +46,6 @@ export function HealthCheck({
       setChecking(false);
     }
   }
-
   async function repair() {
     if (!gameId || chosen.size === 0) return;
     setRepairing(true);
@@ -68,7 +65,6 @@ export function HealthCheck({
       setRepairing(false);
     }
   }
-
   function toggle(path: string) {
     setChosen((prev) => {
       const next = new Set(prev);
@@ -77,10 +73,8 @@ export function HealthCheck({
       return next;
     });
   }
-
   const busy = checking || repairing;
   const repairable = report?.problems.filter((p) => p.repairable) ?? [];
-
   return (
     <div className="card stack">
       <div className="row">
@@ -95,7 +89,6 @@ export function HealthCheck({
           {checking ? <Spinner /> : <Icon.refresh size={14} />} Check now
         </button>
       </div>
-
       {report && (
         <>
           <div className="row" style={{ gap: "var(--sp-3)" }}>
@@ -112,7 +105,6 @@ export function HealthCheck({
               </>
             )}
           </div>
-
           {!report.intact && (
             <>
               <div className="file-list">
@@ -126,7 +118,6 @@ export function HealthCheck({
                   />
                 ))}
               </div>
-
               <div className="row">
                 <button
                   className="btn primary"
@@ -142,6 +133,25 @@ export function HealthCheck({
                     : "Changed files are left unticked, because putting one back discards whatever changed it."}
                 </span>
               </div>
+
+              {/* Only when something genuinely cannot be put back. A support
+                  address next to a problem the app is about to fix itself is
+                  noise, and teaches people to ignore it when it matters. */}
+              {repairable.length < report.problems.length && (
+                <span className="card-hint">
+                  Stuck with a file that cannot be put back?{" "}
+                  <a
+                    href={supportMailto("file cannot be repaired")}
+                    onClick={(e) => {
+                      e.preventDefault();
+                      void api.openUrl(supportMailto("file cannot be repaired"));
+                    }}
+                  >
+                    Get in touch
+                  </a>
+                  .
+                </span>
+              )}
             </>
           )}
         </>
@@ -149,7 +159,6 @@ export function HealthCheck({
     </div>
   );
 }
-
 function ProblemRow({
   problem,
   checked,

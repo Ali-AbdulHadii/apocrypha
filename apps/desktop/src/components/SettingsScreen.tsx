@@ -36,6 +36,7 @@ import { ACCENT_PRESETS, type useAppearance } from "../lib/appearance";
 import { useTheme, type ThemeMode } from "../lib/theme";
 import { Icon } from "./icons";
 import { Chip, Segmented, Switch, pageMotion } from "./ui";
+import { SupportAddress, supportMailto } from "../lib/support";
 
 export interface SettingsScreenProps {
   settings: SettingsView | null;
@@ -973,6 +974,15 @@ function AppUpdateGroup() {
               </button>
             ) : null}
           </div>
+        }
+      />
+      <Row
+        label="Support"
+        desc="For anything the app cannot sort out itself. Bugs are better as issues on GitHub, where someone else hitting the same thing can find them."
+        control={
+          <button className="btn sm" onClick={() => void api.openUrl(supportMailto())}>
+            {SupportAddress}
+          </button>
         }
       />
     </Group>
