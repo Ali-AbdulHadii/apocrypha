@@ -17,7 +17,17 @@
     "core:window:allow-set-focus",
     "dialog:allow-open",
     "dialog:allow-message",
-    "opener:allow-open-url",
+    {
+      "identifier": "opener:allow-open-url",
+      "allow": [
+        {
+          "url": "https://apocryphamods.com/*"
+        },
+        {
+          "url": "https://github.com/Ali-AbdulHadii/apocrypha/*"
+        }
+      ]
+    },
     "deep-link:default"
   ]
 }
