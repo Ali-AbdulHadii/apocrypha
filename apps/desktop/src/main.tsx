@@ -11,6 +11,7 @@ import "./styles/app.css";
 // without having to out-specify them.
 import "./styles/order.css";
 import "./styles/settings.css";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 // Apply saved appearance before the first paint so there is no flash of the
 // default theme on startup.
@@ -21,7 +22,12 @@ ReactDOM.createRoot(document.getElementById("root")!).render(
     <ThemeProvider>
       <ToastProvider>
         <LightboxProvider>
-          <App />
+          {/* Outermost so nothing can white-screen the window. Inner
+              boundaries can be added per screen later; this one is the
+              difference between a message and an empty window. */}
+          <ErrorBoundary>
+            <App />
+          </ErrorBoundary>
         </LightboxProvider>
       </ToastProvider>
     </ThemeProvider>
