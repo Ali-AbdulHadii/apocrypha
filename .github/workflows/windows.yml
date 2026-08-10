@@ -1,0 +1,120 @@
+name: Windows
+
+# The engine has never executed on Windows. Everything about it was written and
+# tested on Linux, including three safety invariants the whole product rests on
+# — vault before overwrite, journal before it counts, hash-guarded deletion —
+# and none of them has ever run against NTFS, a case-insensitive filesystem, or
+# a privilege model where creating a symlink needs Developer Mode.
+#
+# So this workflow exists to answer one question before anyone is asked to trust
+# a Windows build: do the tests pass there? The installer it produces is
+# secondary, and deliberately not published — see `release.yml` for what
+# shipping looks like.
+#
+# The repository still ships Linux only. This is the evidence that a port is
+# possible, gathered before committing to one.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The interesting way to run it: build an installer from any branch and go and
+  # try it, without tagging anything.
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  engine:
+    name: Engine tests
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-engine
+
+      # The engine crates only. `--workspace` would pull in the Tauri crate,
+      # which needs the frontend built first — that is the other job's business,
+      # and a failure there would obscure the answer this one exists to give.
+      #
+      # Filesystem tests use tempfile and assume nothing about the machine, so
+      # they should hold here. Where they do not, that is the finding.
+      - name: Tests
+        run: >
+          cargo test
+          -p apoc-domain
+          -p apoc-gamedef
+          -p apoc-modengine
+          -p apoc-steam
+          -p apoc-deploy
+          -p apoc-storage
+          -p apoc-nexus
+          -p apoc-apocrypha
+
+      # Warnings denied here as on Linux. A cfg-gated branch that only compiles
+      # on one platform is exactly the kind of thing that rots unnoticed, and
+      # this is the only place it gets looked at.
+      - name: Clippy
+        run: >
+          cargo clippy
+          -p apoc-domain -p apoc-gamedef -p apoc-modengine -p apoc-steam
+          -p apoc-deploy -p apoc-storage -p apoc-nexus -p apoc-apocrypha
+          --all-targets -- -D warnings
+
+  installer:
+    name: Installer
+    runs-on: windows-2022
+    timeout-minutes: 60
+    # No point bundling an application whose engine does not pass its own tests.
+    needs: engine
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/desktop/package-lock.json
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: windows-installer
+
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: npm ci
+
+      # The bundle targets in tauri.conf.json are appimage and deb, which are
+      # the shipping targets and are left alone. Windows bundles are named here
+      # instead, so this workflow cannot change what a Linux release produces.
+      - name: Build
+        working-directory: apps/desktop
+        run: npm run tauri build -- --bundles nsis
+
+      # Uploaded rather than released. It is unsigned, so Windows will warn on
+      # first run, and nothing about it has been tried by a person yet — that is
+      # what it is for.
+      - name: Collect installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: apocrypha-windows-unsigned
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+          if-no-files-found: error
+          retention-days: 14

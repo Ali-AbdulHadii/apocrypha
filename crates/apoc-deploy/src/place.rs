@@ -22,6 +22,14 @@ pub struct Ladder {
 impl Default for Ladder {
     /// Reflink, then hardlink, then copy. Symlinks are opt-in because some tools
     /// (and Windows-side game code under Proton) treat them inconsistently.
+    ///
+    /// The same three rungs on every platform, and that is deliberate: reflink
+    /// asks the filesystem and fails harmlessly where it is not supported
+    /// (which on Windows is everything but ReFS), and hardlinks work on NTFS
+    /// within a volume exactly as they do on ext4 within a mount. The ladder was
+    /// always a question put to the filesystem rather than to the operating
+    /// system, so it needs no per-platform variant — only `with_symlinks` does,
+    /// and that one is already opt-in.
     fn default() -> Self {
         Ladder {
             methods: vec![
@@ -42,6 +50,11 @@ impl Ladder {
     }
 
     /// Include symlinks (space-saving across mount boundaries).
+    ///
+    /// Worth knowing before offering this on Windows: creating a symlink there
+    /// requires Developer Mode or elevation, so for most users the rung fails
+    /// and the ladder falls through to a copy. That is safe but silent — the
+    /// setting appears to do nothing rather than announcing why.
     pub fn with_symlinks() -> Self {
         Ladder {
             methods: vec![
@@ -58,9 +71,27 @@ fn try_method(method: DeployMethod, src: &Path, dest: &Path) -> io::Result<()> {
     match method {
         DeployMethod::Reflink => reflink_copy::reflink(src, dest),
         DeployMethod::Hardlink => fs::hard_link(src, dest),
-        DeployMethod::Symlink => std::os::unix::fs::symlink(src, dest),
+        DeployMethod::Symlink => symlink_file(src, dest),
         DeployMethod::Copy => fs::copy(src, dest).map(|_| ()),
     }
+}
+
+/// A file symlink, spelled per platform.
+///
+/// The two are not equivalent in practice, which is why this is a function
+/// rather than a `use`. On Unix any process may create one. On Windows it needs
+/// either Developer Mode or elevation, so the call fails for ordinary users with
+/// a permission error — which is correct behaviour for the ladder, since it
+/// simply moves down to the next rung, but means a symlink there is a fallback
+/// nobody should plan around.
+#[cfg(unix)]
+fn symlink_file(src: &Path, dest: &Path) -> io::Result<()> {
+    std::os::unix::fs::symlink(src, dest)
+}
+
+#[cfg(windows)]
+fn symlink_file(src: &Path, dest: &Path) -> io::Result<()> {
+    std::os::windows::fs::symlink_file(src, dest)
 }
 
 /// Place `src` at `dest`, trying each allowed method in order.

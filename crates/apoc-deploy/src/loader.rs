@@ -10,7 +10,9 @@
 
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(unix)]
+use std::path::PathBuf;
 
 const OVERRIDES_SECTION: &str = r"[Software\\Wine\\DllOverrides]";
 
@@ -171,6 +173,14 @@ fn remove_override(text: &str, dll_name: &str) -> String {
 
 /// Is Steam currently running? Editing prefix/config files under a live Steam is
 /// unsafe, so callers refuse rather than risk clobbering.
+///
+/// Implemented per platform rather than left to fail. The `/proc` walk below
+/// simply returns `false` on Windows, where there is no `/proc` — so a check
+/// whose entire purpose is to refuse would have quietly started permitting
+/// everything, on the platform where nobody had tested it. A safety check that
+/// degrades to "yes, go ahead" is worse than no check, because callers still
+/// read as though it happened.
+#[cfg(unix)]
 pub fn steam_is_running() -> bool {
     let Ok(entries) = fs::read_dir("/proc") else {
         return false;
@@ -189,6 +199,36 @@ pub fn steam_is_running() -> bool {
         }
     }
     false
+}
+
+/// The same question on Windows, asked of `tasklist`.
+///
+/// A spawned process rather than a process-enumeration API, because the latter
+/// means a Windows-only dependency and unsafe calls for one boolean. It costs
+/// tens of milliseconds and is only asked before an apply and on an explicit
+/// status request, never in a loop.
+///
+/// Unreachable output — tasklist missing, refused, or unparsable — reads as
+/// "running". The refusal is the safe answer: the worst case is telling someone
+/// to close a Steam that is already closed, against a corrupted install if the
+/// check were wrong the other way.
+#[cfg(windows)]
+pub fn steam_is_running() -> bool {
+    use std::process::Command;
+
+    let output = Command::new("tasklist")
+        .args(["/FI", "IMAGENAME eq steam.exe", "/NH"])
+        .output();
+
+    match output {
+        Ok(out) => {
+            let text = String::from_utf8_lossy(&out.stdout).to_ascii_lowercase();
+            // tasklist prints an informational line rather than failing when
+            // nothing matches, so the process name is what has to be found.
+            text.contains("steam.exe")
+        }
+        Err(_) => true,
+    }
 }
 
 #[cfg(test)]

@@ -76,16 +76,21 @@ impl GameInstall {
 }
 
 fn home() -> PathBuf {
-    std::env::var_os("HOME")
+    let key = if cfg!(windows) { "USERPROFILE" } else { "HOME" };
+    std::env::var_os(key)
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/root"))
+        .unwrap_or_else(|| PathBuf::from(if cfg!(windows) { "C:\\" } else { "/root" }))
 }
 
-/// Candidate Steam roots, in priority order. Only existing directories that
-/// actually contain `steamapps/` are returned.
-pub fn discover_steam_roots() -> Vec<SteamRoot> {
-    let h = home();
-    let candidates: Vec<(PathBuf, SteamFlavor)> = vec![
+/// Where Steam might be, on this platform, in priority order.
+///
+/// Split from [`discover_steam_roots`] so the list of places is data and the
+/// rules applied to it — must contain `steamapps/`, resolve symlinks, dedupe —
+/// are shared. The rules are the part worth having only one copy of; the
+/// locations are the part that is genuinely different per platform.
+#[cfg(unix)]
+fn candidate_roots(h: &Path) -> Vec<(PathBuf, SteamFlavor)> {
+    vec![
         (h.join(".local/share/Steam"), SteamFlavor::Native),
         (h.join(".steam/steam"), SteamFlavor::Native),
         (h.join(".steam/root"), SteamFlavor::Native),
@@ -98,7 +103,42 @@ pub fn discover_steam_roots() -> Vec<SteamRoot> {
             h.join("snap/steam/common/.local/share/Steam"),
             SteamFlavor::Snap,
         ),
+    ]
+}
+
+/// Windows keeps one Steam, in Program Files, with no sandboxed variants.
+///
+/// The registry (`HKCU\Software\Valve\Steam\SteamPath`) is the authoritative
+/// answer and is not read here: doing so needs a registry crate and cannot be
+/// exercised from this machine at all. These defaults cover the ordinary
+/// installs, `libraryfolders.vdf` covers every other drive the way it always
+/// has, and a user can point at a root by hand. Reading the registry is the
+/// obvious first improvement once there is a Windows machine to try it on.
+#[cfg(windows)]
+fn candidate_roots(h: &Path) -> Vec<(PathBuf, SteamFlavor)> {
+    let mut out = vec![
+        (
+            PathBuf::from(r"C:\Program Files (x86)\Steam"),
+            SteamFlavor::Native,
+        ),
+        (
+            PathBuf::from(r"C:\Program Files\Steam"),
+            SteamFlavor::Native,
+        ),
     ];
+    // A per-user install, which is where Steam puts itself without admin.
+    out.push((
+        h.join("scoop").join("apps").join("steam").join("current"),
+        SteamFlavor::Native,
+    ));
+    out
+}
+
+/// Candidate Steam roots, in priority order. Only existing directories that
+/// actually contain `steamapps/` are returned.
+pub fn discover_steam_roots() -> Vec<SteamRoot> {
+    let h = home();
+    let candidates = candidate_roots(&h);
 
     let mut out: Vec<SteamRoot> = Vec::new();
     for (path, flavor) in candidates {
