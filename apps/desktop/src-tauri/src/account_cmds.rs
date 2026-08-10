@@ -174,9 +174,8 @@ pub fn browse_apocrypha_mods(
     search: Option<String>,
     page: u32,
 ) -> CmdResult<CatalogPage> {
-    catalog(&state)?
-        .mods(game.as_deref(), search.as_deref(), page, 24)
-        .map_err(|e| e.to_string())
+    let result = catalog(&state)?.mods(game.as_deref(), search.as_deref(), page, 24);
+    with_token_check(&state, result)
 }
 
 /// Every game the service lists.
@@ -186,7 +185,8 @@ pub fn browse_apocrypha_mods(
 /// "not listed here" — two states that need different words.
 #[tauri::command(async)]
 pub fn apocrypha_games(state: State<AppState>) -> CmdResult<Vec<CatalogGame>> {
-    catalog(&state)?.games().map_err(|e| e.to_string())
+    let result = catalog(&state)?.games();
+    with_token_check(&state, result)
 }
 
 /// One mod with its releases and their files.
@@ -199,15 +199,15 @@ pub fn apocrypha_mod_detail(
     game_slug: String,
     mod_slug: String,
 ) -> CmdResult<CatalogModDetail> {
-    catalog(&state)?
-        .mod_detail(&game_slug, &mod_slug)
-        .map_err(|e| e.to_string())
+    let result = catalog(&state)?.mod_detail(&game_slug, &mod_slug);
+    with_token_check(&state, result)
 }
 
 /// What is left of today's download allowance.
 #[tauri::command(async)]
 pub fn apocrypha_download_quota(state: State<AppState>) -> CmdResult<DownloadQuota> {
-    catalog(&state)?.download_quota().map_err(|e| e.to_string())
+    let result = catalog(&state)?.download_quota();
+    with_token_check(&state, result)
 }
 
 /// Claim a file from the service and fetch it into the download queue.
@@ -413,6 +413,43 @@ pub fn preview_apocrypha_link(state: State<AppState>, url: String) -> CmdResult<
         ready: file.is_downloadable(),
         remaining_today,
     })
+}
+
+/// Forgets the stored token, without asking the service anything.
+///
+/// Called when the service says the token is no longer good — because the
+/// person revoked this device from the website, or it expired. Keeping a dead
+/// credential on disk means the Account screen says "signed in" while every
+/// request fails, which reads as the app being broken rather than as the
+/// deliberate act it was.
+fn forget_token(state: &AppState) {
+    if let Ok(store) = state.store.lock() {
+        let _ = store.set_setting(KEY_TOKEN, "");
+        let _ = store.set_setting(KEY_TOKEN_EXPIRES, "");
+    }
+}
+
+/// Runs a catalogue call, and clears the stored token if the service says it is
+/// no longer valid.
+///
+/// Only on an explicit refusal of the credential. A network failure must never
+/// sign someone out — the token is probably fine and the connection is not, and
+/// silently discarding a ninety-day grant because a redeploy dropped one
+/// request would be its own bug.
+fn with_token_check<T>(
+    state: &AppState,
+    result: Result<T, apoc_apocrypha::PairingError>,
+) -> CmdResult<T> {
+    match result {
+        Ok(v) => Ok(v),
+        Err(e) => {
+            if matches!(&e, apoc_apocrypha::PairingError::Refused(m) if m.contains("not signed in"))
+            {
+                forget_token(state);
+            }
+            Err(e.to_string())
+        }
+    }
 }
 
 /// A catalogue client for the signed-in account, or a refusal saying so.
