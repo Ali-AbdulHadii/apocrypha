@@ -768,7 +768,11 @@ pub fn rollback_last(state: State<AppState>, game_id: String) -> CmdResult<Rollb
 #[tauri::command(async)]
 pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String> {
     if apoc_deploy::loader::steam_is_running() {
-        return Err("Close Steam before changing the Proton prefix.".into());
+        return Err(if cfg!(windows) {
+            "Close Steam first.".into()
+        } else {
+            "Close Steam before changing the Proton prefix.".to_string()
+        });
     }
     let profile = builtin_profile(&game_id)?;
     let loader = profile
@@ -786,6 +790,25 @@ pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String
         overrides.push((stem.to_string(), "native,builtin".to_string()));
     }
 
+    // Windows needs none of this, and demanding it made the loader impossible
+    // to set up there.
+    //
+    // A DLL override is a Wine concept: it exists to tell Wine to prefer a
+    // native DLL over its own builtin. Windows has no builtin to prefer over,
+    // so a proxy DLL sitting in the game folder is loaded because that is
+    // simply how the loader search order works. The copy happens during apply;
+    // there is nothing left for this command to register.
+    //
+    // It reports success rather than refusing, because from where the user is
+    // standing the loader *is* set up — refusing would send them looking for a
+    // Proton prefix that cannot exist on their machine.
+    #[cfg(windows)]
+    {
+        let _ = overrides;
+        return Ok("No registration is needed on Windows: the loader DLL is placed in the game folder when you apply.".to_string());
+    }
+
+    #[cfg(not(windows))]
     let prefix = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
         store
@@ -796,16 +819,19 @@ pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String
                 "Proton prefix not found: run the game once via Steam first.".to_string()
             })?
     };
-    let user_reg = PathBuf::from(prefix).join("user.reg");
-    let mut written = Vec::new();
-    for (name, value) in &overrides {
-        apoc_deploy::loader::write_override(&user_reg, name, value).map_err(err)?;
-        written.push(format!("{name}={value}"));
+    #[cfg(not(windows))]
+    {
+        let user_reg = PathBuf::from(prefix).join("user.reg");
+        let mut written = Vec::new();
+        for (name, value) in &overrides {
+            apoc_deploy::loader::write_override(&user_reg, name, value).map_err(err)?;
+            written.push(format!("{name}={value}"));
+        }
+        Ok(format!(
+            "Registered '{}' in the Proton prefix.",
+            written.join("', '")
+        ))
     }
-    Ok(format!(
-        "Registered '{}' in the Proton prefix.",
-        written.join("', '")
-    ))
 }
 
 /// Read the persisted settings.

@@ -200,7 +200,24 @@ impl PendingAuthorization {
         }
 
         let mut stream = match self.listener.accept() {
-            Ok((stream, _)) => stream,
+            Ok((stream, _)) => {
+                // Put the accepted socket back into blocking mode.
+                //
+                // The listener is non-blocking so poll() can return promptly
+                // when nothing has arrived. On Unix the accepted socket does not
+                // inherit that. On Windows it does: Winsock hands back a socket
+                // carrying the listening socket's mode, so the first read
+                // returned WouldBlock immediately, the read loop treated that as
+                // a dead connection, and the browser's callback was discarded as
+                // unintelligible — every single time. Signing in on Windows
+                // could not complete, and the failure looked like the browser
+                // never answering.
+                //
+                // The read deadline below is what bounds this now that it
+                // blocks, which is the job it was already doing.
+                let _ = stream.set_nonblocking(false);
+                stream
+            }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                 return Ok(AuthorizationStatus::Waiting);
             }
