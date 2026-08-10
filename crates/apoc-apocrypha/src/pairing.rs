@@ -17,7 +17,17 @@ use crate::{agent, ServiceOrigin};
 
 #[derive(Debug, Error)]
 pub enum PairingError {
-    #[error("network error: {0}")]
+    /// The service could not be reached at all.
+    ///
+    /// The message is deliberately the same whatever the underlying failure
+    /// was. A person seeing this cannot act on "tls connection init failed:
+    /// Connection reset by peer (os error 104)" — that is a sentence for a bug
+    /// report, and putting it on screen only makes a routine hiccup look like
+    /// a catastrophe. The one useful thing to say is that it may be temporary,
+    /// because it usually is: the service redeploys on every change, and a
+    /// connection dropped during that window is the most common reason to be
+    /// here.
+    #[error("Could not reach Apocrypha. It may be updating — try again in a moment.")]
     Http(String),
     #[error("could not read the response: {0}")]
     Decode(String),
@@ -96,12 +106,17 @@ impl DevicePairing {
     /// something about this machine rather than about this program: the person
     /// approving already knows which app is asking, and needs to know which
     /// computer.
+    // The closure below hands back a ureq::Error so `start` can read the
+    // service's own refusal out of it. Same reasoning as `send_retrying`.
+    #[allow(clippy::result_large_err)]
     pub fn start(&self, device_name: &str) -> Result<StartedPairing, PairingError> {
         let url = format!("{}/api/v1/auth/device/start", self.origin.as_str());
-        let response = agent()
-            .post(&url)
-            .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
-            .send_json(StartRequest { device_name });
+        let response = crate::send_retrying(|| {
+            agent()
+                .post(&url)
+                .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
+                .send_json(StartRequest { device_name })
+        });
 
         match response {
             Ok(res) => res
@@ -115,6 +130,10 @@ impl DevicePairing {
     /// Asks once whether the pairing has been approved.
     pub fn poll(&self, device_code: &str) -> Result<PairingStatus, PairingError> {
         let url = format!("{}/api/v1/auth/device/token", self.origin.as_str());
+        // Deliberately not retried. Polling is already a loop on its own timer,
+        // so a dropped connection is answered by the next poll a few seconds
+        // later; retrying inside one attempt would only make that interval a
+        // lie and spend two requests where the loop was going to spend one.
         let response = agent()
             .post(&url)
             .set("User-Agent", &format!("Apocrypha/{}", self.app_version))

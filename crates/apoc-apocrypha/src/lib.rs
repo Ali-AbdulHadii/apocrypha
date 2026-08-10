@@ -86,9 +86,138 @@ pub(crate) fn agent() -> ureq::Agent {
         .build()
 }
 
+/// Attempts a request makes before giving up.
+///
+/// Two, not more. The service redeploys on every push to its main branch and
+/// recreates its containers in place, so a dropped connection lasting a second
+/// or two is a routine event rather than an exceptional one — and a single
+/// retry covers it. Beyond that, retrying stops being resilience and starts
+/// being a client that will not take no for an answer.
+const ATTEMPTS: u32 = 2;
+
+/// How long to wait before the second attempt.
+const RETRY_DELAY: Duration = Duration::from_millis(750);
+
+/// Runs a request, retrying once if the connection failed.
+///
+/// **Only transport failures are retried.** A status is an answer: a 403 means
+/// the same thing however many times it is asked, and repeating the question
+/// only delays telling the person what happened. `ureq` draws exactly this
+/// line — `Error::Status` is a reply, `Error::Transport` is the absence of one.
+///
+/// A transport failure can still occur after the server has acted, when the
+/// reply is what got lost. Retrying then repeats the effect. That is accepted
+/// here because every request this client makes is one where repeating it is
+/// no worse than the person clicking the button again, which is exactly what
+/// they would otherwise do: a second pairing row nobody collects expires on
+/// its own, and a second download claim for a mod already claimed today costs
+/// nothing, because the daily allowance counts distinct mods rather than
+/// requests. A request without that property must not use this.
+// `ureq::Error` is 272 bytes, which clippy objects to carrying in a Result.
+// Boxing it is the suggested fix and is the wrong trade here: every caller
+// matches on `Error::Status(code, response)` to read the service's own refusal,
+// and each would have to unbox first — real friction at four call sites, to
+// satisfy a lint about the size of a type this crate does not define.
+#[allow(clippy::result_large_err)]
+pub(crate) fn send_retrying<F>(send: F) -> Result<ureq::Response, ureq::Error>
+where
+    F: FnMut() -> Result<ureq::Response, ureq::Error>,
+{
+    retrying(send, |e| matches!(e, ureq::Error::Transport(_)))
+}
+
+/// The retry loop itself, with the decision handed in.
+///
+/// Split from [`send_retrying`] so the behaviour that matters — how many times,
+/// and never on an answer — can be tested. `ureq::Transport` has no public
+/// constructor, so a test written against the real type could only exercise the
+/// path that does not retry, which is the half that was never in doubt.
+pub(crate) fn retrying<T, E, F, P>(mut send: F, is_transient: P) -> Result<T, E>
+where
+    F: FnMut() -> Result<T, E>,
+    P: Fn(&E) -> bool,
+{
+    let mut attempt = 1;
+    loop {
+        match send() {
+            Err(e) if attempt < ATTEMPTS && is_transient(&e) => {
+                // The detail is not logged. It is a rustls or io message that
+                // means nothing to the person waiting, and the next attempt is
+                // about to say whether it mattered at all.
+                std::thread::sleep(RETRY_DELAY);
+                attempt += 1;
+            }
+            other => return other,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stand-in for a failure, since ureq's own transport error cannot be
+    /// constructed from outside the crate.
+    #[derive(Debug, PartialEq)]
+    enum Fail {
+        Dropped,
+        Answered,
+    }
+    fn transient(e: &Fail) -> bool {
+        *e == Fail::Dropped
+    }
+
+    #[test]
+    fn a_dropped_connection_is_tried_once_more() {
+        // The case this exists for: the service redeploys, one connection is
+        // dropped, the next succeeds. Without the retry that is a failed
+        // sign-in and an alarming message; with it, nothing happened.
+        let mut calls = 0;
+        let result = retrying(
+            || {
+                calls += 1;
+                if calls == 1 {
+                    Err(Fail::Dropped)
+                } else {
+                    Ok("served")
+                }
+            },
+            transient,
+        );
+        assert_eq!(result, Ok("served"));
+        assert_eq!(calls, 2, "should have tried again exactly once");
+    }
+
+    #[test]
+    fn an_answer_is_never_repeated() {
+        // A refusal means the same thing however many times it is asked.
+        // Repeating it only delays saying so, and on a write it would repeat
+        // whatever the server already did.
+        let mut calls = 0;
+        let result: Result<&str, Fail> = retrying(
+            || {
+                calls += 1;
+                Err(Fail::Answered)
+            },
+            transient,
+        );
+        assert_eq!(result, Err(Fail::Answered));
+        assert_eq!(calls, 1, "an answer must not be retried");
+    }
+
+    #[test]
+    fn retrying_is_bounded_rather_than_persistent() {
+        let mut calls = 0;
+        let result: Result<&str, Fail> = retrying(
+            || {
+                calls += 1;
+                Err(Fail::Dropped)
+            },
+            transient,
+        );
+        assert!(result.is_err());
+        assert_eq!(calls, ATTEMPTS, "gives up rather than hammering");
+    }
 
     #[test]
     fn the_link_page_carries_the_code() {
