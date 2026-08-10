@@ -15,6 +15,7 @@ import { TitleBar } from "./components/TitleBar";
 import { DownloadsScreen } from "./components/DownloadsScreen";
 import { UpdatesScreen } from "./components/UpdatesScreen";
 import { ApocryphaAccount } from "./components/ApocryphaAccount";
+import { BrowseScreen } from "./components/BrowseScreen";
 import { Chip, Spinner, pageMotion, useToast } from "./components/ui";
 import {
   api,
@@ -51,6 +52,7 @@ type Screen =
   | "updates"
   | "profiles"
   | "account"
+  | "browse"
   | "conflicts"
   | "settings";
 
@@ -61,6 +63,7 @@ const NAV: { id: Screen; label: string; icon: IconName }[] = [
   { id: "downloads", label: "Downloads", icon: "downloads" },
   { id: "updates", label: "Updates", icon: "refresh" },
   { id: "profiles", label: "Profiles", icon: "profiles" },
+  { id: "browse", label: "Browse", icon: "search" },
   { id: "account", label: "Account", icon: "account" },
   { id: "conflicts", label: "Changes", icon: "conflicts" },
   { id: "settings", label: "Settings", icon: "settings" },
@@ -90,6 +93,7 @@ export default function App() {
   const [updateBusyId, setUpdateBusyId] = useState<string | null>(null);
   const [nexusPremium, setNexusPremium] = useState(false);
   const [gameArt, setGameArt] = useState<Record<string, string | null>>({});
+  const [apocryphaSignedIn, setApocryphaSignedIn] = useState(false);
 
   const { push } = useToast();
   const appearance = useAppearance();
@@ -180,6 +184,17 @@ export default function App() {
       }
     })();
   }, [activeGameId, refreshMods, refreshProfiles, refreshConflicts, fail]);
+
+  // Whether this computer is linked, so Browse knows to offer sign-in rather
+  // than an error. Refreshed when the screen changes, which is when it can have
+  // changed without this component hearing about it.
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    api
+      .apocryphaAccount()
+      .then((a) => setApocryphaSignedIn(a.signedIn))
+      .catch(() => setApocryphaSignedIn(false));
+  }, [screen]);
 
   // Steam's cover art, fetched once per game and kept. Failure is silent: a
   // missing cover falls back to the generic mark, and a toast about artwork
@@ -822,6 +837,12 @@ export default function App() {
                     onDownload={(u) => void downloadUpdate(u)}
                     onOpenPage={(u) => void openUpdatePage(u)}
                   />
+                ) : screen === "browse" ? (
+                  <BrowseScreen
+                    signedIn={apocryphaSignedIn}
+                    onSignIn={() => setScreen("account")}
+                    onError={fail}
+                  />
                 ) : screen === "account" ? (
                   <div className="stack">
                     <div className="lib-section">
@@ -1016,6 +1037,7 @@ function TopBar({
     updates: "Updates",
     profiles: "Profiles",
     account: "Account",
+    browse: "Browse",
     conflicts: "Changes",
     settings: "Settings",
   };

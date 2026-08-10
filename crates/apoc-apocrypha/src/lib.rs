@@ -17,8 +17,13 @@
 //! the whole attack. The one exception is a developer build pointing at
 //! localhost, and that is a compile-time feature rather than a runtime setting.
 
+pub mod catalog;
 pub mod pairing;
 
+pub use catalog::{
+    Catalog, CatalogFile, CatalogMod, CatalogModDetail, CatalogPage, CatalogVersion, DownloadQuota,
+    DownloadTicket,
+};
 pub use pairing::{DevicePairing, PairingError, PairingStatus, StartedPairing};
 
 use std::time::Duration;

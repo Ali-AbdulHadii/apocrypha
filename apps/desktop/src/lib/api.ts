@@ -154,6 +154,68 @@ export interface UpdateCheckView {
   uncheckable: number;
 }
 
+export interface CatalogModView {
+  id: string;
+  slug: string;
+  name: string;
+  summary: string;
+  authorName: string;
+  gameSlug: string;
+  gameName: string;
+  downloadCount: number;
+  favorCount: number;
+  latestVersion: string | null;
+}
+
+export interface CatalogPageView {
+  items: CatalogModView[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface CatalogFileView {
+  id: string;
+  fileName: string;
+  displayName: string | null;
+  sizeBytes: number;
+  sha256: string;
+  scanState: string;
+  uploadState: string;
+}
+
+export interface CatalogVersionView {
+  id: string;
+  versionNumber: string;
+  changelog: string;
+  releaseChannel: string;
+  isLatest: boolean;
+  files: CatalogFileView[];
+}
+
+export interface CatalogModDetailView {
+  id: string;
+  slug: string;
+  name: string;
+  summary: string;
+  authorName: string;
+  gameSlug: string;
+  gameName: string;
+  versions: CatalogVersionView[];
+}
+
+/**
+ * The account's standing with the daily cap. `dailyLimit` and `remaining` are
+ * null for a verified account, which has no cap at all — null means unlimited
+ * here, never zero.
+ */
+export interface DownloadQuotaView {
+  verified: boolean;
+  distinctModsToday: number;
+  dailyLimit: number | null;
+  remaining: number | null;
+}
+
 export interface ApocryphaAccountView {
   signedIn: boolean;
   deviceName: string | null;
@@ -387,6 +449,19 @@ export const api = {
   pollApocryphaPairing: (deviceCode: string) =>
     call<PairingPollView>("poll_apocrypha_pairing", { deviceCode }),
   signOutApocrypha: () => call<ApocryphaAccountView>("sign_out_apocrypha"),
+  /** Reads the service catalogue as this account. Requires being signed in. */
+  browseApocryphaMods: (game: string | null, search: string | null, page: number) =>
+    call<CatalogPageView>("browse_apocrypha_mods", { game, search, page }),
+  /** One mod with its releases and files. A second request, made on demand. */
+  apocryphaModDetail: (gameSlug: string, modSlug: string) =>
+    call<CatalogModDetailView>("apocrypha_mod_detail", { gameSlug, modSlug }),
+  apocryphaDownloadQuota: () => call<DownloadQuotaView>("apocrypha_download_quota"),
+  /**
+   * Claims a file and fetches it into the download queue. It stops there, the
+   * same as a Nexus download: installing is a separate, deliberate step.
+   */
+  apocryphaDownloadFile: (gameSlug: string, modSlug: string, fileId: string) =>
+    call<DownloadView>("apocrypha_download_file", { gameSlug, modSlug, fileId }),
 
   /* Nexus Mods */
   nexusStatus: () => call<NexusStatusView>("nexus_status"),

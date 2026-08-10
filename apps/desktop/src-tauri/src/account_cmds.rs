@@ -5,10 +5,14 @@
 //! can stay responsive and let someone cancel; a blocking call here would take
 //! the choice away and hold a worker thread for ten minutes.
 
-use apoc_apocrypha::{DevicePairing, PairingStatus, ServiceOrigin};
+use apoc_apocrypha::{
+    Catalog, CatalogModDetail, CatalogPage, DevicePairing, DownloadQuota, PairingStatus,
+    ServiceOrigin,
+};
 use serde::{Deserialize, Serialize};
-use tauri::State;
+use tauri::{Emitter, State};
 
+use crate::downloads::{self, Download};
 use crate::state::AppState;
 
 type CmdResult<T> = Result<T, String>;
@@ -156,6 +160,159 @@ pub fn sign_out_apocrypha(state: State<AppState>) -> CmdResult<ApocryphaAccountV
             .map_err(|e| e.to_string())?;
     }
     apocrypha_account(state)
+}
+
+/// Browse the service catalogue as this account.
+///
+/// Returns the service's page verbatim. Nothing is filtered here: what may be
+/// seen is the server's decision, and a client-side filter is one that can be
+/// switched off.
+#[tauri::command(async)]
+pub fn browse_apocrypha_mods(
+    state: State<AppState>,
+    game: Option<String>,
+    search: Option<String>,
+    page: u32,
+) -> CmdResult<CatalogPage> {
+    catalog(&state)?
+        .mods(game.as_deref(), search.as_deref(), page, 24)
+        .map_err(|e| e.to_string())
+}
+
+/// One mod with its releases and their files.
+///
+/// Separate from the listing because it is a second request, and a listing of
+/// twenty mods should not fetch twenty sets of files nobody has asked to see.
+#[tauri::command(async)]
+pub fn apocrypha_mod_detail(
+    state: State<AppState>,
+    game_slug: String,
+    mod_slug: String,
+) -> CmdResult<CatalogModDetail> {
+    catalog(&state)?
+        .mod_detail(&game_slug, &mod_slug)
+        .map_err(|e| e.to_string())
+}
+
+/// What is left of today's download allowance.
+#[tauri::command(async)]
+pub fn apocrypha_download_quota(state: State<AppState>) -> CmdResult<DownloadQuota> {
+    catalog(&state)?.download_quota().map_err(|e| e.to_string())
+}
+
+/// Claim a file from the service and fetch it into the download queue.
+///
+/// It stops at the queue, exactly like a Nexus download: a finished archive
+/// waits until someone chooses to install it. Nothing here touches a game
+/// directory, and the install path it feeds is the one that was already there.
+#[tauri::command(async)]
+pub fn apocrypha_download_file(
+    app: tauri::AppHandle,
+    state: State<AppState>,
+    game_slug: String,
+    mod_slug: String,
+    file_id: String,
+) -> CmdResult<Download> {
+    let catalog = catalog(&state)?;
+
+    // The detail is re-read rather than trusting what the window sent. The
+    // interface's copy can be minutes old, and the two things taken from here —
+    // the expected hash and the file name — are the ones it would be worst to
+    // take from a stale or edited client.
+    let detail = catalog
+        .mod_detail(&game_slug, &mod_slug)
+        .map_err(|e| e.to_string())?;
+
+    let file = detail
+        .versions
+        .iter()
+        .flat_map(|v| v.files.iter())
+        .find(|f| f.id == file_id)
+        .ok_or_else(|| "That file is no longer part of this mod.".to_string())?;
+
+    if !file.is_downloadable() {
+        return Err("That file is not ready to download yet.".into());
+    }
+
+    let expected_sha = file.sha256.to_ascii_lowercase();
+    let ticket = catalog
+        .claim_download(&file_id)
+        .map_err(|e| e.to_string())?;
+
+    let dest_dir = state.downloads_dir();
+    std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    let dest = dest_dir.join(downloads::safe_name(&ticket.file_name));
+
+    // A second press must not start a second writer for the same file.
+    let entry = match state.downloads.begin(&ticket.file_name, &dest, "Apocrypha") {
+        downloads::Begin::Started(d) => d,
+        downloads::Begin::AlreadyRunning(d) => return Ok(d),
+    };
+
+    let queue = state.downloads.clone();
+    let id = entry.id.clone();
+    let url = ticket.url.clone();
+
+    // A dedicated thread rather than the async runtime: `ureq` is blocking, and
+    // this keeps the transfer off every pool the rest of the app shares.
+    std::thread::spawn(move || {
+        let emit = {
+            let app = app.clone();
+            Box::new(move |d: &Download| {
+                let _ = app.emit("download-changed", d.clone());
+            }) as downloads::OnProgress
+        };
+
+        let outcome = downloads::fetch(&queue, &id, &url, &dest, &emit).and_then(|_| {
+            // The service publishes the hash it recorded at upload, so there is
+            // no reason to install bytes that do not match it. A truncated
+            // transfer, a proxy that rewrote something, or a URL that outlived
+            // its object all land here rather than in a game directory.
+            let actual = apoc_deploy::vault::hash_file(&dest).map_err(|e| e.to_string())?;
+            if expected_sha.is_empty() || actual.eq_ignore_ascii_case(&expected_sha) {
+                Ok(())
+            } else {
+                // Removed rather than left: a file in the downloads folder is
+                // offered for install, and one that failed its hash must not be
+                // sitting there looking like any other archive.
+                let _ = std::fs::remove_file(&dest);
+                Err(
+                    "The download did not match the file the service published. \
+                     Nothing was kept."
+                        .to_string(),
+                )
+            }
+        });
+
+        if let Err(e) = outcome {
+            let cancelled = e == "cancelled";
+            if let Some(d) = queue.update(&id, |d| {
+                d.state = if cancelled {
+                    downloads::DownloadState::Cancelled
+                } else {
+                    downloads::DownloadState::Failed
+                };
+                d.error = (!cancelled).then(|| e.clone());
+            }) {
+                let _ = app.emit("download-changed", d);
+            }
+        }
+    });
+
+    Ok(entry)
+}
+
+/// A catalogue client for the signed-in account, or a refusal saying so.
+fn catalog(state: &AppState) -> CmdResult<Catalog> {
+    let token = {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .get_setting(KEY_TOKEN)
+            .map_err(|e| e.to_string())?
+            .filter(|t| !t.trim().is_empty())
+            .ok_or_else(|| "Sign in to Apocrypha first.".to_string())?
+    };
+    Ok(Catalog::new(origin(), APP_VERSION, token))
 }
 
 #[cfg(test)]
