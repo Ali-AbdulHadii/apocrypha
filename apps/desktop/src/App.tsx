@@ -897,6 +897,9 @@ export default function App() {
                     // about the game the rest of the window is about.
                     gameId={activeGameId}
                     gameName={activeGame?.name ?? null}
+                    onDownloadStarted={(d) =>
+                      setDownloads((prev) => [d, ...prev.filter((x) => x.id !== d.id)])
+                    }
                     onSignIn={() => setScreen("account")}
                     onError={fail}
                   />

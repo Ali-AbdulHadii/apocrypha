@@ -207,14 +207,32 @@ export interface CatalogVersionView {
   files: CatalogFileView[];
 }
 
+/**
+ * A stated link between two mods.
+ *
+ * `type` is the service's own vocabulary — Required, Optional, Incompatible —
+ * kept as text so the catalogue can add a kind without this client refusing to
+ * render a mod page. An unknown kind is shown as itself rather than dropped.
+ */
+export interface CatalogRelationshipView {
+  targetModId: string;
+  targetModSlug: string;
+  targetModName: string;
+  type: string;
+}
+
 export interface CatalogModDetailView {
   id: string;
   slug: string;
   name: string;
   summary: string;
+  description: string;
   authorName: string;
   gameSlug: string;
   gameName: string;
+  downloadCount: number;
+  favorCount: number;
+  relationships: CatalogRelationshipView[];
   versions: CatalogVersionView[];
 }
 

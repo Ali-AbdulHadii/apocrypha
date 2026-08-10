@@ -6,43 +6,46 @@
  * the mod's own slug — because the service has no mod images yet; when it does,
  * that element is the one that gets replaced and nothing else here changes.
  *
- * Scoped to the game selected in Library. Someone managing Monster Hunter Wilds
- * is not shopping for Cyberpunk mods, and a catalogue that ignores what the
- * rest of the window is about makes them do the filtering themselves.
+ * Scoped to the game selected in Library, matched against the *service's* own
+ * game list rather than by assuming this app's game id is the service's slug.
+ * The two identifier spaces are maintained separately and only happen to agree
+ * today.
  *
  * Nothing is filtered client-side beyond that. What may be seen is the server's
  * decision — scan state, adult content, region — and a filter in a client
  * anyone can rebuild is not one.
  */
 
+import { AnimatePresence } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   api,
-  type CatalogFileView,
   type CatalogModDetailView,
   type CatalogModView,
   type CatalogPageView,
   type DownloadQuotaView,
 } from "../lib/api";
 import { CoverArt } from "./CoverArt";
+import { DownloadConfirm } from "./DownloadConfirm";
 import { Icon } from "./icons";
+import { incompatible, ModPage, optional, required } from "./ModPage";
 import { Spinner } from "./ui";
 
-function size(bytes: number): string {
-  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
-  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`;
-  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-}
-
-/** Clean scan and verified bytes — the pair the service checks before serving. */
-function ready(f: CatalogFileView): boolean {
-  return f.scanState.toLowerCase() === "clean" && f.uploadState.toLowerCase() === "verified";
-}
+/** How the service's game list resolved for the game Library is on. */
+type Listing =
+  | { state: "no-game" }
+  | { state: "loading" }
+  /** Present on the service, under this slug — which is what filtering uses. */
+  | { state: "listed"; slug: string }
+  | { state: "absent" }
+  /** The lookup itself failed. Not the same as absent, and must not say so. */
+  | { state: "unknown" };
 
 export function BrowseScreen({
   signedIn,
   gameId,
   gameName,
+  onDownloadStarted,
   onSignIn,
   onError,
 }: {
@@ -50,6 +53,8 @@ export function BrowseScreen({
   /** The game Library is on. Matched against the service's own slugs. */
   gameId: string | null;
   gameName: string | null;
+  /** Handed the started transfer so the Downloads screen updates immediately. */
+  onDownloadStarted: (d: import("../lib/api").DownloadView) => void;
   onSignIn: () => void;
   onError: (e: unknown) => void;
 }) {
@@ -57,31 +62,20 @@ export function BrowseScreen({
   const [search, setSearch] = useState("");
   const [busy, setBusy] = useState(false);
   const [quota, setQuota] = useState<DownloadQuotaView | null>(null);
-  // null while unknown, false once the service has been asked and does not list
-  // this game. Three states, three different things to say.
-  const [listed, setListed] = useState<boolean | null>(null);
+  const [listing, setListing] = useState<Listing>({ state: "loading" });
   const requestId = useRef(0);
 
-  // Asked once. It is the only way to tell "this game has no mods yet" from
-  // "the service has never heard of this game", and the app's game id is not
-  // guaranteed to be the service's slug even while they currently match.
-  useEffect(() => {
-    if (!signedIn || !gameId) return;
-    let alive = true;
-    api
-      .apocryphaGames()
-      .then((games) => {
-        if (alive) setListed(games.some((g) => g.slug === gameId));
-      })
-      .catch(() => {
-        // Unknown rather than absent: a failed lookup must not claim a game is
-        // missing from a catalogue nobody managed to read.
-        if (alive) setListed(null);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [signedIn, gameId]);
+  // Which mod page is open, and the confirmation waiting on a decision.
+  const [viewing, setViewing] = useState<CatalogModView | null>(null);
+  const [detail, setDetail] = useState<CatalogModDetailView | null>(null);
+  const [pending, setPending] = useState<{
+    mod: CatalogModView;
+    detail: CatalogModDetailView;
+    fileId: string;
+    fileName: string;
+  } | null>(null);
+  const [sending, setSending] = useState(false);
+  const [sentFileIds, setSentFileIds] = useState<Set<string>>(new Set());
 
   const refreshQuota = useCallback(() => {
     if (!signedIn) return;
@@ -93,16 +87,56 @@ export function BrowseScreen({
 
   useEffect(() => refreshQuota(), [refreshQuota]);
 
+  // Resolving the game is the first thing, because everything below depends on
+  // it: the filter is the service's slug, not this app's id.
+  useEffect(() => {
+    // Cleared rather than left standing. A previous game's answer describing
+    // the new one is worse than saying nothing, and its results must not stay
+    // on screen and downloadable while the replacement loads.
+    setPage(null);
+    setViewing(null);
+    setPending(null);
+
+    if (!signedIn) {
+      setListing({ state: "loading" });
+      return;
+    }
+    if (!gameId) {
+      setListing({ state: "no-game" });
+      return;
+    }
+
+    let alive = true;
+    setListing({ state: "loading" });
+    api
+      .apocryphaGames()
+      .then((games) => {
+        if (!alive) return;
+        const match = games.find((g) => g.slug === gameId);
+        setListing(match ? { state: "listed", slug: match.slug } : { state: "absent" });
+      })
+      .catch(() => {
+        // Unknown, not absent. A failed lookup must never be reported as "this
+        // game is not on Apocrypha" — that is a positive claim about a
+        // catalogue nobody managed to read.
+        if (alive) setListing({ state: "unknown" });
+      });
+    return () => {
+      alive = false;
+    };
+  }, [signedIn, gameId]);
+
+  const slug = listing.state === "listed" ? listing.slug : null;
+
   const load = useCallback(
-    async (term: string, pageNumber: number) => {
-      if (!signedIn) return;
-      // Every request carries a ticket, and a reply is only used if its ticket
-      // is still the newest. Without it a slow first search can land after a
-      // fast second one and put the wrong results on screen.
-      const ticket = ++requestId.current;
+    async (term: string, pageNumber: number, ticket: number) => {
+      if (!slug) return;
       setBusy(true);
       try {
-        const result = await api.browseApocryphaMods(gameId, term || null, pageNumber);
+        const result = await api.browseApocryphaMods(slug, term || null, pageNumber);
+        // Only the newest request may paint. The ticket is taken by the caller,
+        // at the moment the intent changed, so a reply for text that has since
+        // been retyped is discarded rather than shown.
         if (ticket === requestId.current) setPage(result);
       } catch (e) {
         if (ticket === requestId.current) onError(e);
@@ -110,20 +144,109 @@ export function BrowseScreen({
         if (ticket === requestId.current) setBusy(false);
       }
     },
-    [signedIn, gameId, onError],
+    [slug, onError],
   );
 
+  // One effect covers the first load and every search. The ticket is claimed
+  // here — on the keystroke, not when the timer fires — so a reply already in
+  // flight cannot land against text that has since changed.
   useEffect(() => {
-    void load("", 1);
-  }, [load]);
-
-  // Typing searches, but not on every keystroke: each one would be a request,
-  // and the answer to a half-typed word is never the one wanted.
-  useEffect(() => {
-    if (!signedIn) return;
-    const t = setTimeout(() => void load(search, 1), 300);
+    if (!slug) return;
+    const ticket = ++requestId.current;
+    const delay = search ? 300 : 0;
+    const t = setTimeout(() => void load(search, 1, ticket), delay);
     return () => clearTimeout(t);
-  }, [search, signedIn, load]);
+  }, [search, slug, load]);
+
+  const openMod = useCallback(
+    async (mod: CatalogModView) => {
+      setViewing(mod);
+      setDetail(null);
+      try {
+        setDetail(await api.apocryphaModDetail(mod.gameSlug, mod.slug));
+      } catch (e) {
+        onError(e);
+        setViewing(null);
+      }
+    },
+    [onError],
+  );
+
+  /**
+   * Pressing Download on a card, having read nothing.
+   *
+   * Detail is always fetched fresh rather than reused, because the decision it
+   * feeds — which file, and whether to warn — must reflect what the service
+   * says now. A cached copy from an earlier press could name a file that is no
+   * longer the newest.
+   */
+  const askToDownload = useCallback(
+    async (mod: CatalogModView) => {
+      setSending(true);
+      try {
+        const d = await api.apocryphaModDetail(mod.gameSlug, mod.slug);
+        const release = d.versions.find((v) => v.isLatest) ?? d.versions[0] ?? null;
+        const usable = (release?.files ?? []).filter(
+          (f) =>
+            f.scanState.toLowerCase() === "clean" &&
+            f.uploadState.toLowerCase() === "verified",
+        );
+
+        // More than one file means a choice, and guessing it is how the wrong
+        // variant ends up deployed into a game. The mod page makes it.
+        if (usable.length !== 1) {
+          setViewing(mod);
+          setDetail(d);
+          return;
+        }
+
+        const file = usable[0]!;
+        const hasWarnings =
+          required(d.relationships).length > 0 || incompatible(d.relationships).length > 0;
+
+        // Nothing to say, so nothing is said. A confirmation that appears every
+        // time is one people learn to dismiss without reading.
+        if (!hasWarnings) {
+          await send(mod, file.id);
+          return;
+        }
+
+        setPending({
+          mod,
+          detail: d,
+          fileId: file.id,
+          fileName: file.displayName?.trim() || file.fileName,
+        });
+      } catch (e) {
+        onError(e);
+      } finally {
+        setSending(false);
+      }
+    },
+    // `send` is defined below and is stable for the life of the component.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [onError],
+  );
+
+  const send = useCallback(
+    async (mod: CatalogModView, fileId: string) => {
+      setSending(true);
+      try {
+        const started = await api.apocryphaDownloadFile(mod.gameSlug, mod.slug, fileId);
+        // Handed straight to the shell rather than waiting for a progress
+        // event, so the Downloads screen is right the moment this returns.
+        onDownloadStarted(started);
+        setSentFileIds((prev) => new Set(prev).add(fileId));
+        setPending(null);
+        refreshQuota();
+      } catch (e) {
+        onError(e);
+      } finally {
+        setSending(false);
+      }
+    },
+    [onDownloadStarted, onError, refreshQuota],
+  );
 
   if (!signedIn) {
     return (
@@ -143,7 +266,37 @@ export function BrowseScreen({
     );
   }
 
+  if (listing.state === "no-game") {
+    return (
+      <div className="empty">
+        <div className="empty-title">Choose a game first</div>
+        <div style={{ maxWidth: 460 }}>
+          Browse shows the catalogue for the game you are managing. Pick one in
+          Library and it will appear here.
+        </div>
+      </div>
+    );
+  }
+
+  if (listing.state === "absent" || listing.state === "unknown") {
+    return (
+      <div className="empty">
+        <div className="empty-title">
+          {listing.state === "absent"
+            ? `${gameName ?? "This game"} is not on Apocrypha`
+            : "Could not reach the catalogue"}
+        </div>
+        <div style={{ maxWidth: 460 }}>
+          {listing.state === "absent"
+            ? "The service does not list this game, so there is nothing to browse. You can still install mods from a file, or from Nexus."
+            : "The service did not answer. It may be updating — try again in a moment."}
+        </div>
+      </div>
+    );
+  }
+
   const items = page?.items ?? [];
+  const showing = listing.state === "loading" || (busy && !page);
 
   return (
     <div className="stack">
@@ -159,41 +312,49 @@ export function BrowseScreen({
         {busy ? <Spinner /> : null}
       </div>
 
-      {items.length === 0 && !busy ? (
+      {showing ? null : items.length === 0 ? (
         <div className="empty">
           <div className="empty-title">
-            {search
-              ? "Nothing matched"
-              : listed === false
-                ? `${gameName ?? "This game"} is not on Apocrypha yet`
-                : "No mods here yet"}
+            {search ? "Nothing matched" : "No mods here yet"}
           </div>
           <div style={{ maxWidth: 460 }}>
             {search
               ? "Try fewer words, or a different spelling."
-              : listed === false
-                ? "The service does not list this game, so there is nothing to browse. You can still install mods from a file, or from Nexus."
-                : "Nothing has been published for this game yet."}
+              : "Nothing has been published for this game yet."}
           </div>
         </div>
       ) : (
         <div className="browse-grid">
           {items.map((m) => (
-            <BrowseCard key={m.id} mod={m} onError={onError} onClaimed={refreshQuota} />
+            <BrowseCard
+              key={m.id}
+              mod={m}
+              busy={sending}
+              onView={() => void openMod(m)}
+              onDownload={() => void askToDownload(m)}
+            />
           ))}
         </div>
       )}
 
-      {page && page.total > items.length ? (
+      {page && page.total > page.pageSize ? (
         <div className="row" style={{ gap: "var(--sp-3)" }}>
           <span className="mod-meta">
-            {items.length} of {page.total}
+            Page {page.page} of {Math.max(1, Math.ceil(page.total / page.pageSize))} ·{" "}
+            {page.total} mods
           </span>
           <button
             className="btn sm"
             style={{ marginLeft: "auto" }}
+            disabled={busy || page.page <= 1}
+            onClick={() => void load(search, page.page - 1, ++requestId.current)}
+          >
+            Previous
+          </button>
+          <button
+            className="btn sm"
             disabled={busy || page.page * page.pageSize >= page.total}
-            onClick={() => void load(search, page.page + 1)}
+            onClick={() => void load(search, page.page + 1, ++requestId.current)}
           >
             Next
           </button>
@@ -208,81 +369,57 @@ export function BrowseScreen({
           Verifying your email address removes the daily limit.
         </div>
       ) : null}
+
+      <AnimatePresence>
+        {pending && (
+          <DownloadConfirm
+            modName={pending.mod.name}
+            fileName={pending.fileName}
+            required={required(pending.detail.relationships)}
+            optional={optional(pending.detail.relationships)}
+            incompatible={incompatible(pending.detail.relationships)}
+            busy={sending}
+            onConfirm={() => void send(pending.mod, pending.fileId)}
+            onView={() => {
+              setViewing(pending.mod);
+              setDetail(pending.detail);
+              setPending(null);
+            }}
+            onCancel={() => setPending(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {viewing && (
+          <ModPage
+            mod={viewing}
+            detail={detail}
+            busy={sending}
+            downloadedIds={sentFileIds}
+            onDownload={(fileId) => void send(viewing, fileId)}
+            onClose={() => {
+              setViewing(null);
+              setDetail(null);
+            }}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
 
 function BrowseCard({
   mod,
-  onError,
-  onClaimed,
+  busy,
+  onView,
+  onDownload,
 }: {
   mod: CatalogModView;
-  onError: (e: unknown) => void;
-  onClaimed: () => void;
+  busy: boolean;
+  onView: () => void;
+  onDownload: () => void;
 }) {
-  const [detail, setDetail] = useState<CatalogModDetailView | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [sent, setSent] = useState(false);
-
-  const release = detail?.versions.find((v) => v.isLatest) ?? detail?.versions[0] ?? null;
-  const files = release?.files ?? [];
-
-  const fetchDetail = useCallback(async () => {
-    if (detail) return detail;
-    setLoading(true);
-    try {
-      const d = await api.apocryphaModDetail(mod.gameSlug, mod.slug);
-      setDetail(d);
-      return d;
-    } finally {
-      setLoading(false);
-    }
-  }, [detail, mod.gameSlug, mod.slug]);
-
-  const start = async (fileId: string) => {
-    setBusy(true);
-    try {
-      await api.apocryphaDownloadFile(mod.gameSlug, mod.slug, fileId);
-      setSent(true);
-      onClaimed();
-    } catch (e) {
-      onError(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  /**
-   * One press does the obvious thing, when there is only one obvious thing.
-   *
-   * Files are fetched on demand rather than with the listing — twenty cards on
-   * screen would otherwise be twenty requests for detail nobody asked to see.
-   * With exactly one downloadable file the press downloads it; with more, the
-   * card opens so the choice is made deliberately. A mod shipping a main file
-   * alongside optional extras is where guessing is worst, because the wrong
-   * pick is the one that ends up deployed into a game.
-   */
-  const onDownload = async () => {
-    setBusy(true);
-    try {
-      const d = await fetchDetail();
-      const latest = d.versions.find((v) => v.isLatest) ?? d.versions[0] ?? null;
-      const usable = (latest?.files ?? []).filter(ready);
-      if (usable.length === 1) {
-        await start(usable[0]!.id);
-        return;
-      }
-      setOpen(true);
-    } catch (e) {
-      onError(e);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   return (
     <article className="browse-card">
       <div className="browse-card-art">
@@ -305,56 +442,13 @@ function BrowseCard({
       </div>
 
       <div className="browse-card-foot">
-        <button
-          className="btn primary sm"
-          onClick={() => void onDownload()}
-          disabled={busy || loading || sent}
-        >
-          {sent ? "In downloads" : busy || loading ? "Working…" : "Download"}
+        <button className="btn primary sm" onClick={onDownload} disabled={busy}>
+          Download
         </button>
-        <button
-          className="btn sm"
-          onClick={() => {
-            const next = !open;
-            setOpen(next);
-            if (next) void fetchDetail().catch(onError);
-          }}
-          disabled={loading}
-        >
-          {open ? "Hide files" : "Files"}
+        <button className="btn sm" onClick={onView} disabled={busy}>
+          View
         </button>
       </div>
-
-      {open ? (
-        <div className="browse-card-files">
-          {loading ? (
-            <Spinner />
-          ) : files.length === 0 ? (
-            <span className="mod-meta">No files published yet.</span>
-          ) : (
-            files.map((f) => (
-              <div className="browse-file" key={f.id}>
-                <span className="browse-file-text">
-                  <span className="browse-file-name">
-                    {f.displayName?.trim() || f.fileName}
-                  </span>
-                  <span className="mod-meta">
-                    {size(f.sizeBytes)}
-                    {ready(f) ? "" : " · not ready"}
-                  </span>
-                </span>
-                <button
-                  className="btn sm"
-                  disabled={!ready(f) || busy || sent}
-                  onClick={() => void start(f.id)}
-                >
-                  Get
-                </button>
-              </div>
-            ))
-          )}
-        </div>
-      ) : null}
     </article>
   );
 }

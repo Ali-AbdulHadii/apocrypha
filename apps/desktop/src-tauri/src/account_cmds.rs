@@ -6,8 +6,8 @@
 //! the choice away and hold a worker thread for ten minutes.
 
 use apoc_apocrypha::{
-    protocol, Catalog, CatalogModDetail, CatalogPage, DevicePairing, DownloadQuota, PairingStatus,
-    ServiceOrigin,
+    protocol, Catalog, CatalogGame, CatalogModDetail, CatalogPage, DevicePairing, DownloadQuota,
+    PairingStatus, ServiceOrigin,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -179,6 +179,16 @@ pub fn browse_apocrypha_mods(
         .map_err(|e| e.to_string())
 }
 
+/// Every game the service lists.
+///
+/// The window uses this to decide whether the game it is managing exists on the
+/// service at all, which is the difference between "no mods published yet" and
+/// "not listed here" — two states that need different words.
+#[tauri::command(async)]
+pub fn apocrypha_games(state: State<AppState>) -> CmdResult<Vec<CatalogGame>> {
+    catalog(&state)?.games().map_err(|e| e.to_string())
+}
+
 /// One mod with its releases and their files.
 ///
 /// Separate from the listing because it is a second request, and a listing of
@@ -235,18 +245,40 @@ pub fn apocrypha_download_file(
     }
 
     let expected_sha = file.sha256.to_ascii_lowercase();
-    let ticket = catalog
-        .claim_download(&file_id)
-        .map_err(|e| e.to_string())?;
 
     let dest_dir = state.downloads_dir();
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
-    let dest = dest_dir.join(downloads::safe_name(&ticket.file_name));
 
-    // A second press must not start a second writer for the same file.
-    let entry = match state.downloads.begin(&ticket.file_name, &dest, "Apocrypha") {
+    // The mod slug is part of the name on disk, because the queue identifies a
+    // transfer by where it is writing and file names are not unique across the
+    // catalogue. Two mods both shipping "main.zip" would otherwise be one
+    // download: the second would be handed the first one back as already
+    // running, and reported as queued while none of its bytes ever were.
+    //
+    // Taken from the catalogue rather than from the ticket, so the name is
+    // known before anything is claimed.
+    let dest = dest_dir.join(downloads::safe_name(&format!(
+        "{mod_slug}-{}",
+        file.file_name
+    )));
+
+    // Reserved before the claim, not after. Claiming spends a slot against the
+    // daily allowance, and a second press on a download already running must
+    // not spend one to be told it was already running.
+    let entry = match state.downloads.begin(&file.file_name, &dest, "Apocrypha") {
         downloads::Begin::Started(d) => d,
         downloads::Begin::AlreadyRunning(d) => return Ok(d),
+    };
+
+    let ticket = match catalog.claim_download(&file_id) {
+        Ok(t) => t,
+        Err(e) => {
+            // The slot was reserved on the assumption this would work. Release
+            // it, or the name stays occupied and every later attempt is told it
+            // is already downloading.
+            state.downloads.forget(&entry.id);
+            return Err(e.to_string());
+        }
     };
 
     let queue = state.downloads.clone();

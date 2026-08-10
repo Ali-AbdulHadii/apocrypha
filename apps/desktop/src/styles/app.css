@@ -1716,7 +1716,11 @@ img.lib-row-art {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: var(--sp-4);
-  align-items: start;
+  /* Deliberately NOT align-items: start. Grid items stretch by default, which
+     is what makes every card in a row the same height however long its summary
+     is; pinning them to the top instead let a one-line summary produce a
+     visibly shorter card, and no amount of flex inside the card could fix it
+     because the card itself was not being stretched. */
 }
 
 .browse-card {
@@ -1771,13 +1775,16 @@ img.lib-row-art {
   font-size: var(--text-sm);
   color: var(--text-secondary);
   line-height: var(--leading);
-  /* Two lines, then stop. Summaries are creator-written and range from a phrase
-     to a paragraph; without a clamp one verbose mod sets the height of its
-     whole row. */
+  /* Exactly two lines: clamped so a paragraph cannot set the height of its
+     whole row, and reserved so a one-word summary does not pull the facts and
+     buttons up out of line with the cards beside it. Summaries are
+     creator-written and range from a phrase to an essay, so both ends need
+     holding. */
   display: -webkit-box;
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
+  min-height: calc(var(--text-sm) * var(--leading) * 2);
 }
 
 .browse-card-facts {
@@ -1856,4 +1863,115 @@ img.lib-row-art {
   position: absolute;
   inset: 0;
   background: var(--cover-sheen);
+}
+
+/* --- Mod page ------------------------------------------------------------- */
+
+/* A panel rather than a route: Browse is a place you are looking around in, and
+   navigating away from the grid to read one entry loses your place in it. */
+.modpage {
+  width: min(680px, calc(100vw - var(--sp-8)));
+  max-height: calc(100vh - var(--sp-8));
+  display: flex;
+  flex-direction: column;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  overflow: hidden;
+}
+
+.modpage-art {
+  position: relative;
+  aspect-ratio: 21 / 9;
+  flex: none;
+  background: var(--bg-sunken);
+}
+
+.modpage-close {
+  position: absolute;
+  top: var(--sp-3);
+  right: var(--sp-3);
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 999px;
+  /* Over artwork whose colour is chosen per mod, so the button carries its own
+     backing rather than trusting the cover to be dark enough. */
+  background: var(--scrim);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.modpage-close:hover {
+  background: var(--bg-active);
+}
+
+.modpage-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  padding: var(--sp-4);
+  overflow-y: auto;
+}
+
+.modpage-name {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.modpage-by {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-tertiary);
+}
+
+.modpage-desc {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  line-height: var(--leading);
+  /* Creator-written text of unknown length and no line breaks of its own. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Incompatibility is amber, not red: it is a thing to know before installing,
+   not a failure that has happened. Red here would compete with the deploy
+   screen, where red does mean something went wrong. */
+.modpage-warn,
+.modpage-need {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--sp-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+.modpage-warn {
+  border-color: var(--warning);
+  background: var(--warning-bg, transparent);
+}
+.modpage-need {
+  border-color: var(--accent-border, var(--border));
+}
+
+.modpage-warn-title {
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.modpage-files-title {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.modpage-files {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
 }

@@ -22,8 +22,8 @@ pub mod pairing;
 pub mod protocol;
 
 pub use catalog::{
-    Catalog, CatalogFile, CatalogMod, CatalogModDetail, CatalogPage, CatalogVersion, DownloadQuota,
-    DownloadTicket,
+    Catalog, CatalogFile, CatalogGame, CatalogMod, CatalogModDetail, CatalogPage,
+    CatalogRelationship, CatalogVersion, DownloadQuota, DownloadTicket,
 };
 pub use pairing::{DevicePairing, PairingError, PairingStatus, StartedPairing};
 pub use protocol::{InstallRequest, LinkError};

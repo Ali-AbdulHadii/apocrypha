@@ -190,6 +190,7 @@ pub fn run() {
             account_cmds::poll_apocrypha_pairing,
             account_cmds::sign_out_apocrypha,
             account_cmds::browse_apocrypha_mods,
+            account_cmds::apocrypha_games,
             account_cmds::apocrypha_mod_detail,
             account_cmds::apocrypha_download_quota,
             account_cmds::apocrypha_download_file,

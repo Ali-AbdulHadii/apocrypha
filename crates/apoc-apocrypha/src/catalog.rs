@@ -44,6 +44,25 @@ impl CatalogPage {
     }
 }
 
+/// A game as the *service* lists it.
+///
+/// Its slug is the service's, which is not this app's game id. The two
+/// catalogues are maintained separately, and a game this app can manage may not
+/// be listed there at all — so anything filtering by game matches against this
+/// rather than assuming the two identifier spaces agree. Today they happen to,
+/// which is exactly the kind of coincidence that stops being true without
+/// anyone noticing.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogGame {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    #[serde(default)]
+    pub summary: String,
+    pub mod_count: i64,
+}
+
 /// One downloadable file on a release.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -103,11 +122,62 @@ pub struct CatalogModDetail {
     pub name: String,
     #[serde(default)]
     pub summary: String,
+    #[serde(default)]
+    pub description: String,
     pub author_name: String,
     pub game_slug: String,
     pub game_name: String,
     #[serde(default)]
+    pub download_count: i64,
+    #[serde(default)]
+    pub favor_count: i64,
+    /// What this mod needs, and what it cannot sit beside.
+    ///
+    /// Carried because installing a mod that requires another, or that is known
+    /// to break one already deployed, is the failure a person most wants
+    /// warning about *before* the download rather than after the game refuses
+    /// to start.
+    #[serde(default)]
+    pub relationships: Vec<CatalogRelationship>,
+    #[serde(default)]
     pub versions: Vec<CatalogVersion>,
+}
+
+/// A stated link between two mods, as the service records it.
+///
+/// `kind` is the service's own vocabulary and is deliberately kept as text: the
+/// catalogue can add a relationship type without this client refusing to parse a
+/// mod page, and an unknown kind is shown as itself rather than dropped.
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CatalogRelationship {
+    pub target_mod_id: String,
+    pub target_mod_slug: String,
+    pub target_mod_name: String,
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+impl CatalogRelationship {
+    /// Whether this is something the mod needs in order to work.
+    ///
+    /// Matched case-insensitively against the service's own spelling
+    /// (`Required`, `Optional`, `Incompatible`) rather than a guess at it: a
+    /// predicate that quietly matches nothing is worse than none, because the
+    /// warning it feeds simply never appears.
+    pub fn is_required(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("required")
+    }
+
+    /// Something the mod can use but does not need.
+    pub fn is_optional(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("optional")
+    }
+
+    /// Something the mod is known not to work beside.
+    pub fn is_incompatible(&self) -> bool {
+        self.kind.eq_ignore_ascii_case("incompatible")
+    }
 }
 
 impl CatalogModDetail {
@@ -203,6 +273,18 @@ impl Catalog {
                 .map_err(|e| PairingError::Decode(e.to_string())),
             Err(e) => Err(map_error(e, "browse the catalogue")),
         }
+    }
+
+    /// Every game the service lists.
+    ///
+    /// Small, stable, and worth asking for before filtering by game: it is the
+    /// only way to tell "this game has no mods yet" from "the service has never
+    /// heard of this game", and those need different words on screen.
+    pub fn games(&self) -> Result<Vec<CatalogGame>, PairingError> {
+        let url = format!("{}/api/v1/games", self.origin.as_str());
+        self.get(&url, "read the game list")?
+            .into_json::<Vec<CatalogGame>>()
+            .map_err(|e| PairingError::Decode(e.to_string()))
     }
 
     /// One mod with its releases and their files.
@@ -398,6 +480,35 @@ mod tests {
     }
 
     #[test]
+    fn relationships_are_classified_by_the_services_own_spelling() {
+        let rel = |kind: &str| CatalogRelationship {
+            target_mod_id: "1".into(),
+            target_mod_slug: "s".into(),
+            target_mod_name: "N".into(),
+            kind: kind.into(),
+        };
+
+        // These are the exact three the service emits. Matching invented
+        // synonyms instead would leave every predicate false, and a warning
+        // that never fires is worse than no warning: the screen looks like it
+        // checked.
+        assert!(rel("Required").is_required());
+        assert!(rel("Optional").is_optional());
+        assert!(rel("Incompatible").is_incompatible());
+
+        assert!(rel("required").is_required(), "casing is not a contract");
+
+        // Each is only itself.
+        assert!(!rel("Optional").is_required());
+        assert!(!rel("Required").is_incompatible());
+
+        // A kind added to the catalogue later must not be silently read as one
+        // of these; it falls through and is shown as itself.
+        let unknown = rel("Supersedes");
+        assert!(!unknown.is_required() && !unknown.is_optional() && !unknown.is_incompatible());
+    }
+
+    #[test]
     fn a_files_readiness_needs_both_a_clean_scan_and_verified_bytes() {
         let file = |scan: &str, upload: &str| CatalogFile {
             id: "1".into(),
@@ -456,9 +567,13 @@ mod tests {
             slug: "s".into(),
             name: "n".into(),
             summary: String::new(),
+            description: String::new(),
             author_name: "a".into(),
             game_slug: "g".into(),
             game_name: "G".into(),
+            download_count: 0,
+            favor_count: 0,
+            relationships: vec![],
             versions,
         };
 
