@@ -7,6 +7,7 @@ import { ConfirmDialog, type Confirm } from "./components/ConfirmDialog";
 import { HealthCheck } from "./components/HealthCheck";
 import { Icon, type IconName } from "./components/icons";
 import { InstallWizard } from "./components/InstallWizard";
+import { LinkPreviewDialog } from "./components/LinkPreviewDialog";
 import { ModsScreen } from "./components/ModsScreen";
 import { OrderScreen } from "./components/OrderScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
@@ -26,6 +27,7 @@ import {
   onDeployFinished,
   onDeployProgress,
   onDownloadChanged,
+  onApocryphaLink,
   onNxmLink,
   subscribe,
   truncatePath,
@@ -39,6 +41,7 @@ import {
   type ProfileView,
   type SettingsView,
   type UpdateCheckView,
+  type LinkPreviewView,
 } from "./lib/api";
 import { useAppearance } from "./lib/appearance";
 import { useMaximized } from "./lib/window";
@@ -285,6 +288,56 @@ export default function App() {
   // the website. The transfer is queued and the user is sent to Downloads to
   // watch it, rather than the window being taken over by a wizard for a file
   // that has not arrived yet.
+  // One link at a time, deliberately. A page can fire the scheme repeatedly,
+  // and a stack of dialogs is both unusable and exactly the pressure that gets
+  // someone to click through one. A second link while one is pending is
+  // dropped, not queued.
+  const [pendingLink, setPendingLink] = useState<LinkPreviewView | null>(null);
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const linkOpenRef = useRef(false);
+  linkOpenRef.current = linkOpen;
+
+  useEffect(() => {
+    if (!IS_TAURI) return;
+    return subscribe(() =>
+      onApocryphaLink(async (url) => {
+        if (linkOpenRef.current) return;
+        setPendingLink(null);
+        setLinkOpen(true);
+        try {
+          // Read-only. Nothing is claimed and no allowance is spent until the
+          // person presses Download.
+          setPendingLink(await api.previewApocryphaLink(url));
+        } catch (e) {
+          setLinkOpen(false);
+          fail(e);
+        }
+      }),
+    );
+  }, [fail]);
+
+  const confirmLink = useCallback(async () => {
+    if (!pendingLink) return;
+    setLinkBusy(true);
+    try {
+      const started = await api.apocryphaDownloadFile(
+        pendingLink.gameSlug,
+        pendingLink.modSlug,
+        pendingLink.fileId,
+      );
+      setDownloads((prev) => [started, ...prev.filter((d) => d.id !== started.id)]);
+      setScreen("downloads");
+      push(`Downloading ${started.fileName}`, "info");
+      setLinkOpen(false);
+      setPendingLink(null);
+    } catch (e) {
+      fail(e);
+    } finally {
+      setLinkBusy(false);
+    }
+  }, [pendingLink, push, fail]);
+
   useEffect(() => {
     if (!IS_TAURI) return;
     return subscribe(() =>
@@ -925,6 +978,20 @@ export default function App() {
             confirm={confirm}
             busy={busy}
             onCancel={() => setConfirm(null)}
+          />
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {linkOpen && (
+          <LinkPreviewDialog
+            preview={pendingLink}
+            busy={linkBusy}
+            onConfirm={confirmLink}
+            onCancel={() => {
+              setLinkOpen(false);
+              setPendingLink(null);
+            }}
           />
         )}
       </AnimatePresence>

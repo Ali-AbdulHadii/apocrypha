@@ -66,7 +66,8 @@
     "deep-link": {
       "desktop": {
         "schemes": [
-          "nxm"
+          "nxm",
+          "apocrypha"
         ]
       }
     }

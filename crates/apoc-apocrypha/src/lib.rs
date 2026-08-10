@@ -19,12 +19,14 @@
 
 pub mod catalog;
 pub mod pairing;
+pub mod protocol;
 
 pub use catalog::{
     Catalog, CatalogFile, CatalogMod, CatalogModDetail, CatalogPage, CatalogVersion, DownloadQuota,
     DownloadTicket,
 };
 pub use pairing::{DevicePairing, PairingError, PairingStatus, StartedPairing};
+pub use protocol::{InstallRequest, LinkError};
 
 use std::time::Duration;
 

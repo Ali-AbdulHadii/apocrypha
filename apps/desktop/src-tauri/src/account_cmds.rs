@@ -6,7 +6,7 @@
 //! the choice away and hold a worker thread for ten minutes.
 
 use apoc_apocrypha::{
-    Catalog, CatalogModDetail, CatalogPage, DevicePairing, DownloadQuota, PairingStatus,
+    protocol, Catalog, CatalogModDetail, CatalogPage, DevicePairing, DownloadQuota, PairingStatus,
     ServiceOrigin,
 };
 use serde::{Deserialize, Serialize};
@@ -300,6 +300,87 @@ pub fn apocrypha_download_file(
     });
 
     Ok(entry)
+}
+
+/// What an `apocrypha://` link turns out to refer to, once the service has been
+/// asked.
+///
+/// Every field here comes from the service. Nothing a link said is shown back to
+/// anyone: a name or a size taken from the link would be a stranger's words
+/// presented as the platform's, which is the whole trick a confirmation screen
+/// has to not fall for.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LinkPreviewView {
+    pub game_slug: String,
+    pub mod_slug: String,
+    pub file_id: String,
+    pub game_name: String,
+    pub mod_name: String,
+    pub author_name: String,
+    pub version: Option<String>,
+    pub file_label: String,
+    pub size_bytes: i64,
+    /// Whether the service will serve these bytes: scanned clean, bytes verified.
+    pub ready: bool,
+    /// What is left of today's allowance, when there is a limit at all.
+    pub remaining_today: Option<i32>,
+}
+
+/// Resolve a link into something a person can agree to.
+///
+/// Deliberately read-only. It reads the mod and the allowance and claims
+/// nothing, so a page that fires this repeatedly cannot spend anything — the
+/// quota slot is spent by the download command, after someone has said yes.
+///
+/// Refuses outright when this computer is not paired, rather than remembering
+/// the link for after a sign-in. A link kept across an authentication turns a
+/// page anyone can publish into an action taken later, when whoever clicked has
+/// forgotten why the app is asking.
+#[tauri::command(async)]
+pub fn preview_apocrypha_link(state: State<AppState>, url: String) -> CmdResult<LinkPreviewView> {
+    let request = protocol::parse(&url).map_err(|e| e.message().to_string())?;
+
+    // Same refusal as everywhere else, and for the same reason: the catalogue is
+    // read as the account, so there has to be one.
+    let catalog = catalog(&state)?;
+
+    let detail = catalog
+        .mod_detail(&request.game_slug, &request.mod_slug)
+        .map_err(|e| e.to_string())?;
+
+    // The link named a game, a mod and a file independently, so nothing so far
+    // has established that the file belongs to the other two. Without this a
+    // link could pair one mod's name with another mod's file and have the
+    // confirmation describe something other than what would be fetched.
+    let (version, file) = detail
+        .versions
+        .iter()
+        .find_map(|v| {
+            v.files
+                .iter()
+                .find(|f| f.id == request.file_id)
+                .map(|f| (v, f))
+        })
+        .ok_or_else(|| "That file is not part of this mod.".to_string())?;
+
+    // Best effort: an allowance that will not load should not stop someone
+    // seeing what the link points at.
+    let remaining_today = catalog.download_quota().ok().and_then(|q| q.remaining);
+
+    Ok(LinkPreviewView {
+        game_slug: request.game_slug,
+        mod_slug: request.mod_slug,
+        file_id: request.file_id,
+        game_name: detail.game_name.clone(),
+        mod_name: detail.name.clone(),
+        author_name: detail.author_name.clone(),
+        version: Some(version.version_number.clone()).filter(|v| !v.is_empty()),
+        file_label: file.label().to_string(),
+        size_bytes: file.size_bytes,
+        ready: file.is_downloadable(),
+        remaining_today,
+    })
 }
 
 /// A catalogue client for the signed-in account, or a refusal saying so.

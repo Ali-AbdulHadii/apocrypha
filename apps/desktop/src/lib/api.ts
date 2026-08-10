@@ -216,6 +216,27 @@ export interface DownloadQuotaView {
   remaining: number | null;
 }
 
+/**
+ * What an apocrypha:// link turned out to refer to, resolved by the service.
+ *
+ * Every field is the service's answer. Nothing the link itself said appears
+ * here — showing a stranger's text as though the platform vouched for it is
+ * exactly what a confirmation screen must not do.
+ */
+export interface LinkPreviewView {
+  gameSlug: string;
+  modSlug: string;
+  fileId: string;
+  gameName: string;
+  modName: string;
+  authorName: string;
+  version: string | null;
+  fileLabel: string;
+  sizeBytes: number;
+  ready: boolean;
+  remainingToday: number | null;
+}
+
 export interface ApocryphaAccountView {
   signedIn: boolean;
   deviceName: string | null;
@@ -462,6 +483,13 @@ export const api = {
    */
   apocryphaDownloadFile: (gameSlug: string, modSlug: string, fileId: string) =>
     call<DownloadView>("apocrypha_download_file", { gameSlug, modSlug, fileId }),
+  /**
+   * Resolves an apocrypha:// link so it can be described before anything is
+   * fetched. Read-only: it spends no download allowance, which is why a page
+   * firing links repeatedly cannot cost anything until someone agrees.
+   */
+  previewApocryphaLink: (url: string) =>
+    call<LinkPreviewView>("preview_apocrypha_link", { url }),
 
   /* Nexus Mods */
   nexusStatus: () => call<NexusStatusView>("nexus_status"),
@@ -533,6 +561,20 @@ export function subscribe(start: () => Promise<() => void>): () => void {
     cancelled = true;
     stop?.();
   };
+}
+
+/**
+ * Subscribe to apocrypha:// links delivered by the OS.
+ *
+ * Only links that already passed the full grammar check in Rust arrive here —
+ * a malformed one is refused before it reaches the window, so this never sees
+ * attacker-shaped text.
+ */
+export async function onApocryphaLink(
+  handler: (url: string) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<string>("apocrypha-url", (e) => handler(e.payload));
 }
 
 /** Subscribe to nxm:// links delivered by the OS. Returns an unsubscribe fn. */

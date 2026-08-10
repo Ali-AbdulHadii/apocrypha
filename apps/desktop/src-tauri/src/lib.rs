@@ -67,6 +67,35 @@ fn check_app_update() -> app_update::AppUpdateView {
     app_update::check(env!("CARGO_PKG_VERSION"))
 }
 
+/// A protocol invocation found among the process arguments.
+enum Link {
+    Nxm(String),
+    Apocrypha(String),
+}
+
+/// The one link in an argument list, if there is exactly one.
+///
+/// Both ingress paths — the first launch and the second-instance callback —
+/// come through here, because a link is chosen by whoever published the page
+/// that opened it, and two places doing this slightly differently is how one of
+/// them becomes the lenient one.
+///
+/// An `apocrypha://` argument is validated against the full grammar here rather
+/// than merely recognised, so a malformed one never reaches the window at all.
+/// The argument must *be* the link: an argument that contains one is not one,
+/// since this process can be started with any arguments at all.
+fn link_from(args: &[String]) -> Option<Link> {
+    for arg in args {
+        if arg.starts_with("nxm://") {
+            return Some(Link::Nxm(arg.clone()));
+        }
+        if apoc_apocrypha::protocol::parse(arg).is_ok() {
+            return Some(Link::Apocrypha(arg.clone()));
+        }
+    }
+    None
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     #[cfg(target_os = "linux")]
@@ -89,8 +118,14 @@ pub fn run() {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.set_focus();
             }
-            if let Some(url) = argv.iter().find(|a| a.starts_with("nxm://")) {
-                let _ = app.emit("nxm-url", url.clone());
+            match link_from(&argv) {
+                Some(Link::Nxm(url)) => {
+                    let _ = app.emit("nxm-url", url);
+                }
+                Some(Link::Apocrypha(url)) => {
+                    let _ = app.emit("apocrypha-url", url);
+                }
+                None => {}
             }
         }))
         .plugin(tauri_plugin_deep_link::init())
@@ -158,17 +193,24 @@ pub fn run() {
             account_cmds::apocrypha_mod_detail,
             account_cmds::apocrypha_download_quota,
             account_cmds::apocrypha_download_file,
+            account_cmds::preview_apocrypha_link,
         ])
         .setup(|app| {
             use tauri::{Emitter, Manager};
             // The very first launch can itself be the protocol invocation, so
-            // the argument list is checked once at startup too.
-            if let Some(url) = std::env::args().find(|a| a.starts_with("nxm://")) {
+            // the argument list is checked once at startup too — through the
+            // same function, because two ingress paths with two validations is
+            // how one of them ends up being the lenient one.
+            let args: Vec<String> = std::env::args().collect();
+            if let Some(link) = link_from(&args) {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
                     // Give the window a moment to mount its listener.
                     tokio_sleep().await;
-                    let _ = handle.emit("nxm-url", url);
+                    let _ = match link {
+                        Link::Nxm(url) => handle.emit("nxm-url", url),
+                        Link::Apocrypha(url) => handle.emit("apocrypha-url", url),
+                    };
                 });
             }
             let _ = app.get_webview_window("main");
@@ -176,6 +218,52 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running Apocrypha");
+}
+
+#[cfg(test)]
+mod link_tests {
+    use super::{link_from, Link};
+
+    const GOOD: &str =
+        "apocrypha://install?game=monster-hunter-wilds&mod=reframework&file=3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_link_is_found_past_the_executable_name() {
+        // argv[0] is always there, so the search cannot start at the first item.
+        let found = link_from(&args(&["/usr/bin/apocrypha", GOOD]));
+        assert!(matches!(found, Some(Link::Apocrypha(u)) if u == GOOD));
+    }
+
+    #[test]
+    fn a_malformed_apocrypha_link_never_reaches_the_window() {
+        // Validated here, not merely recognised: emitting it and letting the
+        // window sort it out would put an attacker-authored string through the
+        // event channel first.
+        let bad = "apocrypha://install?game=../../etc&mod=m&file=x";
+        assert!(link_from(&args(&["/usr/bin/apocrypha", bad])).is_none());
+    }
+
+    #[test]
+    fn an_ordinary_launch_finds_nothing() {
+        assert!(link_from(&args(&["/usr/bin/apocrypha"])).is_none());
+        assert!(link_from(&args(&["/usr/bin/apocrypha", "--flag", "value"])).is_none());
+    }
+
+    #[test]
+    fn nxm_still_works() {
+        let url = "nxm://skyrimspecialedition/mods/1/files/2";
+        assert!(matches!(link_from(&args(&["x", url])), Some(Link::Nxm(u)) if u == url));
+    }
+
+    #[test]
+    fn an_argument_that_merely_contains_a_link_is_not_one() {
+        let smuggled = format!("--config={GOOD}");
+        assert!(link_from(&args(&["x", &smuggled])).is_none());
+    }
 }
 
 #[cfg(all(test, target_os = "linux"))]
