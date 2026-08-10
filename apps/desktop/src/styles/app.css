@@ -1316,9 +1316,16 @@
   white-space: nowrap;
 }
 
+/* Top-right, clear of the title bar.
+   These used to sit bottom-right, directly on top of the deploy bar's Apply
+   button — a transient message covering the one control the screen exists to
+   offer. The bar is right: a persistent commit action belongs bottom-right and
+   its primary sits last. What had to move is the thing that is only on screen
+   for four seconds. Top-right also matches where this platform's own
+   notifications appear. */
 .toast-wrap {
   position: fixed;
-  bottom: var(--sp-4);
+  top: calc(var(--titlebar-h) + var(--sp-3));
   right: var(--sp-4);
   display: flex;
   flex-direction: column;
@@ -1504,9 +1511,27 @@
 
 /* The active game, presented the way iOS Settings presents the account row:
    the largest thing on the page, because it is what the page is about. */
+/* The two controls that decide whether the app can find your game, given room
+   next to the game itself. They wrap under the text on a narrow window rather
+   than squeezing the name. */
+.lib-hero-actions {
+  display: flex;
+  gap: var(--sp-2);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+@media (max-width: 720px) {
+  .lib-hero-actions {
+    margin-left: 0;
+    width: 100%;
+  }
+}
+
 .lib-hero {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--sp-4);
   padding: var(--sp-4);
   background: var(--bg-surface);

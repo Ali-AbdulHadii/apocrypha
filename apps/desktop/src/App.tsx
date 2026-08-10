@@ -1211,6 +1211,10 @@ function LibraryScreen({
 }) {
   const active = games.find((g) => g.id === activeId);
 
+  // Good enough for wording, and it needs no IPC round trip. The webview's
+  // user agent is the platform it is running on.
+  const isWindows = navigator.userAgent.includes("Windows");
+
   // What used to be four stat tiles. Read as a sentence, these are facts about
   // the game rather than measurements worth their own boxes.
   const facts = active
@@ -1245,6 +1249,21 @@ function LibraryScreen({
               )}
             </span>
             <span className="lib-hero-facts">{facts}</span>
+          </span>
+
+          {/* Beside the game they act on, at full size.
+              These were small buttons inside a section label further down the
+              page — the two controls that decide whether Apocrypha can find
+              your game at all, styled as an afterthought to a heading. Setting
+              the folder is the first thing anyone does and the thing they come
+              back to when detection misses. */}
+          <span className="lib-hero-actions">
+            <button className="btn" onClick={onDetect} disabled={busy}>
+              <Icon.refresh size={15} /> Find game
+            </button>
+            <button className="btn" onClick={onBrowse} disabled={busy}>
+              <Icon.folder size={15} /> Choose folder
+            </button>
           </span>
         </div>
       )}
@@ -1293,16 +1312,11 @@ function LibraryScreen({
 
       {active && (
         <div className="lib-section">
-          <div className="row lib-group-label" style={{ alignItems: "baseline" }}>
-            <span>Linux and Proton</span>
-            <span className="row" style={{ marginLeft: "auto", gap: "var(--sp-2)" }}>
-              <button className="btn sm" onClick={onBrowse} disabled={busy}>
-                <Icon.folder size={14} /> Choose folder
-              </button>
-              <button className="btn sm" onClick={onDetect} disabled={busy}>
-                <Icon.refresh size={14} /> Find again
-              </button>
-            </span>
+          {/* Named for what it is on this machine. On Windows there is no
+              Proton and no prefix, and a section headed "Linux and Proton"
+              there describes somebody else's computer. */}
+          <div className="lib-group-label">
+            {isWindows ? "Game files" : "Linux and Proton"}
           </div>
 
           <div className="lib-group">
