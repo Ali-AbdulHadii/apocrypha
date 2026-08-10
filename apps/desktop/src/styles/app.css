@@ -619,6 +619,7 @@
   display: flex;
   align-items: center;
   gap: var(--sp-4);
+  min-height: var(--deploybar-h);
   padding: var(--sp-3) var(--sp-5);
   border-top: 1px solid var(--border);
   background: var(--bg-surface);
@@ -1316,17 +1317,21 @@
   white-space: nowrap;
 }
 
-/* Top-right, clear of the title bar.
-   These used to sit bottom-right, directly on top of the deploy bar's Apply
-   button — a transient message covering the one control the screen exists to
-   offer. The bar is right: a persistent commit action belongs bottom-right and
-   its primary sits last. What had to move is the thing that is only on screen
-   for four seconds. Top-right also matches where this platform's own
-   notifications appear. */
+/* Bottom right, lifted clear of the deploy bar.
+   Near the action that caused it — most messages here are about something the
+   Apply button just did, and a confirmation on the far side of the window makes
+   you hunt for it. Raised by the bar's own height so it sits above the buttons
+   instead of on them, which is what it used to do.
+
+   The bar does not move: a persistent commit action belongs bottom-right with
+   the primary last. What moves is the thing that is on screen for four seconds.
+   Anchoring to --deploybar-h rather than a guessed offset means the two cannot
+   drift apart when the bar changes. */
 .toast-wrap {
   position: fixed;
-  top: calc(var(--titlebar-h) + var(--sp-3));
+  bottom: calc(var(--deploybar-h) + var(--sp-3));
   right: var(--sp-4);
+  align-items: flex-end;
   display: flex;
   flex-direction: column;
   gap: var(--sp-3);

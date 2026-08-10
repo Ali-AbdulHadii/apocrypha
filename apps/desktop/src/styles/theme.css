@@ -85,6 +85,9 @@
 
   /* ---- layout ---------------------------------------------------------- */
   --titlebar-h: 40px;
+  /* The deploy bar's height, named so anything that has to clear it can say so
+     rather than guessing. Both the bar and the toasts read this. */
+  --deploybar-h: 56px;
   --rail-w: 224px;
 
   /* ---- accent (overridable from Appearance settings) ------------------- */
