@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{agent, pairing::PairingError, ServiceOrigin};
+use crate::{agent, oauth::AuthorizationError, ServiceOrigin};
 
 /// One mod in a listing.
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq)]
@@ -247,7 +247,7 @@ impl Catalog {
         search: Option<&str>,
         page: u32,
         page_size: u32,
-    ) -> Result<CatalogPage, PairingError> {
+    ) -> Result<CatalogPage, AuthorizationError> {
         let mut url = format!(
             "{}/api/v1/mods?page={}&pageSize={}",
             self.origin.as_str(),
@@ -261,18 +261,9 @@ impl Catalog {
             url.push_str(&format!("&search={}", encode(s.trim())));
         }
 
-        let response = agent()
-            .get(&url)
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
-            .call();
-
-        match response {
-            Ok(res) => res
-                .into_json::<CatalogPage>()
-                .map_err(|e| PairingError::Decode(e.to_string())),
-            Err(e) => Err(map_error(e, "browse the catalogue")),
-        }
+        self.get(&url, "browse the catalogue")?
+            .into_json::<CatalogPage>()
+            .map_err(|e| AuthorizationError::Decode(e.to_string()))
     }
 
     /// Every game the service lists.
@@ -280,11 +271,11 @@ impl Catalog {
     /// Small, stable, and worth asking for before filtering by game: it is the
     /// only way to tell "this game has no mods yet" from "the service has never
     /// heard of this game", and those need different words on screen.
-    pub fn games(&self) -> Result<Vec<CatalogGame>, PairingError> {
+    pub fn games(&self) -> Result<Vec<CatalogGame>, AuthorizationError> {
         let url = format!("{}/api/v1/games", self.origin.as_str());
         self.get(&url, "read the game list")?
             .into_json::<Vec<CatalogGame>>()
-            .map_err(|e| PairingError::Decode(e.to_string()))
+            .map_err(|e| AuthorizationError::Decode(e.to_string()))
     }
 
     /// One mod with its releases and their files.
@@ -296,7 +287,7 @@ impl Catalog {
         &self,
         game_slug: &str,
         mod_slug: &str,
-    ) -> Result<CatalogModDetail, PairingError> {
+    ) -> Result<CatalogModDetail, AuthorizationError> {
         let url = format!(
             "{}/api/v1/games/{}/mods/{}",
             self.origin.as_str(),
@@ -306,15 +297,15 @@ impl Catalog {
 
         self.get(&url, "read this mod")?
             .into_json::<CatalogModDetail>()
-            .map_err(|e| PairingError::Decode(e.to_string()))
+            .map_err(|e| AuthorizationError::Decode(e.to_string()))
     }
 
     /// The account's standing with the daily cap.
-    pub fn download_quota(&self) -> Result<DownloadQuota, PairingError> {
+    pub fn download_quota(&self) -> Result<DownloadQuota, AuthorizationError> {
         let url = format!("{}/api/v1/downloads/quota", self.origin.as_str());
         self.get(&url, "check the download allowance")?
             .into_json::<DownloadQuota>()
-            .map_err(|e| PairingError::Decode(e.to_string()))
+            .map_err(|e| AuthorizationError::Decode(e.to_string()))
     }
 
     /// Claim a download of one file.
@@ -323,7 +314,7 @@ impl Catalog {
     /// against the daily cap and moves the mod's counter. Calling it twice for
     /// one mod in a day costs one slot, not two, but it is still not something
     /// to call speculatively — the button press is the intent.
-    pub fn claim_download(&self, file_id: &str) -> Result<DownloadTicket, PairingError> {
+    pub fn claim_download(&self, file_id: &str) -> Result<DownloadTicket, AuthorizationError> {
         let url = format!(
             "{}/api/v1/downloads/files/{}",
             self.origin.as_str(),
@@ -340,32 +331,47 @@ impl Catalog {
         match response {
             Ok(res) => res
                 .into_json::<DownloadTicket>()
-                .map_err(|e| PairingError::Decode(e.to_string())),
+                .map_err(|e| AuthorizationError::Decode(e.to_string())),
             Err(ureq::Error::Status(409, res)) => {
                 // The daily cap, or a file the service will not serve. Its own
                 // words are better than anything guessed from a status code —
                 // "you have reached five mods today" is actionable and
                 // "conflict" is not.
-                Err(PairingError::Refused(service_message(res).unwrap_or_else(
-                    || "That file cannot be downloaded right now.".into(),
-                )))
+                Err(AuthorizationError::Refused(
+                    service_message(res)
+                        .unwrap_or_else(|| "That file cannot be downloaded right now.".into()),
+                ))
             }
             Err(e) => Err(map_error(e, "download this file")),
         }
     }
 
-    /// A signed GET, with failures already turned into something showable.
+    /// A signed GET, retried once on a dropped connection, with failures already
+    /// turned into something showable.
     ///
     /// The mapping happens here rather than at each call site because
     /// `ureq::Error` is 272 bytes and returning it from a helper makes every
     /// `Result` in the chain that size — which clippy refuses, correctly.
-    fn get(&self, url: &str, what: &str) -> Result<ureq::Response, PairingError> {
-        agent()
-            .get(url)
-            .set("Authorization", &format!("Bearer {}", self.token))
-            .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
-            .call()
-            .map_err(|e| map_error(e, what))
+    ///
+    /// The retry is here and not on [`Self::claim_download`] because these are
+    /// reads. The service redeploys on every push and recreates its containers
+    /// in place, so a connection dropped mid-request is routine rather than
+    /// exceptional; repeating a read costs nothing, and repeating the write that
+    /// spends a download slot is not something to do on the client's initiative.
+    // The closure hands back a `ureq::Error` so `send_retrying` can tell a
+    // dropped connection from an answer. Same reasoning as on `send_retrying`
+    // itself: boxing it to satisfy the lint would cost every caller an unbox to
+    // read the service's own refusal.
+    #[allow(clippy::result_large_err)]
+    fn get(&self, url: &str, what: &str) -> Result<ureq::Response, AuthorizationError> {
+        crate::send_retrying(|| {
+            agent()
+                .get(url)
+                .set("Authorization", &format!("Bearer {}", self.token))
+                .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
+                .call()
+        })
+        .map_err(|e| map_error(e, what))
     }
 }
 
@@ -376,19 +382,19 @@ impl Catalog {
 /// every endpoint. 403 in particular is the one a device hits when it was
 /// paired before a scope existed, and telling someone their computer cannot
 /// browse when it actually cannot download would send them to the wrong fix.
-fn map_error(e: ureq::Error, what: &str) -> PairingError {
+fn map_error(e: ureq::Error, what: &str) -> AuthorizationError {
     match e {
-        ureq::Error::Status(401, _) => {
-            PairingError::Refused("This computer is not signed in any more. Sign in again.".into())
-        }
-        ureq::Error::Status(403, _) => PairingError::Refused(format!(
+        ureq::Error::Status(401, _) => AuthorizationError::Refused(
+            "This computer is not signed in any more. Sign in again.".into(),
+        ),
+        ureq::Error::Status(403, _) => AuthorizationError::Refused(format!(
             "This computer is not allowed to {what}. Signing in again may fix it."
         )),
         ureq::Error::Status(404, _) => {
-            PairingError::Refused("That is not available on the service.".into())
+            AuthorizationError::Refused("That is not available on the service.".into())
         }
-        ureq::Error::Status(code, _) => PairingError::Unexpected(code),
-        e => PairingError::Http(e.to_string()),
+        ureq::Error::Status(code, _) => AuthorizationError::Unexpected(code),
+        e => AuthorizationError::Http(e.to_string()),
     }
 }
 

@@ -1,18 +1,24 @@
 /**
  * Signing in to Apocrypha, from Settings.
  *
- * The app never asks for a password. It shows a code and opens the website,
- * and a person approves it there — so the code is the whole interface while
- * pairing is in progress, set large and monospaced because the only thing to
- * do with it is compare it against the other screen.
+ * This used to show a code and ask someone to check it matched the website.
+ * That question could be answered honestly and still hand an attacker a token,
+ * because the app collecting the token was not necessarily the app the person
+ * was looking at. So there is no longer a code, and nothing to compare: the
+ * browser delivers the answer straight back to this process, on a socket it
+ * opened before opening the browser.
+ *
+ * Which leaves this component with less to do than it had. It opens a page,
+ * waits, and says what happened.
  *
  * Polling lives here rather than in Rust so the window stays responsive and
- * cancelling is instant. The token never passes through this file: Rust stores
- * it when the service hands it over, and all that comes back is "granted".
+ * cancelling is instant. What is being polled is a local socket, not the
+ * service. The token never passes through this file: Rust stores it when the
+ * exchange succeeds, and all that comes back is "granted".
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, type ApocryphaAccountView, type PairingStartedView } from "../lib/api";
+import { api, type ApocryphaAccountView, type AuthorizationStartedView } from "../lib/api";
 import { Chip, Spinner } from "./ui";
 
 export function ApocryphaAccount({
@@ -23,58 +29,92 @@ export function ApocryphaAccount({
   onInfo: (msg: string, kind?: "ok" | "bad" | "info") => void;
 }) {
   const [account, setAccount] = useState<ApocryphaAccountView | null>(null);
-  const [pairing, setPairing] = useState<PairingStartedView | null>(null);
+  const [signingIn, setSigningIn] = useState<AuthorizationStartedView | null>(null);
   const [busy, setBusy] = useState(false);
-  const cancelled = useRef(false);
+  /**
+   * Which sign-in attempt is the current one.
+   *
+   * A counter rather than a boolean, because a boolean cannot answer the
+   * question that matters. Cancelling used to set a flag and immediately clear
+   * it so the next attempt could run — which left the previous waiter alive,
+   * polling the *new* attempt and eventually cancelling it when the old
+   * deadline passed. Each waiter now remembers the number it was started with
+   * and stops the moment it is not the current one.
+   */
+  const attempt = useRef(0);
 
   useEffect(() => {
     api.apocryphaAccount().then(setAccount).catch(onError);
     return () => {
-      cancelled.current = true;
+      attempt.current += 1;
+      // Leaving the window with a sign-in open would leave a socket listening
+      // for an answer nobody is waiting for.
+      void api.cancelApocryphaAuthorization().catch(() => {});
     };
   }, [onError]);
 
-  const waitFor = useCallback(
-    async (started: PairingStartedView) => {
-      const deadline = Date.now() + started.expiresInSeconds * 1000;
-      // The server sets the interval; a client that polls faster is told to
-      // slow down rather than served, so backing off is the correct response
-      // and not an error worth showing anyone.
-      let wait = started.pollIntervalSeconds * 1000;
+  /** Abandons whatever is in flight, and closes its socket. */
+  const abandon = useCallback(() => {
+    attempt.current += 1;
+    setSigningIn(null);
+    void api.cancelApocryphaAuthorization().catch(() => {});
+  }, []);
 
-      while (!cancelled.current && Date.now() < deadline) {
+  const waitFor = useCallback(
+    async (started: AuthorizationStartedView, mine: number) => {
+      const deadline = Date.now() + started.expiresInSeconds * 1000;
+      const wait = started.pollIntervalSeconds * 1000;
+      const current = () => attempt.current === mine;
+
+      while (current() && Date.now() < deadline) {
         await new Promise((r) => setTimeout(r, wait));
-        if (cancelled.current) return;
+        if (!current()) return;
         try {
-          const result = await api.pollApocryphaPairing(started.deviceCode);
+          const result = await api.pollApocryphaAuthorization();
+          if (!current()) return;
           if (result.status === "granted") {
-            setPairing(null);
+            setSigningIn(null);
             setAccount(await api.apocryphaAccount());
             onInfo("Signed in to Apocrypha.", "ok");
             return;
           }
-          if (result.status === "slowDown") wait = Math.round(wait * 1.5);
+          if (result.status === "declined") {
+            setSigningIn(null);
+            onInfo("The request was declined. Nothing was granted.", "bad");
+            return;
+          }
         } catch (e) {
-          setPairing(null);
+          if (!current()) return;
+          setSigningIn(null);
           onError(e);
           return;
         }
       }
-      if (!cancelled.current) {
-        setPairing(null);
-        onInfo("That code expired. Try again.", "bad");
+      if (current()) {
+        abandon();
+        onInfo("That sign-in expired. Try again.", "bad");
       }
     },
-    [onError, onInfo],
+    [abandon, onError, onInfo],
   );
 
   const signIn = async () => {
     setBusy(true);
+    // Claims this attempt before anything is opened, so any earlier waiter
+    // stops on its next tick rather than polling this one.
+    const mine = ++attempt.current;
     try {
-      const started = await api.startApocryphaPairing();
-      setPairing(started);
-      await api.openUrl(started.approvalUrl);
-      void waitFor(started);
+      const started = await api.startApocryphaAuthorization();
+      setSigningIn(started);
+      try {
+        await api.openUrl(started.authorizeUrl);
+      } catch (e) {
+        // The socket is already open and nothing is going to answer on it, so
+        // it is closed here rather than left listening until the app exits.
+        abandon();
+        throw e;
+      }
+      void waitFor(started, mine);
     } catch (e) {
       onError(e);
     } finally {
@@ -94,30 +134,23 @@ export function ApocryphaAccount({
     }
   };
 
-  if (pairing) {
+  if (signingIn) {
     return (
       <div className="lib-group">
         <div className="pair-panel">
-          <div className="pair-eyebrow">Approve this code on the website</div>
-          <div className="pair-code">{pairing.userCodeDisplay}</div>
+          <div className="pair-eyebrow">Waiting for your browser</div>
           <div className="pair-hint">
-            Your browser should have opened. Check the code there matches this
-            one, then approve it.
+            Apocrypha has opened in your browser. Sign in there and allow this
+            computer — the page will send you straight back.
           </div>
           <div className="row" style={{ gap: "var(--sp-2)" }}>
-            <button className="btn sm" onClick={() => void api.openUrl(pairing.approvalUrl)}>
-              Open the page again
-            </button>
             <button
               className="btn sm"
-              onClick={() => {
-                cancelled.current = true;
-                setPairing(null);
-                // A new pairing gets a new code, so cancelling can be immediate
-                // and the abandoned one simply expires.
-                cancelled.current = false;
-              }}
+              onClick={() => void api.openUrl(signingIn.authorizeUrl)}
             >
+              Open the page again
+            </button>
+            <button className="btn sm" onClick={abandon}>
               Cancel
             </button>
             <span className="row" style={{ gap: "var(--sp-2)", marginLeft: "auto" }}>

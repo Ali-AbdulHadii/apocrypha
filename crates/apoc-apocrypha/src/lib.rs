@@ -1,11 +1,12 @@
 //! Client for the Apocrypha service.
 //!
-//! First job: getting signed in. The app never asks for a password. It asks the
-//! service to start a pairing, shows the short code it gets back, opens the
-//! website, and waits for a person to approve it there. What comes back is a
-//! scoped token, which the caller stores. Today that is the same settings table
-//! the Nexus API key uses; moving both to the OS keyring is one change for both
-//! and is not this one.
+//! First job: getting signed in. The app never asks for a password. It opens a
+//! socket on the loopback interface, sends the browser to the website carrying
+//! the address of that socket, and exchanges what comes back for a scoped
+//! token, which the caller stores. Today that is the same settings table the
+//! Nexus API key uses; moving both to the OS keyring is one change for both and
+//! is not this one. See [`oauth`] for why the answer has to arrive on a socket
+//! rather than by polling.
 //!
 //! # The origin is compiled in, not configured by a link
 //!
@@ -18,14 +19,14 @@
 //! localhost, and that is a compile-time feature rather than a runtime setting.
 
 pub mod catalog;
-pub mod pairing;
+pub mod oauth;
 pub mod protocol;
 
 pub use catalog::{
     Catalog, CatalogFile, CatalogGame, CatalogMod, CatalogModDetail, CatalogPage,
     CatalogRelationship, CatalogVersion, DownloadQuota, DownloadTicket,
 };
-pub use pairing::{DevicePairing, PairingError, PairingStatus, StartedPairing};
+pub use oauth::{AuthorizationError, AuthorizationStatus, PendingAuthorization};
 pub use protocol::{InstallRequest, LinkError};
 
 use std::time::Duration;
@@ -46,11 +47,6 @@ impl ServiceOrigin {
     pub fn as_str(&self) -> &'static str {
         self.0
     }
-
-    /// The page a browser is sent to so a person can approve a pairing.
-    pub fn link_page(&self, user_code: &str) -> String {
-        format!("{}/link?code={}", self.0, urlencode(user_code))
-    }
 }
 
 impl Default for ServiceOrigin {
@@ -59,12 +55,12 @@ impl Default for ServiceOrigin {
     }
 }
 
-/// Percent-encodes the few characters a user code could contain that would
-/// change a URL's meaning.
+/// Percent-encodes anything that would change a URL's meaning.
 ///
-/// The alphabet is already restricted to unreserved characters, so this encodes
-/// nothing in practice — it exists so that a change to the alphabet upstream
-/// cannot quietly turn a code into a query parameter.
+/// Used on every value that goes into the authorization URL. The challenge and
+/// state are base64url and encode to themselves; the client name is a hostname
+/// chosen by the machine, and is exactly the field where an unencoded `&` would
+/// otherwise split one parameter into two.
 fn urlencode(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -217,13 +213,6 @@ mod tests {
         );
         assert!(result.is_err());
         assert_eq!(calls, ATTEMPTS, "gives up rather than hammering");
-    }
-
-    #[test]
-    fn the_link_page_carries_the_code() {
-        let url = ServiceOrigin::PRODUCTION.link_page("ABCD2345");
-        assert!(url.starts_with("https://apocryphamods.com/link?code="));
-        assert!(url.ends_with("ABCD2345"));
     }
 
     #[test]

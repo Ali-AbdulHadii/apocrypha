@@ -1,13 +1,18 @@
 //! Signing this installation in to the Apocrypha service.
 //!
-//! Three commands and no loop: the interface starts a pairing, opens the
+//! Three commands and no loop: the interface starts an authorization, opens the
 //! browser, and polls on its own timer. Waiting belongs to the window, which
 //! can stay responsive and let someone cancel; a blocking call here would take
-//! the choice away and hold a worker thread for ten minutes.
+//! the choice away and hold a worker thread for five minutes.
+//!
+//! What is being polled is not the service. It is a socket this process opened
+//! on the loopback interface, which is where the browser delivers the answer —
+//! see `apoc_apocrypha::oauth` for why the answer must arrive there rather than
+//! be collected by whoever started the request.
 
 use apoc_apocrypha::{
-    protocol, Catalog, CatalogGame, CatalogModDetail, CatalogPage, DevicePairing, DownloadQuota,
-    PairingStatus, ServiceOrigin,
+    protocol, AuthorizationStatus, Catalog, CatalogGame, CatalogModDetail, CatalogPage,
+    DownloadQuota, PendingAuthorization, ServiceOrigin,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{Emitter, State};
@@ -33,21 +38,29 @@ pub struct ApocryphaAccountView {
     pub service_origin: String,
 }
 
+/// What the window needs in order to wait.
+///
+/// Be precise about what crosses this boundary. The **verifier** does not: it
+/// stays in the pending authorization on this side, and it is the thing that
+/// spends the code. Neither does the code, which goes from the browser to the
+/// loopback socket and no further.
+///
+/// The `state` does cross, inside the URL, because it has to — it travels in
+/// the browser's address bar by design. It is a correlation value rather than a
+/// credential: knowing it lets something claim to be the browser coming back,
+/// which gets it as far as a code it cannot exchange.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairingStartedView {
-    pub device_code: String,
-    /// Grouped for reading. This is what goes on screen next to the browser.
-    pub user_code_display: String,
-    pub approval_url: String,
+pub struct AuthorizationStartedView {
+    pub authorize_url: String,
     pub expires_in_seconds: i64,
     pub poll_interval_seconds: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PairingPollView {
-    /// `pending`, `slowDown`, or `granted`.
+pub struct AuthorizationPollView {
+    /// `waiting`, `granted`, or `declined`.
     pub status: String,
 }
 
@@ -85,17 +98,29 @@ pub fn apocrypha_account(state: State<AppState>) -> CmdResult<ApocryphaAccountVi
     })
 }
 
-/// Begins pairing and returns what the window needs to show.
+/// Opens the callback socket and returns the page to send the browser to.
 ///
-/// The device code comes back to the interface because the interface is what
-/// polls. It is a secret for the length of one pairing and is never written
-/// down: nothing here persists it, and the window drops it when the pairing
-/// finishes or is cancelled.
+/// The pending authorization — the socket, the verifier, the state — stays in
+/// application state rather than going to the interface. There is nothing the
+/// window could usefully do with it and every reason not to hand a credential
+/// through an IPC boundary.
+///
+/// Starting a second one abandons the first. That is what pressing Sign in
+/// again means, and leaving the old socket open would be a listening port
+/// nobody is waiting on.
 #[tauri::command(async)]
-pub fn start_apocrypha_pairing(state: State<AppState>) -> CmdResult<PairingStartedView> {
+pub fn start_apocrypha_authorization(
+    state: State<AppState>,
+) -> CmdResult<AuthorizationStartedView> {
     let name = default_device_name();
-    let pairing = DevicePairing::new(origin(), APP_VERSION);
-    let started = pairing.start(&name).map_err(|e| e.to_string())?;
+    let pending =
+        PendingAuthorization::begin(origin(), APP_VERSION, &name).map_err(|e| e.to_string())?;
+
+    let view = AuthorizationStartedView {
+        authorize_url: pending.authorize_url().to_string(),
+        expires_in_seconds: AUTHORIZATION_WINDOW_SECONDS,
+        poll_interval_seconds: POLL_INTERVAL_SECONDS,
+    };
 
     {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
@@ -104,31 +129,51 @@ pub fn start_apocrypha_pairing(state: State<AppState>) -> CmdResult<PairingStart
             .map_err(|e| e.to_string())?;
     }
 
-    Ok(PairingStartedView {
-        approval_url: pairing.approval_url(&started.user_code),
-        device_code: started.device_code,
-        user_code_display: started.user_code_display,
-        expires_in_seconds: started.expires_in_seconds,
-        poll_interval_seconds: started.poll_interval_seconds,
-    })
+    *state
+        .pending_authorization
+        .lock()
+        .map_err(|_| "state poisoned")? = Some(pending);
+
+    Ok(view)
 }
 
-/// One poll. Stores the token itself when it arrives, so the secret never
+/// How long the window keeps asking, matching the socket's own deadline.
+const AUTHORIZATION_WINDOW_SECONDS: i64 = 300;
+
+/// How often the window asks. Nothing is being requested of the service here —
+/// this is a non-blocking accept on a local socket — so the interval is about
+/// how quickly the app should notice, not about being polite to a server.
+const POLL_INTERVAL_SECONDS: u64 = 1;
+
+/// One check. Stores the token itself when it arrives, so the secret never
 /// reaches the interface.
 #[tauri::command(async)]
-pub fn poll_apocrypha_pairing(
-    state: State<AppState>,
-    device_code: String,
-) -> CmdResult<PairingPollView> {
-    let pairing = DevicePairing::new(origin(), APP_VERSION);
-    match pairing.poll(&device_code).map_err(|e| e.to_string())? {
-        PairingStatus::Pending => Ok(PairingPollView {
-            status: "pending".into(),
+pub fn poll_apocrypha_authorization(state: State<AppState>) -> CmdResult<AuthorizationPollView> {
+    let mut slot = state
+        .pending_authorization
+        .lock()
+        .map_err(|_| "state poisoned")?;
+    let pending = slot
+        .as_ref()
+        .ok_or_else(|| "No sign-in is in progress.".to_string())?;
+
+    match pending.poll() {
+        Ok(AuthorizationStatus::Waiting) => Ok(AuthorizationPollView {
+            status: "waiting".into(),
         }),
-        PairingStatus::SlowDown => Ok(PairingPollView {
-            status: "slowDown".into(),
-        }),
-        PairingStatus::Granted { token, expires_at } => {
+        Ok(AuthorizationStatus::Declined) => {
+            *slot = None;
+            Ok(AuthorizationPollView {
+                status: "declined".into(),
+            })
+        }
+        Ok(AuthorizationStatus::Granted { token, expires_at }) => {
+            // Closed before the token is stored, not after. The socket has done
+            // its job and leaving it open is a port accepting connections for a
+            // sign-in that already finished.
+            *slot = None;
+            drop(slot);
+
             let store = state.store.lock().map_err(|_| "state poisoned")?;
             store
                 .set_setting(KEY_TOKEN, &token)
@@ -136,11 +181,28 @@ pub fn poll_apocrypha_pairing(
             store
                 .set_setting(KEY_TOKEN_EXPIRES, &expires_at)
                 .map_err(|e| e.to_string())?;
-            Ok(PairingPollView {
+            Ok(AuthorizationPollView {
                 status: "granted".into(),
             })
         }
+        Err(e) => {
+            // Any error ends the attempt. The socket is not reusable after one
+            // — an expired window stays expired, and an impostor on the port is
+            // a reason to stop rather than to keep listening.
+            *slot = None;
+            Err(e.to_string())
+        }
     }
+}
+
+/// Abandons an authorization in progress, closing the socket.
+#[tauri::command(async)]
+pub fn cancel_apocrypha_authorization(state: State<AppState>) -> CmdResult<()> {
+    *state
+        .pending_authorization
+        .lock()
+        .map_err(|_| "state poisoned")? = None;
+    Ok(())
 }
 
 /// Forgets the token locally.
@@ -438,12 +500,12 @@ fn forget_token(state: &AppState) {
 /// request would be its own bug.
 fn with_token_check<T>(
     state: &AppState,
-    result: Result<T, apoc_apocrypha::PairingError>,
+    result: Result<T, apoc_apocrypha::AuthorizationError>,
 ) -> CmdResult<T> {
     match result {
         Ok(v) => Ok(v),
         Err(e) => {
-            if matches!(&e, apoc_apocrypha::PairingError::Refused(m) if m.contains("not signed in"))
+            if matches!(&e, apoc_apocrypha::AuthorizationError::Refused(m) if m.contains("not signed in"))
             {
                 forget_token(state);
             }

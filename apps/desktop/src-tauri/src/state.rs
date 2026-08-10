@@ -16,6 +16,14 @@ pub struct AppState {
     /// In-flight and finished downloads. Not persisted: a transfer cannot
     /// survive a restart anyway, and finished files are found by scanning.
     pub downloads: std::sync::Arc<crate::downloads::Queue>,
+    /// The sign-in waiting for a browser to answer, if one is.
+    ///
+    /// Held here rather than handed to the interface because it owns two
+    /// secrets — the PKCE verifier and the callback's `state` — and a listening
+    /// socket. `Some` is also what "a sign-in is in flight" means, so starting
+    /// a second one closes the first rather than leaving an orphaned port open.
+    pub pending_authorization: Mutex<Option<apoc_apocrypha::PendingAuthorization>>,
+
     /// Cancel flag for the deployment currently running, if one is.
     ///
     /// `Some` is also what "a deploy is in flight" means, so a second Apply can
@@ -34,6 +42,7 @@ impl AppState {
             store: Mutex::new(store),
             paths,
             downloads: Default::default(),
+            pending_authorization: Mutex::new(None),
             deploy_cancel: Mutex::new(None),
         })
     }

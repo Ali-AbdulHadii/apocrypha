@@ -276,16 +276,22 @@ export interface ApocryphaAccountView {
   serviceOrigin: string;
 }
 
-export interface PairingStartedView {
-  deviceCode: string;
-  userCodeDisplay: string;
-  approvalUrl: string;
+/**
+ * What the window needs in order to wait for a sign-in.
+ *
+ * The code the browser delivers arrives on a socket Rust owns, and the verifier
+ * that spends it never leaves that side. The `state` inside `authorizeUrl` does
+ * reach here, because it travels in the address bar by design — it identifies
+ * the browser coming back, and is no use without the verifier.
+ */
+export interface AuthorizationStartedView {
+  authorizeUrl: string;
   expiresInSeconds: number;
   pollIntervalSeconds: number;
 }
 
-export interface PairingPollView {
-  status: "pending" | "slowDown" | "granted";
+export interface AuthorizationPollView {
+  status: "waiting" | "granted" | "declined";
 }
 
 export type InstallKind = "appImage" | "package" | "source";
@@ -497,10 +503,13 @@ export const api = {
 
   /* Apocrypha account */
   apocryphaAccount: () => call<ApocryphaAccountView>("apocrypha_account"),
-  startApocryphaPairing: () => call<PairingStartedView>("start_apocrypha_pairing"),
-  /** One poll. The token never comes back here; Rust stores it. */
-  pollApocryphaPairing: (deviceCode: string) =>
-    call<PairingPollView>("poll_apocrypha_pairing", { deviceCode }),
+  startApocryphaAuthorization: () =>
+    call<AuthorizationStartedView>("start_apocrypha_authorization"),
+  /** One check of the callback socket. The token never comes back here; Rust stores it. */
+  pollApocryphaAuthorization: () =>
+    call<AuthorizationPollView>("poll_apocrypha_authorization"),
+  /** Abandons a sign-in in progress, closing the socket. */
+  cancelApocryphaAuthorization: () => call<void>("cancel_apocrypha_authorization"),
   signOutApocrypha: () => call<ApocryphaAccountView>("sign_out_apocrypha"),
   /** Reads the service catalogue as this account. Requires being signed in. */
   browseApocryphaMods: (game: string | null, search: string | null, page: number) =>

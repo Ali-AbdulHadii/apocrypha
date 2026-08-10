@@ -4,11 +4,16 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Client for the Apocrypha service: device pairing, and the catalogue behind it."
+description = "Client for the Apocrypha service: authorization-code sign-in, and the catalogue behind it."
 
 [dependencies]
+base64 = "0.22"
+# The verifier and the state. The operating system's entropy source rather than
+# a userspace generator, because both of these are credentials.
+getrandom = "0.2"
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 # rustls rather than native-tls so the build does not depend on system OpenSSL,
 # matching apoc-nexus.
