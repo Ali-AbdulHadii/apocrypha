@@ -31,6 +31,27 @@ import { Icon } from "./icons";
 import { incompatible, ModPage, optional, required } from "./ModPage";
 import { Spinner } from "./ui";
 
+/**
+ * The service's game list, remembered for the life of the process.
+ *
+ * It changes about as often as a game is added to the platform, and it is asked
+ * for every time Browse opens. Without this, every visit pays a round trip
+ * before the first card can even be requested — and on a connection where that
+ * round trip is most of a second, the difference is the whole wait.
+ */
+let gamesCache: Promise<{ slug: string }[]> | null = null;
+
+function serviceGames(): Promise<{ slug: string }[]> {
+  // The promise is cached, not the result, so two mounts racing each other make
+  // one request rather than two. A failure clears it, because a cached
+  // rejection would make one bad moment permanent.
+  gamesCache ??= api.apocryphaGames().catch((e) => {
+    gamesCache = null;
+    throw e;
+  });
+  return gamesCache;
+}
+
 /** How the service's game list resolved for the game Library is on. */
 type Listing =
   | { state: "no-game" }
@@ -108,8 +129,7 @@ export function BrowseScreen({
 
     let alive = true;
     setListing({ state: "loading" });
-    api
-      .apocryphaGames()
+    serviceGames()
       .then((games) => {
         if (!alive) return;
         const match = games.find((g) => g.slug === gameId);
@@ -312,7 +332,9 @@ export function BrowseScreen({
         {busy ? <Spinner /> : null}
       </div>
 
-      {showing ? null : items.length === 0 ? (
+      {showing ? (
+        <BrowseSkeleton />
+      ) : items.length === 0 ? (
         <div className="empty">
           <div className="empty-title">
             {search ? "Nothing matched" : "No mods here yet"}
@@ -405,6 +427,49 @@ export function BrowseScreen({
           />
         )}
       </AnimatePresence>
+    </div>
+  );
+}
+
+/**
+ * The grid, before it has anything in it.
+ *
+ * Built from the same card shape so nothing moves when the real ones arrive —
+ * which is the point of a skeleton rather than a spinner. Getting here takes two
+ * round trips (resolve the game, then ask for its mods), and on a slow
+ * connection that is long enough that a blank rectangle reads as a broken
+ * screen.
+ */
+function BrowseSkeleton() {
+  return (
+    <div className="browse-grid" aria-hidden>
+      {Array.from({ length: 6 }, (_, i) => (
+        <article className="browse-card" key={i}>
+          {/* Nested rather than a second class on the art block: .browse-card-art
+              sets its own background and is defined later in the stylesheet, so
+              it would win and the placeholder would sit there not shimmering. */}
+          <div className="browse-card-art">
+            <span className="skeleton" style={{ position: "absolute", inset: 0 }} />
+          </div>
+          <div className="browse-card-body">
+            <span className="skeleton" style={{ height: 16, width: "70%" }} />
+            <span className="skeleton" style={{ height: 12, width: "45%" }} />
+            <span
+              className="skeleton"
+              style={{ height: 12, marginTop: "var(--sp-1)", width: "100%" }}
+            />
+            <span className="skeleton" style={{ height: 12, width: "85%" }} />
+            <span
+              className="skeleton"
+              style={{ height: 12, marginTop: "auto", width: "55%" }}
+            />
+          </div>
+          <div className="browse-card-foot">
+            <span className="skeleton" style={{ height: 28, flex: 1 }} />
+            <span className="skeleton" style={{ height: 28, flex: 1 }} />
+          </div>
+        </article>
+      ))}
     </div>
   );
 }
