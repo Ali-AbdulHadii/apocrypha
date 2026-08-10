@@ -101,29 +101,37 @@ impl<'a> Parser<'a> {
         }
         if self.bytes[self.pos] == b'"' {
             self.pos += 1;
-            let mut out = String::new();
+            // Bytes, decoded as UTF-8 at the end rather than one at a time.
+            //
+            // This used to push `byte as char`, which is Latin-1, not UTF-8: any
+            // multi-byte character became two mojibake codepoints. A Steam
+            // library at "D:\Spiele" survived that; one under a user folder with
+            // an accent in it did not, and the failure was invisible — the
+            // mangled path simply did not exist, so the library was skipped and
+            // the games in it never appeared.
+            let mut out: Vec<u8> = Vec::new();
             while self.pos < self.bytes.len() {
                 match self.bytes[self.pos] {
                     b'"' => {
                         self.pos += 1;
-                        return Some(out);
+                        return Some(String::from_utf8_lossy(&out).into_owned());
                     }
                     b'\\' if self.pos + 1 < self.bytes.len() => {
                         let esc = self.bytes[self.pos + 1];
-                        out.push(match esc {
-                            b'n' => '\n',
-                            b't' => '\t',
-                            other => other as char,
-                        });
+                        match esc {
+                            b'n' => out.push(b'\n'),
+                            b't' => out.push(b'\t'),
+                            other => out.push(other),
+                        }
                         self.pos += 2;
                     }
                     c => {
-                        out.push(c as char);
+                        out.push(c);
                         self.pos += 1;
                     }
                 }
             }
-            return Some(out);
+            return Some(String::from_utf8_lossy(&out).into_owned());
         }
         if self.bytes[self.pos] == b'{' || self.bytes[self.pos] == b'}' {
             return None;
@@ -202,6 +210,31 @@ pub fn parse(input: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_path_with_non_ascii_survives_parsing() {
+        // Decoded as UTF-8, not byte-by-byte. A library under a folder with an
+        // accent in it used to come back as mojibake, which meant the directory
+        // check failed and every game in that library silently vanished.
+        let text = r#"
+"libraryfolders"
+{
+    "0"
+    {
+        "path"    "D:\\Spiele\\Bibliothèque"
+    }
+}
+"#;
+        let parsed = parse(text);
+        let path = parsed
+            .get("libraryfolders")
+            .and_then(Value::as_map)
+            .and_then(|m| m.get("0"))
+            .and_then(|e| e.get("path"))
+            .and_then(Value::as_str)
+            .expect("a path");
+        assert_eq!(path, r"D:\Spiele\Bibliothèque");
+    }
 
     #[test]
     fn parses_libraryfolders_shape() {

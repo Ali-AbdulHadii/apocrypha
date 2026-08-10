@@ -106,31 +106,84 @@ fn candidate_roots(h: &Path) -> Vec<(PathBuf, SteamFlavor)> {
     ]
 }
 
-/// Windows keeps one Steam, in Program Files, with no sandboxed variants.
+/// Windows keeps one Steam, wherever the installer was pointed at.
 ///
-/// The registry (`HKCU\Software\Valve\Steam\SteamPath`) is the authoritative
-/// answer and is not read here: doing so needs a registry crate and cannot be
-/// exercised from this machine at all. These defaults cover the ordinary
-/// installs, `libraryfolders.vdf` covers every other drive the way it always
-/// has, and a user can point at a root by hand. Reading the registry is the
-/// obvious first improvement once there is a Windows machine to try it on.
+/// The registry is asked first and is the only answer that is actually correct.
+/// Hardcoded guesses find Steam on machines where it happens to sit in Program
+/// Files and silently find nothing everywhere else, which is exactly what
+/// happened the first time this ran on Windows. The fixed paths remain as a
+/// fallback for a registry that cannot be read.
 #[cfg(windows)]
 fn candidate_roots(h: &Path) -> Vec<(PathBuf, SteamFlavor)> {
-    let mut out = vec![
-        (
-            PathBuf::from(r"C:\Program Files (x86)\Steam"),
-            SteamFlavor::Native,
-        ),
-        (
-            PathBuf::from(r"C:\Program Files\Steam"),
-            SteamFlavor::Native,
-        ),
-    ];
+    let mut out: Vec<(PathBuf, SteamFlavor)> = registry_steam_paths()
+        .into_iter()
+        .map(|p| (p, SteamFlavor::Native))
+        .collect();
+
+    out.push((
+        PathBuf::from(r"C:\Program Files (x86)\Steam"),
+        SteamFlavor::Native,
+    ));
+    out.push((
+        PathBuf::from(r"C:\Program Files\Steam"),
+        SteamFlavor::Native,
+    ));
     // A per-user install, which is where Steam puts itself without admin.
     out.push((
         h.join("scoop").join("apps").join("steam").join("current"),
         SteamFlavor::Native,
     ));
+    out
+}
+
+/// Steam's own record of where it installed itself.
+///
+/// Read through `reg.exe` rather than a registry crate, for the same reason
+/// `steam_is_running` shells out to `tasklist`: one value does not justify a
+/// Windows-only dependency and the unsafe calls that come with it, and this
+/// runs once during discovery rather than in any loop.
+///
+/// Both the per-user and machine-wide keys are consulted. Steam writes
+/// `SteamPath` under HKCU for the installing user and `InstallPath` under HKLM
+/// for the machine, and which exists depends on how it was installed.
+#[cfg(windows)]
+fn registry_steam_paths() -> Vec<PathBuf> {
+    use std::process::Command;
+
+    const KEYS: [(&str, &str); 3] = [
+        (r"HKCU\Software\Valve\Steam", "SteamPath"),
+        (r"HKLM\SOFTWARE\WOW6432Node\Valve\Steam", "InstallPath"),
+        (r"HKLM\SOFTWARE\Valve\Steam", "InstallPath"),
+    ];
+
+    let mut out: Vec<PathBuf> = Vec::new();
+    for (key, value) in KEYS {
+        let Ok(output) = Command::new("reg")
+            .args(["query", key, "/v", value])
+            .output()
+        else {
+            continue;
+        };
+        let text = String::from_utf8_lossy(&output.stdout);
+        for line in text.lines() {
+            // reg.exe prints "    SteamPath    REG_SZ    C:\Program Files\Steam".
+            // The value may contain spaces, so the split is on the type rather
+            // than on whitespace.
+            let Some((_, rest)) = line.split_once("REG_SZ") else {
+                continue;
+            };
+            let trimmed = rest.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            // Steam writes forward slashes under HKCU and backslashes under
+            // HKLM. Both name the same directory and Windows accepts either.
+            let path = PathBuf::from(trimmed.replace('/', "\\"));
+            if !out.contains(&path) {
+                out.push(path);
+            }
+        }
+    }
     out
 }
 
