@@ -100,8 +100,8 @@ packages, `src/`, `pkg/`, or the downloaded `.deb`.
    that tag:
 
    ```bash
-   curl -sL https://github.com/Ali-AbdulHadii/apocrypha/releases/download/vX.Y.Z/Apocrypha_X.Y.Z_amd64.deb | sha256sum
-   curl -sL https://raw.githubusercontent.com/Ali-AbdulHadii/apocrypha/vX.Y.Z/LICENSE | sha256sum
+   curl -sL https://github.com/Apocrypha-Mods/apocrypha/releases/download/vX.Y.Z/Apocrypha_X.Y.Z_amd64.deb | sha256sum
+   curl -sL https://raw.githubusercontent.com/Apocrypha-Mods/apocrypha/vX.Y.Z/LICENSE | sha256sum
    ```
 
 3. Regenerate the metadata and build it once locally:

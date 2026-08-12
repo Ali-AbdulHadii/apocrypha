@@ -27,7 +27,7 @@ Node.js 18 or newer with npm, for the desktop shell.
 Clone, build, run:
 
 ```bash
-git clone https://github.com/Ali-AbdulHadii/apocrypha.git
+git clone https://github.com/Apocrypha-Mods/apocrypha.git
 cd apocrypha
 
 cargo build --workspace

@@ -63,7 +63,7 @@ What works today:
 
 ### Download a build
 
-The [releases page](https://github.com/Ali-AbdulHadii/apocrypha/releases) has an
+The [releases page](https://github.com/Apocrypha-Mods/apocrypha/releases) has an
 AppImage and a `.deb` for x86_64 Linux.
 
 **AppImage**, which runs anywhere without installing:
@@ -126,7 +126,7 @@ Skip this if Rust and Node are already installed system-wide; the commands below
 work either way.
 
 ```bash
-git clone https://github.com/Ali-AbdulHadii/apocrypha.git
+git clone https://github.com/Apocrypha-Mods/apocrypha.git
 cd apocrypha
 
 # Rust core: build and test

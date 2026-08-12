@@ -12,7 +12,7 @@ pkgver=0.4.0
 pkgrel=1
 pkgdesc="Linux-first mod manager for Steam and Proton games, with journaled, reversible deployment"
 arch=('x86_64')
-url="https://github.com/Ali-AbdulHadii/apocrypha"
+url="https://github.com/Apocrypha-Mods/apocrypha"
 license=('MIT')
 
 # webkit2gtk-4.1 also provides libjavascriptcoregtk-4.1, which the binary links
@@ -32,7 +32,7 @@ options=('!strip' '!debug')
 
 source=(
   "$pkgname-$pkgver.deb::$url/releases/download/v$pkgver/${_appname}_${pkgver}_amd64.deb"
-  "LICENSE-$pkgver::https://raw.githubusercontent.com/Ali-AbdulHadii/apocrypha/v$pkgver/LICENSE"
+  "LICENSE-$pkgver::https://raw.githubusercontent.com/Apocrypha-Mods/apocrypha/v$pkgver/LICENSE"
 )
 sha256sums=(
   '08fc7e104ecd33af2d6ae8a3170407297a2f1a0055eb5a1a8d92aef571389585'

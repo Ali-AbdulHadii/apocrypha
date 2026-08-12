@@ -40,7 +40,7 @@
     "longDescription": "Apocrypha installs and manages game mods on Linux. It finds your Steam and Proton installs, reads ZIP, 7z and RAR archives, and deploys mods through reflinks or hard links so the copy costs nothing on a filesystem that supports them. Every change to the game folder is journaled, so any deployment can be undone exactly.",
     "copyright": "Copyright (c) 2026 Apocrypha contributors",
     "publisher": "Apocrypha",
-    "homepage": "https://github.com/Ali-AbdulHadii/apocrypha",
+    "homepage": "https://github.com/Apocrypha-Mods/apocrypha",
     "licenseFile": "../../../LICENSE",
     "icon": [
       "icons/32x32.png",

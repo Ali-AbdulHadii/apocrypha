@@ -13,8 +13,8 @@
 
 use serde::{Deserialize, Serialize};
 
-const RELEASES_API: &str = "https://api.github.com/repos/Ali-AbdulHadii/apocrypha/releases/latest";
-const RELEASES_PAGE: &str = "https://github.com/Ali-AbdulHadii/apocrypha/releases/latest";
+const RELEASES_API: &str = "https://api.github.com/repos/Apocrypha-Mods/apocrypha/releases/latest";
+const RELEASES_PAGE: &str = "https://github.com/Apocrypha-Mods/apocrypha/releases/latest";
 
 /// How this copy of Apocrypha got onto the machine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
