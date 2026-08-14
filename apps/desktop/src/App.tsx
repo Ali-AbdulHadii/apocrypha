@@ -1080,6 +1080,14 @@ export default function App() {
             previewSource={previewSource}
             carry={wizardCarry}
             replaces={wizardReplaces}
+            // Only an archive can be re-evaluated: editing an installed mod's
+            // options works from what was staged, and the conditions that
+            // produced it were settled at install time.
+            source={
+              pendingArchive && activeGameId
+                ? { gameId: activeGameId, archivePath: pendingArchive }
+                : null
+            }
             confirmLabel={pendingArchive ? "Add mod" : "Save options"}
             onCancel={() => {
               setWizardMod(null);

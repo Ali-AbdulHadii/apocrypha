@@ -11,8 +11,9 @@
  */
 
 import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  api,
   formatBytes,
   type CarryView,
   type GroupView,
@@ -41,10 +42,21 @@ interface Props {
    * not in doubt and the install is going to act on it either way.
    */
   replaces?: ReplaceCandidateView | null;
+  /**
+   * The archive being installed, when there is one. Required for a conditional
+   * installer, whose steps have to be re-derived from the engine as choices are
+   * made; without it the wizard shows the installer as first analysed.
+   */
+  source?: { gameId: string; archivePath: string } | null;
   onCancel: () => void;
   /** `replaces` is the mod id to update in place, or null to add a new mod. */
   onConfirm: (selection: string[], replaces: string | null) => void;
   confirmLabel?: string;
+}
+
+/** Whether two selections hold the same ids, regardless of order. */
+function sameSelection(a: Set<string>, b: string[]): boolean {
+  return a.size === b.length && b.every((id) => a.has(id));
 }
 
 /** Options in a group that are not part of any radio set. */
@@ -110,6 +122,7 @@ export function InstallWizard({
   previewSource,
   carry,
   replaces,
+  source,
   onCancel,
   onConfirm,
   confirmLabel = "Install",
@@ -118,6 +131,45 @@ export function InstallWizard({
     () => new Set(mod.selection),
   );
   const [stepIndex, setStepIndex] = useState(0);
+  /**
+   * The installer as it currently stands.
+   *
+   * For every format but one this is just `mod`, unchanged for the life of the
+   * dialog: the options an archive offers do not depend on which of them you
+   * pick. A FOMOD is the exception — a step can exist only because of an answer
+   * given two steps earlier — so its view is re-derived by the engine after
+   * each change rather than filtered here. Deciding it in the interface would
+   * put a second implementation of the author's conditions in the one place
+   * least able to be tested.
+   */
+  const [view, setView] = useState<ModView>(mod);
+  const conditional = mod.installerModel === "Fomod" && !!source;
+  /** Guards against an older answer landing after a newer one. */
+  const evaluation = useRef(0);
+
+  useEffect(() => setView(mod), [mod]);
+
+  useEffect(() => {
+    if (!conditional || !source) return;
+    const mine = ++evaluation.current;
+    api
+      .evaluateSelection(source.gameId, source.archivePath, [...selection])
+      .then((next) => {
+        if (mine !== evaluation.current) return;
+        setView(next);
+        // The engine's answer includes what conditions force and excludes what
+        // they forbid, so it is the selection, not a suggestion. Only applied
+        // when it actually differs, or this would re-trigger itself forever.
+        if (!sameSelection(selection, next.selection)) {
+          setSelection(new Set(next.selection));
+        }
+      })
+      .catch(() => {
+        // A refusal (an installer whose conditions do not settle) surfaces on
+        // Install, where it can be explained. Leaving the last good view up is
+        // better than blanking the dialog mid-click.
+      });
+  }, [conditional, source, selection]);
   /**
    * Whether to update the mod this looks like a new version of, or add it
    * alongside.
@@ -128,8 +180,10 @@ export function InstallWizard({
    */
   const [replaceExisting, setReplaceExisting] = useState(true);
 
-  const steps = mod.groups;
-  const step = steps[stepIndex];
+  const steps = view.groups;
+  // A conditional installer can drop the step being looked at, when the answer
+  // that made it visible is withdrawn.
+  const step = steps[Math.min(stepIndex, Math.max(steps.length - 1, 0))];
 
   // Warm the images for the current and next step. Without this, moving to a
   // step fetches every thumbnail at once and the transition visibly hitches.
@@ -142,18 +196,34 @@ export function InstallWizard({
     prefetchPreviews(previewSource, ids);
   }, [steps, stepIndex, previewSource]);
 
-  /** A step is "resolved" once every radio set in it has a choice. */
+  /**
+   * A step is "resolved" once every choice it insists on has been made.
+   *
+   * Every radio set must have an answer, as before. A group whose author
+   * declared that at least one option must be chosen counts too: that is a
+   * distinction only a manifest can draw, and it is the difference between
+   * "you may keep vanilla" and "this installer will not proceed".
+   */
   const stepResolved = useMemo(() => {
-    return steps.map((g) =>
-      g.radioSets.every((key) =>
+    return steps.map((g) => {
+      const radiosAnswered = g.radioSets.every((key) =>
         g.options.some((o) => o.radioSet === key && selection.has(o.id)),
-      ),
-    );
+      );
+      const mustChoose =
+        g.cardinality === "select-exactly-one" ||
+        g.cardinality === "select-at-least-one";
+      const choosable = g.options.filter((o) => o.selectMode !== "info");
+      const answered =
+        !mustChoose ||
+        choosable.length === 0 ||
+        choosable.some((o) => selection.has(o.id));
+      return radiosAnswered && answered;
+    });
   }, [steps, selection]);
 
   const chosenOptions = useMemo(
-    () => mod.groups.flatMap((g) => g.options).filter((o) => selection.has(o.id)),
-    [mod.groups, selection],
+    () => steps.flatMap((g) => g.options).filter((o) => selection.has(o.id)),
+    [steps, selection],
   );
 
   const totals = useMemo(
@@ -221,7 +291,7 @@ export function InstallWizard({
             </div>
             <div className="card-hint">
               {mod.author ? `by ${mod.author} · ` : ""}
-              {mod.groups.reduce((n, g) => n + g.options.length, 0)} options
+              {steps.reduce((n, g) => n + g.options.length, 0)} options
             </div>
           </div>
           <div style={{ marginLeft: "auto", textAlign: "right" }}>
@@ -305,6 +375,19 @@ export function InstallWizard({
             </div>
           )}
 
+          {/* What the installer asked for that could not be honoured exactly.
+              Outside the step animation for the same reason as the carry
+              banner: it is about the whole install, not one page of it. */}
+          {(view.warnings ?? []).map((warning) => (
+            <div
+              key={warning}
+              className="notice"
+              style={{ marginBottom: "var(--sp-4)" }}
+            >
+              {warning}
+            </div>
+          ))}
+
           <AnimatePresence mode="wait">
             <motion.div
               key={stepIndex}
@@ -346,6 +429,13 @@ export function InstallWizard({
                           <div className="notice-title">{o.name}</div>
                           {o.description && (
                             <div className="notice-body">{o.description}</div>
+                          )}
+                          {/* An option that cannot be chosen says why here.
+                              Showing it disabled with its reason is the point:
+                              a choice that silently disappeared would read as
+                              the manager losing it. */}
+                          {o.blockedReason && (
+                            <div className="notice-body">{o.blockedReason}</div>
                           )}
                         </div>
                       </div>

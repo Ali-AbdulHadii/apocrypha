@@ -24,7 +24,7 @@
 
 use crate::state::*;
 use apoc_deploy::{place::Ladder, DeployContext};
-use apoc_domain::GameProfile;
+use apoc_domain::{GameProfile, ModBundle, Selection};
 use apoc_gamedef::{GameDatabaseSource, LocalBuiltin};
 use apoc_storage::{GameDbSource, GameRecord, ModRecord, ModState};
 use std::path::{Path, PathBuf};
@@ -425,6 +425,132 @@ fn new_staging_key(mod_id: &str, sha: Option<&str>) -> String {
     }
 }
 
+/// Where a game is installed, when it has been found. `None` is a real answer:
+/// conditions that ask about the game's own files stay unknown rather than
+/// being answered wrongly.
+fn game_dir_of(state: &AppState, game_id: &str) -> Option<PathBuf> {
+    let store = state.store.lock().ok()?;
+    store
+        .get_game(game_id)
+        .ok()
+        .flatten()
+        .and_then(|g| g.install_dir)
+        .map(PathBuf::from)
+}
+
+/// Narrow a conditional installer's view to what currently applies.
+///
+/// The bundle carries every option the manifest declares, because which files
+/// each one installs never changes. What does change is whether an option is
+/// reachable at all, so options behind a step the current answers do not reach
+/// are dropped from the view rather than shown and ignored, and an option the
+/// conditions forbid keeps its place but says why it cannot be chosen.
+fn narrow_to_conditions(
+    bundle: &ModBundle,
+    game_dir: Option<&Path>,
+    chosen: &Selection,
+) -> CmdResult<(Vec<GroupView>, Selection, Vec<String>)> {
+    let Some(module) = &bundle.fomod else {
+        // Not a conditional installer. Every group applies, always.
+        return Ok((groups_view(bundle), chosen.clone(), Vec::new()));
+    };
+
+    let probes = apoc_modengine::fomod::eval::probe(module, game_dir);
+    let state =
+        apoc_modengine::fomod::eval::evaluate(module, &probes, &chosen.chosen).map_err(err)?;
+
+    // Everything the evaluator can currently see, and what it decided about it.
+    let mut visible: std::collections::HashMap<&str, &apoc_modengine::fomod::eval::VisiblePlugin> =
+        std::collections::HashMap::new();
+    for step in &state.steps {
+        for group in &step.groups {
+            for plugin in &group.plugins {
+                visible.insert(plugin.id.as_str(), plugin);
+            }
+        }
+    }
+
+    let mut groups = groups_view(bundle);
+    for group in &mut groups {
+        group.options.retain(|o| {
+            // Synthetic options — required files, and the extras a combination
+            // pulls in — belong to no step and are never chosen by hand.
+            o.id.starts_with('@') || visible.contains_key(o.id.as_str())
+        });
+        for option in &mut group.options {
+            let Some(plugin) = visible.get(option.id.as_str()) else {
+                continue;
+            };
+            // A condition may forbid an option the manifest declared freely.
+            if plugin.effective_type == apoc_domain::fomod::PluginTypeName::NotUsable {
+                option.select_mode = "info".to_string();
+                option.deployable = false;
+                option.blocked_reason = Some("Your other choices rule this one out.".to_string());
+            } else if plugin.locked {
+                option.select_mode = "forced".to_string();
+            }
+        }
+    }
+    groups.retain(|g| !g.options.is_empty());
+
+    let mut warnings = state.warnings.clone();
+    if let Some(blocked) = &state.blocked {
+        warnings.insert(
+            0,
+            format!("This mod says it needs {blocked}, which is not installed."),
+        );
+    }
+    Ok((groups, state.resolved, warnings))
+}
+
+/// Re-answer a conditional installer with the choices made so far.
+///
+/// Pure in effect: the same archive and the same answers always give the same
+/// view. No wizard session exists anywhere, so closing the window or restarting
+/// mid-install loses a dialog and nothing else. The archive itself is
+/// remembered between calls, because re-reading a multi-gigabyte file on every
+/// click is the difference between this being usable and not.
+#[tauri::command(async)]
+pub fn evaluate_selection(
+    state: State<AppState>,
+    game_id: String,
+    path: String,
+    selection: Vec<String>,
+) -> CmdResult<ModView> {
+    let bundle = match state.cached_analysis(&path) {
+        Some(cached) => cached,
+        None => {
+            let fresh =
+                apoc_modengine::analyze_archive_with(Path::new(&path), &rules_for(&game_id))
+                    .map_err(err)?;
+            state.remember_analysis(&path, &fresh);
+            std::sync::Arc::new(fresh)
+        }
+    };
+
+    let chosen = selection_from(&selection);
+    let game_dir = game_dir_of(&state, &game_id);
+    let (groups, resolved, warnings) = narrow_to_conditions(&bundle, game_dir.as_deref(), &chosen)?;
+
+    Ok(ModView {
+        id: String::new(),
+        name: bundle.name.clone(),
+        version: bundle.version.clone(),
+        author: bundle.author.clone(),
+        category: bundle.category.clone(),
+        installer_model: format!("{:?}", bundle.installer_model),
+        enabled: false,
+        priority: 0,
+        applied: false,
+        added_at: 0,
+        groups,
+        selection: selection_vec(&resolved),
+        total_files: bundle.deployable_options().map(|o| o.payload.len()).sum(),
+        total_bytes: bundle.deployable_options().map(|o| o.total_size()).sum(),
+        warnings,
+    })
+}
+
 /// Analyze an archive without importing it: powers the wizard preview.
 #[tauri::command(async)]
 pub fn analyze_archive(
@@ -434,6 +560,9 @@ pub fn analyze_archive(
 ) -> CmdResult<AnalyzedArchive> {
     let bundle = apoc_modengine::analyze_archive_with(Path::new(&path), &rules_for(&game_id))
         .map_err(err)?;
+    // Remembered so the wizard's first re-evaluation does not read the archive
+    // again. Analysing is the expensive half; evaluating is arithmetic.
+    state.remember_analysis(&path, &bundle);
 
     let replaces = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
@@ -467,6 +596,14 @@ pub fn analyze_archive(
         }
         None => (apoc_modengine::default_selection(&bundle), None),
     };
+
+    // A conditional installer opens on the steps its starting answers reach,
+    // not on every step it declares. Showing gated ones and only hiding them
+    // after the first click would offer choices the author meant to withhold.
+    let game_dir = game_dir_of(&state, &game_id);
+    let (groups, selection, warnings) =
+        narrow_to_conditions(&bundle, game_dir.as_deref(), &selection)?;
+
     let mod_view = ModView {
         id: String::new(),
         name: bundle.name.clone(),
@@ -478,10 +615,11 @@ pub fn analyze_archive(
         priority: 0,
         applied: false,
         added_at: 0,
-        groups: groups_view(&bundle),
+        groups,
         selection: selection_vec(&selection),
         total_files: bundle.deployable_options().map(|o| o.payload.len()).sum(),
         total_bytes: bundle.deployable_options().map(|o| o.total_size()).sum(),
+        warnings,
     };
     Ok(AnalyzedArchive {
         mod_view,
@@ -644,6 +782,7 @@ pub fn import_mod(
         selection: selection_vec(&sel),
         total_files: bundle.deployable_options().map(|o| o.payload.len()).sum(),
         total_bytes: bundle.deployable_options().map(|o| o.total_size()).sum(),
+        warnings: Vec::new(),
     })
 }
 
@@ -677,6 +816,7 @@ pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModVi
             selection: selection_vec(&sel),
             total_files: m.bundle.deployable_options().map(|o| o.payload.len()).sum(),
             total_bytes: m.bundle.deployable_options().map(|o| o.total_size()).sum(),
+            warnings: Vec::new(),
         });
     }
     Ok(out)

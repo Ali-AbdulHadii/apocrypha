@@ -21,12 +21,26 @@ export interface OptionView {
   /** True when a preview image can be fetched for this option. */
   hasPreview: boolean;
   category: string | null;
+  /** The installer's own suggestion: pre-ticked, and freely changed. */
+  recommended?: boolean;
+  /** Why this option cannot be chosen. Shown disabled rather than hidden. */
+  blockedReason?: string | null;
 }
+
+/** How many of a group's options may or must be chosen, when it says so. */
+export type Cardinality =
+  | "select-exactly-one"
+  | "select-at-most-one"
+  | "select-at-least-one"
+  | "select-all"
+  | "select-any";
 
 export interface GroupView {
   index: number | null;
   label: string;
   radioSets: string[];
+  /** Absent for formats where cardinality is inferred from folder names. */
+  cardinality?: Cardinality | null;
   options: OptionView[];
 }
 
@@ -47,6 +61,12 @@ export interface ModView {
   addedAt: number;
   totalFiles: number;
   totalBytes: number;
+  /**
+   * What the installer asked for that could not be honoured exactly, in its
+   * author's terms. A conditional installer produces these; everything else
+   * leaves the list empty.
+   */
+  warnings?: string[];
 }
 
 /**
@@ -468,6 +488,19 @@ export const api = {
 
   analyzeArchive: (gameId: string, path: string) =>
     call<AnalyzedArchive>("analyze_archive", { gameId, path }),
+  /**
+   * Re-answer a conditional installer with the choices made so far.
+   *
+   * Returns the whole mod as it now stands: steps the current answers do not
+   * reach are gone, options other choices rule out say so, and the selection is
+   * what would actually install. The engine decides all of it, so a stale or
+   * tampered client cannot ask for files the installer's conditions forbid.
+   *
+   * Cheap to call on every click: the archive is remembered between calls and
+   * only the evaluation runs again.
+   */
+  evaluateSelection: (gameId: string, path: string, selection: string[]) =>
+    call<ModView>("evaluate_selection", { gameId, path, selection }),
   /**
    * `replaces` names an installed mod this archive is a new version of. Passing
    * it updates that mod in place, keeping its load-order position, whether it is

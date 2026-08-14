@@ -30,7 +30,22 @@ pub struct AppState {
     /// `Some` is also what "a deploy is in flight" means, so a second Apply can
     /// be refused rather than allowed to interleave writes with the first.
     pub deploy_cancel: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
+
+    /// Archives already analysed, keyed by path, most recent last.
+    ///
+    /// A memo and not a session. A conditional installer is re-evaluated on
+    /// every click, and re-reading a multi-gigabyte archive each time to answer
+    /// the same question would make the wizard unusable. Nothing here is state
+    /// the user owns: losing it costs one re-read and never a wrong answer,
+    /// which is why the answers themselves stay in the interface and arrive
+    /// with each call.
+    pub analyzed: Mutex<Vec<(String, std::sync::Arc<ModBundle>)>>,
 }
+
+/// Archives kept in [`AppState::analyzed`]. The wizard is modal, so one is
+/// almost always enough; a few more cost little and cover going back and forth
+/// between a download and the mod it replaces.
+const ANALYZED_CACHE: usize = 8;
 
 /// Setting holding a user-chosen downloads folder. Unset means the default.
 pub const KEY_DOWNLOADS_DIR: &str = "downloads_dir";
@@ -45,7 +60,34 @@ impl AppState {
             downloads: Default::default(),
             pending_authorization: Mutex::new(None),
             deploy_cancel: Mutex::new(None),
+            analyzed: Mutex::new(Vec::new()),
         })
+    }
+
+    /// A previously analysed archive, if it is still remembered.
+    pub fn cached_analysis(&self, archive_path: &str) -> Option<std::sync::Arc<ModBundle>> {
+        let mut cache = self.analyzed.lock().ok()?;
+        let at = cache.iter().position(|(p, _)| p == archive_path)?;
+        // Move it to the end so the least recently wanted falls off first.
+        let entry = cache.remove(at);
+        let bundle = entry.1.clone();
+        cache.push(entry);
+        Some(bundle)
+    }
+
+    /// Remember an analysed archive.
+    pub fn remember_analysis(&self, archive_path: &str, bundle: &ModBundle) {
+        let Ok(mut cache) = self.analyzed.lock() else {
+            return;
+        };
+        cache.retain(|(p, _)| p != archive_path);
+        cache.push((
+            archive_path.to_string(),
+            std::sync::Arc::new(bundle.clone()),
+        ));
+        while cache.len() > ANALYZED_CACHE {
+            cache.remove(0);
+        }
     }
 
     /// Where downloads are kept, inside the app's data directory by default.
@@ -112,6 +154,13 @@ pub struct OptionView {
     /// True when a preview image is available for this option.
     pub has_preview: bool,
     pub category: Option<String>,
+    /// The installer's own suggestion, pre-ticked and freely changed.
+    #[serde(default)]
+    pub recommended: bool,
+    /// Why this option cannot be chosen, when it cannot. Shown rather than
+    /// hidden, so a choice the author disabled does not read as a missing one.
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,6 +170,11 @@ pub struct GroupView {
     pub label: String,
     /// Distinct radio-set keys in this group (each is one independent choice).
     pub radio_sets: Vec<String>,
+    /// How many options may or must be chosen, when the installer said so:
+    /// `select-exactly-one` | `select-at-most-one` | `select-at-least-one` |
+    /// `select-all` | `select-any`. Absent where cardinality is inferred.
+    #[serde(default)]
+    pub cardinality: Option<String>,
     pub options: Vec<OptionView>,
 }
 
@@ -145,6 +199,11 @@ pub struct ModView {
     pub selection: Vec<String>,
     pub total_files: usize,
     pub total_bytes: u64,
+    /// What an installer asked for that could not be honoured exactly, in the
+    /// author's own terms. Shown rather than swallowed: a silently degraded
+    /// install looks identical to a correct one until the game misbehaves.
+    #[serde(default)]
+    pub warnings: Vec<String>,
 }
 
 /// What happened when a previous install's choices were moved onto a new
@@ -340,6 +399,16 @@ pub fn groups_view(bundle: &ModBundle) -> Vec<GroupView> {
             index: g.index,
             label: g.label.clone(),
             radio_sets: g.radio_sets(),
+            cardinality: g.cardinality.map(|k| {
+                match k {
+                    apoc_domain::fomod::GroupKind::SelectExactlyOne => "select-exactly-one",
+                    apoc_domain::fomod::GroupKind::SelectAtMostOne => "select-at-most-one",
+                    apoc_domain::fomod::GroupKind::SelectAtLeastOne => "select-at-least-one",
+                    apoc_domain::fomod::GroupKind::SelectAll => "select-all",
+                    apoc_domain::fomod::GroupKind::SelectAny => "select-any",
+                }
+                .to_string()
+            }),
             options: g
                 .options
                 .iter()
@@ -361,6 +430,8 @@ pub fn groups_view(bundle: &ModBundle) -> Vec<GroupView> {
                     screenshot: o.screenshot.clone(),
                     has_preview: o.screenshot_archive_path.is_some(),
                     category: o.category.clone(),
+                    recommended: o.recommended,
+                    blocked_reason: o.blocked_reason.clone(),
                 })
                 .collect(),
         })
