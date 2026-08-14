@@ -889,6 +889,28 @@ pub fn set_mod_enabled(
     store.set_enabled(profile_id, &mod_id, enabled).map_err(err)
 }
 
+/// Enable or disable many mods at once, all or nothing.
+///
+/// Not a loop over [`set_mod_enabled`] on the front end, for two reasons. The
+/// store writes the batch in one transaction, so a failure partway leaves the
+/// profile as it was rather than in a state nobody selected. And this is
+/// `async`, unlike its single-mod sibling: forty sequential commands would take
+/// the store mutex forty times on the main thread, which is the one thing a
+/// bulk action exists to avoid.
+#[tauri::command(async)]
+pub fn set_mods_enabled(
+    state: State<AppState>,
+    game_id: String,
+    mod_ids: Vec<String>,
+    enabled: bool,
+) -> CmdResult<usize> {
+    let profile_id = profile_of(&state, &game_id)?;
+    let store = state.store.lock().map_err(|_| "state poisoned")?;
+    store
+        .set_enabled_bulk(profile_id, &mod_ids, enabled)
+        .map_err(err)
+}
+
 /// What a requested selection actually becomes once the conditions and the
 /// group cardinalities have had their say.
 ///

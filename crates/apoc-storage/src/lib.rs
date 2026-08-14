@@ -830,6 +830,51 @@ impl Store {
         Ok(())
     }
 
+    /// Enable or disable many mods in one profile, all or nothing.
+    ///
+    /// The bulk form exists because the single one is the wrong shape for it:
+    /// turning off forty mods through [`Store::set_enabled`] is forty statements
+    /// that can stop after nineteen, and the profile then describes a state
+    /// nobody chose and nobody asked for.
+    ///
+    /// So this runs in a transaction, and an id that is not in the profile fails
+    /// the whole batch — the same refusal [`Store::set_enabled`] already makes
+    /// for one mod, applied to the set. Half a bulk action is worse than none,
+    /// because the user's next move is to look at the list and believe it.
+    ///
+    /// [`Store::set_mod_order`] is the older multi-row writer and does loop bare
+    /// statements. It has the same weakness; it is left alone here rather than
+    /// changed underneath a feature that is not about load order.
+    pub fn set_enabled_bulk(
+        &self,
+        profile_id: i64,
+        mod_ids: &[String],
+        enabled: bool,
+    ) -> Result<usize> {
+        // `unchecked_transaction` rather than `transaction`, because `Store`
+        // owns its `Connection` behind `&self` and the checked form needs
+        // `&mut self`. The check it skips is a compile-time one about nesting,
+        // and nothing here nests.
+        let tx = self.conn.unchecked_transaction()?;
+        for id in mod_ids {
+            let changed = tx.execute(
+                "UPDATE profile_mod_state SET enabled=?3 WHERE profile_id=?1 AND mod_id=?2",
+                params![profile_id, id, enabled as i64],
+            )?;
+            if changed == 0 {
+                // Dropping `tx` would roll back on its own; rolling back
+                // explicitly says so where somebody is reading for the failure
+                // path rather than inferring it from a `?`.
+                tx.rollback()?;
+                return Err(StorageError::NotFound(format!(
+                    "mod {id} is not in profile {profile_id}"
+                )));
+            }
+        }
+        tx.commit()?;
+        Ok(mod_ids.len())
+    }
+
     // ---- conflict overrides ---------------------------------------------
 
     /// Pin `game_rel_path` to `mod_id` for this profile, overriding load order.
@@ -1281,6 +1326,93 @@ mod tests {
             s.set_enabled(p, "ghost", true),
             Err(StorageError::NotFound(_))
         ));
+    }
+
+    /// A profile of `count` mods, all enabled, for the bulk tests.
+    fn profile_of_enabled_mods(s: &Store, count: usize) -> i64 {
+        let p = s.ensure_profile("monster-hunter-wilds", "P").unwrap();
+        for i in 0..count {
+            let id = format!("mod-{i}");
+            add_mod(s, &id, None);
+            s.set_mod_state(
+                p,
+                &ModState {
+                    mod_id: id,
+                    enabled: true,
+                    priority: i as i64,
+                    selection: Selection::new(),
+                },
+            )
+            .unwrap();
+        }
+        p
+    }
+
+    fn enabled_ids(s: &Store, p: i64) -> Vec<String> {
+        s.list_mod_states(p)
+            .unwrap()
+            .into_iter()
+            .filter(|m| m.enabled)
+            .map(|m| m.mod_id)
+            .collect()
+    }
+
+    #[test]
+    fn a_bulk_toggle_changes_exactly_the_mods_it_names() {
+        let s = seeded();
+        let p = profile_of_enabled_mods(&s, 5);
+
+        let n = s
+            .set_enabled_bulk(p, &["mod-1".into(), "mod-3".into()], false)
+            .unwrap();
+        assert_eq!(n, 2);
+        assert_eq!(enabled_ids(&s, p), vec!["mod-0", "mod-2", "mod-4"]);
+
+        // And back, because a bulk enable is the same operation with the other
+        // answer and is the one a user reaches for after changing their mind.
+        s.set_enabled_bulk(p, &["mod-1".into(), "mod-3".into()], true)
+            .unwrap();
+        assert_eq!(
+            enabled_ids(&s, p),
+            vec!["mod-0", "mod-1", "mod-2", "mod-3", "mod-4"]
+        );
+    }
+
+    #[test]
+    fn one_unknown_id_rolls_the_whole_batch_back() {
+        // The reason this is a transaction. The unknown id sits in the middle,
+        // so two mods have already been written by the time it is reached: a
+        // loop of bare statements would leave those two off and report failure,
+        // and the user would be looking at a list nobody chose.
+        let s = seeded();
+        let p = profile_of_enabled_mods(&s, 4);
+
+        let err = s.set_enabled_bulk(
+            p,
+            &[
+                "mod-0".into(),
+                "mod-1".into(),
+                "ghost".into(),
+                "mod-2".into(),
+            ],
+            false,
+        );
+        assert!(matches!(err, Err(StorageError::NotFound(_))));
+        assert_eq!(
+            enabled_ids(&s, p),
+            vec!["mod-0", "mod-1", "mod-2", "mod-3"],
+            "a failed batch must leave every mod as it was"
+        );
+    }
+
+    #[test]
+    fn an_empty_batch_is_a_no_op_rather_than_an_error() {
+        // "Disable selected" with nothing selected is a UI state that should
+        // cost nothing, not one the store refuses.
+        let s = seeded();
+        let p = profile_of_enabled_mods(&s, 2);
+        assert_eq!(s.set_enabled_bulk(p, &[], false).unwrap(), 0);
+        assert_eq!(enabled_ids(&s, p), vec!["mod-0", "mod-1"]);
     }
 
     #[test]

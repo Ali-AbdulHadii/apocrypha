@@ -561,6 +561,13 @@ export const api = {
   listMods: (gameId: string) => call<ModView[]>("list_mods", { gameId }),
   setModEnabled: (gameId: string, modId: string, enabled: boolean) =>
     call<void>("set_mod_enabled", { gameId, modId, enabled }),
+  /**
+   * Enable or disable many mods in one call. All or nothing: if any id is not in
+   * the profile the whole batch is refused and nothing changes, so a rejected
+   * call needs no repair, only a refresh.
+   */
+  setModsEnabled: (gameId: string, modIds: string[], enabled: boolean) =>
+    call<number>("set_mods_enabled", { gameId, modIds, enabled }),
   setModSelection: (gameId: string, modId: string, selection: string[]) =>
     call<string[]>("set_mod_selection", { gameId, modId, selection }),
   setModOrder: (gameId: string, orderedIds: string[]) =>
