@@ -135,7 +135,7 @@ pub struct Provenance {
     pub replaces_mod_id: Option<String>,
 }
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 /// The application's persistent store.
 pub struct Store {
@@ -308,9 +308,75 @@ impl Store {
             "#,
         )?;
 
+        // v6: the last game profiles the service published.
+        //
+        // A cache, and specifically a cache that survives a restart, which is
+        // the whole reason it is on disk rather than in memory. Somebody who
+        // fetched profiles yesterday and opens the app on a train should get
+        // yesterday's profiles, not the ones compiled into their build months
+        // ago. Losing this file costs one refresh and never a wrong answer.
+        //
+        // The document is stored as it arrived. Parsing it into columns here
+        // would mean this table has to learn every field the profile schema
+        // grows, and a cache that can fall behind the thing it caches is worse
+        // than no cache.
+        self.conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS game_profile_cache (
+                game_id        TEXT PRIMARY KEY,
+                document       TEXT NOT NULL,
+                schema_version INTEGER NOT NULL,
+                fetched_at     INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
+            "#,
+        )?;
+
         self.conn
             .pragma_update(None, "user_version", SCHEMA_VERSION)?;
         Ok(())
+    }
+
+    /// Replace the cached profiles with what the service just published.
+    ///
+    /// All of them at once: a profile that has been withdrawn should stop being
+    /// used, and leaving it behind because this run happened not to mention it
+    /// would keep a definition alive that nobody publishes any more.
+    pub fn put_cached_profiles(&self, profiles: &[(String, String, i64)]) -> Result<()> {
+        self.conn.execute("DELETE FROM game_profile_cache", [])?;
+        let mut stmt = self.conn.prepare(
+            "INSERT INTO game_profile_cache (game_id, document, schema_version) VALUES (?1, ?2, ?3)",
+        )?;
+        for (game_id, document, schema_version) in profiles {
+            stmt.execute(params![game_id, document, schema_version])?;
+        }
+        Ok(())
+    }
+
+    /// The cached profile documents, as `(game_id, document)`.
+    ///
+    /// Only those written for a contract the caller understands: a document
+    /// cached by a newer build is left where it is rather than handed to an
+    /// older one that would read its fields to mean something else.
+    pub fn cached_profiles(&self, schema_version: i64) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT game_id, document FROM game_profile_cache
+             WHERE schema_version = ?1 ORDER BY game_id",
+        )?;
+        let rows = stmt.query_map(params![schema_version], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// When the cache was last written, in Unix seconds.
+    pub fn profiles_fetched_at(&self) -> Result<Option<i64>> {
+        let at: Option<i64> =
+            self.conn
+                .query_row("SELECT MAX(fetched_at) FROM game_profile_cache", [], |r| {
+                    r.get(0)
+                })?;
+        Ok(at)
     }
 
     // ---- settings -------------------------------------------------------
@@ -1423,6 +1489,73 @@ mod tests {
             s.nexus_linked_mods("monster-hunter-wilds").unwrap(),
             vec![("mod-b".to_string(), 10, 20)]
         );
+    }
+
+    #[test]
+    fn upgrading_an_older_database_gains_the_profile_cache_without_losing_anything() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("apocrypha.db");
+
+        {
+            let s = Store::open(&db).unwrap();
+            s.upsert_game(&GameRecord {
+                id: "monster-hunter-wilds".into(),
+                name: "Monster Hunter Wilds".into(),
+                install_dir: Some("/games/mhw".into()),
+                proton_prefix: None,
+                active_profile_id: None,
+            })
+            .unwrap();
+            add_mod(&s, "mod-a", None);
+
+            // Reshape the file into what the previous release wrote.
+            s.conn
+                .execute_batch(
+                    "DROP TABLE game_profile_cache;
+                     PRAGMA user_version = 5;",
+                )
+                .unwrap();
+        }
+
+        let s = Store::open(&db).unwrap();
+        assert!(
+            s.get_mod("mod-a").unwrap().is_some(),
+            "the library survives"
+        );
+        assert!(
+            s.cached_profiles(1).unwrap().is_empty(),
+            "an upgraded file starts with nothing cached rather than failing to read"
+        );
+        assert_eq!(s.profiles_fetched_at().unwrap(), None);
+    }
+
+    #[test]
+    fn cached_profiles_are_replaced_wholesale_and_read_back_by_contract() {
+        let dir = tempfile::tempdir().unwrap();
+        let s = Store::open(&dir.path().join("apocrypha.db")).unwrap();
+
+        s.put_cached_profiles(&[
+            ("game-a".into(), "{\"id\":\"game-a\"}".into(), 1),
+            ("game-b".into(), "{\"id\":\"game-b\"}".into(), 1),
+        ])
+        .unwrap();
+        assert_eq!(s.cached_profiles(1).unwrap().len(), 2);
+        assert!(s.profiles_fetched_at().unwrap().is_some());
+
+        // A profile the service has stopped publishing must stop being used,
+        // so a write replaces the set rather than merging into it.
+        s.put_cached_profiles(&[("game-a".into(), "{\"id\":\"game-a\"}".into(), 1)])
+            .unwrap();
+        let kept = s.cached_profiles(1).unwrap();
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].0, "game-a");
+
+        // A document written for a contract this build does not read is left
+        // alone rather than handed over to be misread.
+        s.put_cached_profiles(&[("game-c".into(), "{}".into(), 99)])
+            .unwrap();
+        assert!(s.cached_profiles(1).unwrap().is_empty());
+        assert_eq!(s.cached_profiles(99).unwrap().len(), 1);
     }
 
     #[test]

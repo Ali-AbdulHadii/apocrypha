@@ -19,6 +19,7 @@
 //! localhost, and that is a compile-time feature rather than a runtime setting.
 
 pub mod catalog;
+pub mod gamedb;
 pub mod oauth;
 pub mod protocol;
 
@@ -26,6 +27,7 @@ pub use catalog::{
     Catalog, CatalogFile, CatalogGame, CatalogMod, CatalogModDetail, CatalogPage,
     CatalogRelationship, CatalogVersion, DownloadQuota, DownloadTicket,
 };
+pub use gamedb::{ApocryphaGameDb, Freshness};
 pub use oauth::{AuthorizationError, AuthorizationStatus, PendingAuthorization};
 pub use protocol::{InstallRequest, LinkError};
 

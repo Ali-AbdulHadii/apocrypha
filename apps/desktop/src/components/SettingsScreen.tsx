@@ -29,6 +29,7 @@ import {
   type AppUpdateView,
   type GameView,
   type NexusStatusView,
+  type ProfileSourceView,
   type SettingsView,
   type UsageEntryView,
 } from "../lib/api";
@@ -904,8 +905,85 @@ function LibrarySection({
             />
           }
         />
+        <GameDbStatus
+          selected={settings.gameDbSource === "online-api" ? "online-api" : "local-builtin"}
+          onError={onError}
+        />
       </Group>
     </>
+  );
+}
+
+/**
+ * What game information is actually being used.
+ *
+ * Separate from the setting because the two can disagree: choosing Online and
+ * then being unable to reach the service looks, from the outside, exactly like
+ * it working. An app quietly using definitions from months ago is worse than
+ * one that says it is.
+ */
+function GameDbStatus({
+  selected,
+  onError,
+}: {
+  selected: "local-builtin" | "online-api";
+  onError: (e: unknown) => void;
+}) {
+  const [status, setStatus] = useState<ProfileSourceView | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  const load = useCallback(() => {
+    api
+      .gameDbStatus()
+      .then(setStatus)
+      .catch(() => setStatus(null));
+  }, []);
+
+  useEffect(load, [load, selected]);
+
+  if (selected !== "online-api") {
+    return null;
+  }
+
+  const when =
+    status?.fetchedAt != null
+      ? new Date(status.fetchedAt * 1000).toLocaleString()
+      : null;
+
+  return (
+    <Row
+      label="Published game information"
+      desc={
+        status?.onlineInEffect
+          ? `${status.published} ${status.published === 1 ? "game" : "games"} from the service${when ? `, last updated ${when}` : ""}.`
+          : "Nothing has been fetched yet, so the built in definitions are in use. Modding never waits on the service."
+      }
+      control={
+        <div className="row" style={{ gap: "var(--sp-2)" }}>
+          {!status?.onlineInEffect && <Chip kind="warn">Built in</Chip>}
+          <button
+            className="btn sm"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              setMessage(null);
+              try {
+                setMessage(await api.refreshGameDb());
+                load();
+              } catch (e) {
+                onError(e);
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? "Checking…" : "Refresh now"}
+          </button>
+          {message && <span className="card-hint">{message}</span>}
+        </div>
+      }
+    />
   );
 }
 

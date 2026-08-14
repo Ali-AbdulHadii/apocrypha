@@ -7,6 +7,11 @@ rust-version.workspace = true
 description = "Client for the Apocrypha service: authorization-code sign-in, and the catalogue behind it."
 
 [dependencies]
+# The profile type and the port a published profile is served through. This
+# crate implements that port; it does not define it, and the bundled profiles
+# stay the fallback rather than moving here.
+apoc-domain = { path = "../apoc-domain" }
+apoc-gamedef = { path = "../apoc-gamedef" }
 base64 = "0.22"
 # The verifier and the state. The operating system's entropy source rather than
 # a userspace generator, because both of these are credentials.
