@@ -27,14 +27,21 @@ pub fn staged_rel_path(option_id: &str, game_rel_path: &str) -> String {
     format!("{}/{}", option_dir(option_id), game_rel_path)
 }
 
-/// The default selection for a bundle: every forced option, and nothing else.
+/// The default selection for a bundle: every forced option, plus any the
+/// installer itself recommends.
 ///
 /// Exclusive radio sets deliberately start empty, so the wizard asks the user to
-/// choose rather than silently picking a variant for them.
+/// choose rather than silently picking a variant for them. A recommended option
+/// is different in kind: the author said which one they would pick, and
+/// pre-ticking their answer is not the manager inventing one. It stays freely
+/// changeable, unlike a forced option.
 pub fn default_selection(bundle: &ModBundle) -> Selection {
     let mut sel = Selection::new();
     for o in bundle.options() {
-        if o.select_mode == SelectMode::Forced && o.deployable {
+        if !o.deployable {
+            continue;
+        }
+        if o.select_mode == SelectMode::Forced || o.recommended {
             sel.insert(o.id.clone());
         }
     }
@@ -136,6 +143,33 @@ fn validate(bundle: &ModBundle, sel: &Selection) -> Vec<ValidationIssue> {
         }
     }
 
+    // A group whose author said it must be answered. Only manifest-driven
+    // formats declare this; where cardinality is inferred from folder names the
+    // field is None and nothing below applies, so an empty Fluffy radio set
+    // stays what it has always been: a legitimate "keep vanilla".
+    for group in &bundle.groups {
+        let Some(kind) = group.cardinality else {
+            continue;
+        };
+        if !kind.requires_answer() {
+            continue;
+        }
+        let answerable: Vec<&ModOption> = group
+            .options
+            .iter()
+            .filter(|o| o.select_mode != SelectMode::Info)
+            .collect();
+        if answerable.is_empty() {
+            continue;
+        }
+        if !answerable.iter().any(|o| sel.contains(&o.id)) {
+            issues.push(ValidationIssue {
+                message: format!("Choose an option in '{}'", group.label),
+                option_ids: answerable.iter().map(|o| o.id.clone()).collect(),
+            });
+        }
+    }
+
     issues
 }
 
@@ -167,8 +201,12 @@ pub fn plan(bundle: &ModBundle, sel: &Selection) -> DeploymentPlan {
     let mut winners: HashMap<String, PlannedFile> = HashMap::new();
     let mut contenders: HashMap<String, Vec<String>> = HashMap::new();
     let mut order: Vec<String> = Vec::new();
+    // How strongly each destination's current winner claimed it. Layer order
+    // still decides everything else; this only lets a file that says it should
+    // win do so from an earlier option.
+    let mut claims: HashMap<String, (i32, usize)> = HashMap::new();
 
-    for (_, opt) in &selected {
+    for (rank, (_, opt)) in selected.iter().enumerate() {
         for f in &opt.payload {
             let dest = f.game_rel_path.clone();
             if !contenders.contains_key(&dest) {
@@ -178,6 +216,15 @@ pub fn plan(bundle: &ModBundle, sel: &Selection) -> DeploymentPlan {
                 .entry(dest.clone())
                 .or_default()
                 .push(opt.id.clone());
+
+            // Priority first, then the layering order that was here before.
+            // With priority zero everywhere, which is every option of every
+            // format but FOMOD, this reduces exactly to last writer wins.
+            let claim = (f.priority, rank);
+            if claims.get(&dest).is_some_and(|held| *held > claim) {
+                continue;
+            }
+            claims.insert(dest.clone(), claim);
             winners.insert(
                 dest.clone(),
                 PlannedFile {
@@ -239,7 +286,7 @@ impl ModPlan {
     /// A plan whose staging directory is named after the mod itself.
     ///
     /// The shape every mod had before staging and identity were separated, and
-    /// still the right one for a caller that stages exactly once — tests, the
+    /// still the right one for a caller that stages exactly once â€” tests, the
     /// CLI, anything with no notion of a second version.
     pub fn same_namespace(mod_id: impl Into<String>, priority: i64, plan: DeploymentPlan) -> Self {
         let mod_id = mod_id.into();
@@ -418,6 +465,107 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_claims_priority_wins_from_an_earlier_option() {
+        // Layer order still decides everything else; priority only lets a file
+        // that says it should win do so without being written last.
+        let mut early = opt("early", 1, SelectMode::Stackable, None, &["natives/x"]);
+        early.payload[0].priority = 9;
+        let late = opt("late", 1, SelectMode::Stackable, None, &["natives/x"]);
+
+        let b = bundle(vec![early, late]);
+        let mut sel = Selection::new();
+        sel.insert("early".to_string());
+        sel.insert("late".to_string());
+
+        let p = plan(&b, &sel);
+        let file = p
+            .files
+            .iter()
+            .find(|f| f.game_rel_path == "natives/x")
+            .expect("planned");
+        assert_eq!(file.option_id, "early");
+        // The other option still shows up as a contender, so the conflict is
+        // reported exactly as it was before priorities existed.
+        assert_eq!(p.conflicts.len(), 1);
+    }
+
+    #[test]
+    fn with_no_priorities_the_last_option_still_wins() {
+        // The proof that priority zero everywhere reduces to the old rule.
+        let b = bundle(vec![
+            opt("first", 1, SelectMode::Stackable, None, &["natives/x"]),
+            opt("second", 1, SelectMode::Stackable, None, &["natives/x"]),
+        ]);
+        let mut sel = Selection::new();
+        sel.insert("first".to_string());
+        sel.insert("second".to_string());
+
+        let file = plan(&b, &sel)
+            .files
+            .into_iter()
+            .find(|f| f.game_rel_path == "natives/x")
+            .expect("planned");
+        assert_eq!(file.option_id, "second");
+    }
+
+    #[test]
+    fn a_group_the_author_said_must_be_answered_is_an_issue_until_it_is() {
+        use apoc_domain::fomod::GroupKind;
+
+        let mut b = bundle(vec![opt(
+            "slim",
+            1,
+            SelectMode::Exclusive,
+            Some("1:shape"),
+            &["natives/a"],
+        )]);
+        b.groups[0].cardinality = Some(GroupKind::SelectExactlyOne);
+        b.groups[0].label = "Body Â· Shape".into();
+
+        let issues = plan(&b, &Selection::new()).issues;
+        assert!(
+            issues.iter().any(|i| i.message.contains("Body Â· Shape")),
+            "{issues:?}"
+        );
+
+        let mut sel = Selection::new();
+        sel.insert("slim".to_string());
+        assert!(plan(&b, &sel).issues.is_empty());
+    }
+
+    #[test]
+    fn a_group_with_no_declared_cardinality_may_be_left_empty() {
+        // Where cardinality is inferred from folder names it stays inferred,
+        // and an empty radio set remains a legitimate "keep vanilla".
+        let b = bundle(vec![opt(
+            "v1",
+            1,
+            SelectMode::Exclusive,
+            Some("1:helm"),
+            &["natives/a"],
+        )]);
+        assert!(plan(&b, &Selection::new()).issues.is_empty());
+    }
+
+    #[test]
+    fn an_option_the_installer_recommends_starts_ticked_but_unlocked() {
+        let mut recommended = opt(
+            "slim",
+            1,
+            SelectMode::Exclusive,
+            Some("1:shape"),
+            &["natives/a"],
+        );
+        recommended.recommended = true;
+        let b = bundle(vec![recommended]);
+
+        let sel = default_selection(&b);
+        assert!(sel.contains("slim"), "the author's own answer is offered");
+        // Still exclusive rather than forced, so it can be changed.
+        assert_eq!(b.groups[0].options[0].select_mode, SelectMode::Exclusive);
+    }
+
+    #[test]
     fn forced_options_are_selected_by_default() {
         let b = bundle(vec![
             opt("basic", 0, SelectMode::Forced, None, &["natives/a"]),
@@ -551,8 +699,8 @@ mod tests {
     #[test]
     fn staged_paths_follow_the_staging_key_while_conflicts_follow_the_mod_id() {
         // The single place the split can silently regress. A mod that has been
-        // updated keeps its id — which is what overrides name and what the UI
-        // reports — while its bytes live under a new generation.
+        // updated keeps its id â€” which is what overrides name and what the UI
+        // reports â€” while its bytes live under a new generation.
         let updated = ModPlan {
             mod_id: "mod-a".into(),
             staging_key: "mod-a__v2".into(),
