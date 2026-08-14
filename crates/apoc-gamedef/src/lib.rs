@@ -13,6 +13,7 @@ use thiserror::Error;
 /// here plus one `include_str!` line below.
 const MONSTER_HUNTER_WILDS: &str = include_str!("../profiles/monster_hunter_wilds.toml");
 const CYBERPUNK_2077: &str = include_str!("../profiles/cyberpunk_2077.toml");
+const SKYRIM_SPECIAL_EDITION: &str = include_str!("../profiles/skyrim_special_edition.toml");
 
 #[derive(Debug, Error)]
 pub enum GameDefError {
@@ -50,7 +51,7 @@ impl LocalBuiltin {
     /// The raw bundled TOML documents. Kept separate so tests can assert every
     /// shipped profile parses.
     fn raw_profiles() -> &'static [&'static str] {
-        &[MONSTER_HUNTER_WILDS, CYBERPUNK_2077]
+        &[MONSTER_HUNTER_WILDS, CYBERPUNK_2077, SKYRIM_SPECIAL_EDITION]
     }
 }
 
@@ -107,6 +108,68 @@ mod tests {
                 g.id
             );
         }
+    }
+
+    #[test]
+    fn skyrim_se_profile_is_correct() {
+        let src = LocalBuiltin::new();
+        let g = src.get("skyrim-special-edition").expect("skyrim present");
+
+        assert_eq!(g.name, "The Elder Scrolls V: Skyrim Special Edition");
+        assert_eq!(g.engine, Engine::Creation);
+        assert_eq!(g.detection.steam_app_id, 489830);
+        assert_eq!(g.nexus_domain.as_deref(), Some("skyrimspecialedition"));
+
+        // Everything a Skyrim mod installs lives under Data, and a FOMOD's
+        // destinations are written relative to it.
+        assert_eq!(g.target_for("Data"), Some("Data"));
+        assert_eq!(
+            g.fomod.as_ref().map(|f| f.dest_prefix.as_str()),
+            Some("Data")
+        );
+        assert!(g.formats.iter().any(|f| f == "fomod"));
+
+        // The most common Skyrim packaging: a bare `meshes/` at the archive
+        // root, which means `Data/meshes/`. Without these an ordinary mod
+        // imports as zero files.
+        for folder in ["meshes", "textures", "scripts", "skse"] {
+            assert!(
+                g.rewrap
+                    .iter()
+                    .any(|r| r.folder == folder && r.prefix == "Data"),
+                "{folder} is not rewrapped under Data"
+            );
+        }
+    }
+
+    #[test]
+    fn skyrim_does_not_claim_to_manage_its_plugin_order() {
+        // `explicit` describes Creation Engine's plugin list, and nothing
+        // implements it: `combine_with_overrides` sorts by priority whatever
+        // this says. Declaring it would be a claim about behaviour that does
+        // not exist. The profile says what is true and names the plugin
+        // extensions instead, which is what makes the manager admit the gap
+        // rather than leave someone to find it.
+        let src = LocalBuiltin::new();
+        let g = src.get("skyrim-special-edition").expect("skyrim present");
+
+        assert_eq!(
+            g.load_order,
+            LoadOrderPolicy::Priority,
+            "do not change this to Explicit until something implements it"
+        );
+        assert_eq!(g.plugin_extensions, vec!["esp", "esm", "esl"]);
+    }
+
+    #[test]
+    fn skyrim_declares_no_loader_rather_than_the_wrong_one() {
+        // SKSE is a separate launcher plus a DLL that nothing proxies, and
+        // LoaderKind offers only `none` and `dll-proxy`. Declaring dll-proxy
+        // would write a Wine override for a DLL that overrides nothing and
+        // report "loader ready" when nothing had been set up.
+        let src = LocalBuiltin::new();
+        let g = src.get("skyrim-special-edition").expect("skyrim present");
+        assert!(g.loader.is_none());
     }
 
     #[test]

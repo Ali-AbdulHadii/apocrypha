@@ -370,6 +370,51 @@ fn a_bare_file_at_the_game_root_is_classified_as_such() {
 }
 
 #[test]
+fn a_mod_that_ships_plugins_says_their_order_is_not_managed() {
+    // Skyrim mods install correctly and then do nothing until their plugins
+    // are enabled, which the game reads from a list nothing here writes. The
+    // failure is safe and completely invisible, which is what makes it read as
+    // the manager having lost the mod.
+    let rules = GameRules {
+        plugin_extensions: vec!["esp".into(), "esl".into(), "esm".into()],
+        ..bethesda_rules()
+    };
+    let manifest = br#"<config><moduleName>M</moduleName>
+        <requiredInstallFiles>
+          <file source="Ordinator.esp"/>
+          <file source="meshes/x.nif"/>
+        </requiredInstallFiles></config>"#;
+
+    let (bundle, _p, _t) = analyze(
+        &rules,
+        &[
+            ("fomod/ModuleConfig.xml", manifest),
+            ("Ordinator.esp", b"P"),
+            ("meshes/x.nif", b"N"),
+        ],
+    );
+
+    let notice = apoc_modengine::unmanaged_plugin_notice(&bundle, &rules)
+        .expect("a mod shipping a plugin says so");
+    assert!(notice.contains("Ordinator.esp"), "{notice}");
+    assert!(notice.contains("does not manage"), "{notice}");
+}
+
+#[test]
+fn a_game_with_no_plugin_concept_is_never_warned_about_one() {
+    // Driven by what the profile declares, so an engine without plugins gets
+    // nothing rather than a warning about a concept it does not have.
+    let manifest = br#"<config><moduleName>M</moduleName>
+        <requiredInstallFiles><file source="thing.esp"/></requiredInstallFiles></config>"#;
+
+    let (bundle, _p, _t) = analyze(
+        &plain_rules(),
+        &[("fomod/ModuleConfig.xml", manifest), ("thing.esp", b"P")],
+    );
+    assert!(apoc_modengine::unmanaged_plugin_notice(&bundle, &plain_rules()).is_none());
+}
+
+#[test]
 fn an_installer_whose_sources_are_all_missing_is_reported_as_empty() {
     let manifest = br#"<config><moduleName>M</moduleName>
         <requiredInstallFiles><file source="nothing.esp"/></requiredInstallFiles>
