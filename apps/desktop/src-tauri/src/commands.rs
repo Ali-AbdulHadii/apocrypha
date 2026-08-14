@@ -1428,6 +1428,8 @@ mod carry_view_tests {
             screenshot: None,
             screenshot_archive_path: None,
             select_mode: mode,
+            recommended: false,
+            blocked_reason: None,
             deployable: mode != SelectMode::Info,
             payload: Vec::new(),
             raw_modinfo: Default::default(),
@@ -1442,9 +1444,11 @@ mod carry_view_tests {
             category: None,
             installer_model: InstallerModel::FluffyAio,
             archive_sha256: None,
+            fomod: None,
             groups: vec![OptionGroup {
                 index: None,
                 label: "Group".into(),
+                cardinality: None,
                 options,
             }],
         }
@@ -1545,6 +1549,7 @@ mod resolve_replacement_tests {
                 category: None,
                 installer_model: InstallerModel::FluffyAio,
                 archive_sha256: None,
+                fomod: None,
                 groups: Vec::new(),
             },
         }

@@ -904,6 +904,7 @@ mod tests {
             category: None,
             installer_model: InstallerModel::FluffyAio,
             archive_sha256: None,
+            fomod: None,
             groups: vec![],
         }
     }

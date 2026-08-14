@@ -6,6 +6,7 @@
 //! come from the `-N-` folder tokens and whose per-option select mode is derived
 //! from the slot token and payload presence.
 
+use crate::fomod::{FomodModule, GroupKind};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -27,6 +28,10 @@ pub enum InstallerModel {
     /// A mod loader distributed as a bare proxy DLL at the archive root
     /// (e.g. REFramework's `dinput8.dll`), with no payload folders.
     Loader,
+    /// A FOMOD: `fomod/ModuleConfig.xml` declares the options, their conditions
+    /// and where each file goes. The only model whose structure is stated by the
+    /// author rather than inferred from the archive's shape.
+    Fomod,
     /// Could not be classified; requires manual mapping (never auto-deployed blindly).
     Unknown,
 }
@@ -94,6 +99,14 @@ pub struct FilePayload {
     pub root: DeployRoot,
     /// Uncompressed size in bytes.
     pub size: u64,
+    /// FOMOD `<file priority=>`: when two selected options write the same
+    /// destination, the higher priority wins regardless of option order.
+    ///
+    /// Zero everywhere else, which is exactly the behaviour the planner had
+    /// before this existed — with every priority equal, the later option still
+    /// wins. Nothing about the convention-driven formats changes.
+    #[serde(default)]
+    pub priority: i32,
 }
 
 /// One selectable option within a group (a single Fluffy option folder).
@@ -130,6 +143,16 @@ pub struct ModOption {
     #[serde(default)]
     pub screenshot_archive_path: Option<String>,
     pub select_mode: SelectMode,
+    /// Pre-checked, but freely unchecked: FOMOD's `Recommended` plugin type.
+    /// Distinct from [`SelectMode::Forced`], which the user cannot decline.
+    #[serde(default)]
+    pub recommended: bool,
+    /// Why this option cannot be chosen, in the author's terms. Set for FOMOD's
+    /// `NotUsable`, and rendered as a disabled entry carrying its reason rather
+    /// than hidden — an option that silently vanishes reads as a bug in the
+    /// manager, not as a decision by the mod author.
+    #[serde(default)]
+    pub blocked_reason: Option<String>,
     /// True iff this option carries a deployable payload (`natives/`/`reframework/`).
     pub deployable: bool,
     /// The files this option would deploy when selected.
@@ -154,6 +177,12 @@ pub struct OptionGroup {
     pub index: Option<u32>,
     /// Human label derived from the folder naming (e.g. "Helm", "Body").
     pub label: String,
+    /// How many of this group's options may or must be chosen, when the author
+    /// said so. `None` for every format whose cardinality is inferred from
+    /// folder names, which is the behaviour this field was added beside rather
+    /// than replaced: a Fluffy radio set still means "at most one of these".
+    #[serde(default)]
+    pub cardinality: Option<GroupKind>,
     pub options: Vec<ModOption>,
 }
 
@@ -196,6 +225,15 @@ pub struct ModBundle {
     /// SHA-256 of the source archive, if computed.
     #[serde(default)]
     pub archive_sha256: Option<String>,
+    /// The installer's own declaration of itself, for the one format that makes
+    /// one. Carried alongside the flat groups rather than replacing them: the
+    /// groups are what the wizard, the planner and the staged selection speak,
+    /// and this is the program that decides which of them apply.
+    ///
+    /// `None` for every other format, and for every bundle stored before this
+    /// existed.
+    #[serde(default)]
+    pub fomod: Option<FomodModule>,
     pub groups: Vec<OptionGroup>,
 }
 
@@ -212,5 +250,100 @@ impl ModBundle {
     /// Options that carry a deployable payload.
     pub fn deployable_options(&self) -> impl Iterator<Item = &ModOption> {
         self.options().filter(|o| o.deployable)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A bundle serialised before FOMOD existed, exactly as `bundle_json` rows
+    /// in an installed library hold it. Every field added since must default,
+    /// or upgrading the app would fail to read a user's own mods back.
+    const LEGACY_BUNDLE: &str = r#"{
+        "name": "Some Mod",
+        "version": "1.2",
+        "author": null,
+        "category": null,
+        "installer_model": "fluffy-single",
+        "archive_sha256": "abc",
+        "groups": [{
+            "index": null,
+            "label": "Main",
+            "options": [{
+                "id": "main",
+                "folder_name": "main",
+                "group_index": null,
+                "slot_token": null,
+                "radio_set": null,
+                "name": "Main",
+                "description": null,
+                "category": null,
+                "author": null,
+                "screenshot": null,
+                "screenshot_archive_path": null,
+                "select_mode": "forced",
+                "deployable": true,
+                "payload": [{
+                    "archive_path": "main/natives/x.mesh",
+                    "game_rel_path": "natives/x.mesh",
+                    "root": "natives",
+                    "size": 12
+                }],
+                "raw_modinfo": {}
+            }]
+        }]
+    }"#;
+
+    #[test]
+    fn a_bundle_stored_before_fomod_existed_still_loads() {
+        let bundle: ModBundle = serde_json::from_str(LEGACY_BUNDLE).expect("legacy bundle loads");
+
+        assert_eq!(bundle.name, "Some Mod");
+        assert!(bundle.fomod.is_none());
+        assert_eq!(bundle.groups[0].cardinality, None);
+
+        let option = &bundle.groups[0].options[0];
+        assert!(!option.recommended);
+        assert_eq!(option.blocked_reason, None);
+
+        // Priority zero is not merely a placeholder: it is the value at which
+        // the planner behaves exactly as it did before priorities existed.
+        assert_eq!(option.payload[0].priority, 0);
+    }
+
+    #[test]
+    fn a_bundle_round_trips_through_json_with_a_fomod_module_attached() {
+        use crate::fomod::{FomodModule, SortOrder};
+
+        let bundle = ModBundle {
+            name: "Conditional Mod".into(),
+            version: None,
+            author: None,
+            category: None,
+            installer_model: InstallerModel::Fomod,
+            archive_sha256: None,
+            fomod: Some(FomodModule {
+                name: "Conditional Mod".into(),
+                image: None,
+                module_dependencies: None,
+                required_install_files: Vec::new(),
+                install_steps: Vec::new(),
+                step_order: SortOrder::Explicit,
+                conditional_installs: Vec::new(),
+                warnings: vec!["one construct was degraded".into()],
+            }),
+            groups: Vec::new(),
+        };
+
+        let json = serde_json::to_string(&bundle).expect("serialises");
+        let back: ModBundle = serde_json::from_str(&json).expect("deserialises");
+        assert_eq!(back, bundle);
+    }
+
+    #[test]
+    fn the_fomod_installer_model_names_itself_in_json() {
+        let json = serde_json::to_string(&InstallerModel::Fomod).expect("serialises");
+        assert_eq!(json, "\"fomod\"");
     }
 }

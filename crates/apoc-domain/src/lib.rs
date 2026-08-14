@@ -9,10 +9,15 @@
 //! See `docs/desktop-manager-enhanced-brief.md` for the design this implements.
 
 pub mod deploy;
+pub mod fomod;
 pub mod game;
 pub mod modpack;
 
 pub use deploy::{Conflict, DeployMethod, DeploymentPlan, PlannedFile, Selection, ValidationIssue};
+pub use fomod::{
+    CompositeDependency, ConditionalPattern, FileSpec, FileState, FomodModule, GroupKind,
+    InstallStep, Plugin, PluginGroup, PluginTypeName, SortOrder, Truth, TypeDescriptor,
+};
 pub use game::{
     ConflictScope, DeployTarget, Engine, GameProfile, LoadOrderPolicy, LoaderKind, LoaderSpec,
     PakChainSpec, ProtonLoaderSpec, RewrapRule, SteamDetection,

@@ -149,6 +149,7 @@ fn payload_for(index: &ArchiveIndex, folder: &str, rules: &GameRules) -> Vec<Fil
                     game_rel_path: dest.to_string(),
                     root: DeployRoot::GameRoot,
                     size: e.size,
+                    priority: 0,
                 });
                 continue;
             }
@@ -162,6 +163,7 @@ fn payload_for(index: &ArchiveIndex, folder: &str, rules: &GameRules) -> Vec<Fil
                 game_rel_path: rest.to_string(),
                 root: DeployRoot::Pak,
                 size: e.size,
+                priority: 0,
             });
             continue;
         }
@@ -175,6 +177,7 @@ fn payload_for(index: &ArchiveIndex, folder: &str, rules: &GameRules) -> Vec<Fil
                 game_rel_path: rules.canonicalize(rest),
                 root: DeployRoot::from_root_dir(&root_name.to_ascii_lowercase()),
                 size: e.size,
+                priority: 0,
             });
             continue;
         }
@@ -188,6 +191,7 @@ fn payload_for(index: &ArchiveIndex, folder: &str, rules: &GameRules) -> Vec<Fil
                 game_rel_path: rules.canonicalize(&rewrapped),
                 root: DeployRoot::from_root_dir(&prefix.to_ascii_lowercase()),
                 size: e.size,
+                priority: 0,
             });
         }
     }
@@ -289,6 +293,8 @@ fn build_option(
             .screenshot()
             .and_then(|s| resolve_screenshot(index, folder, s)),
         select_mode,
+        recommended: false,
+        blocked_reason: None,
         deployable,
         payload,
         raw_modinfo: mi.raw,
@@ -324,6 +330,7 @@ fn assemble_groups(options: Vec<ModOption>) -> Vec<OptionGroup> {
             OptionGroup {
                 index: key,
                 label,
+                cardinality: None,
                 options: opts,
             }
         })
@@ -374,6 +381,7 @@ fn normalize_fluffy_aio(
         category,
         installer_model: InstallerModel::FluffyAio,
         archive_sha256: sha,
+        fomod: None,
         groups: assemble_groups(options),
     }
 }
@@ -420,6 +428,8 @@ fn normalize_single(
                 } else {
                     SelectMode::Info
                 },
+                recommended: false,
+                blocked_reason: None,
                 deployable,
                 payload,
                 raw_modinfo: Default::default(),
@@ -448,9 +458,11 @@ fn normalize_single(
         category,
         installer_model: model,
         archive_sha256: sha,
+        fomod: None,
         groups: vec![OptionGroup {
             index: None,
             label: "Main".to_string(),
+            cardinality: None,
             options: vec![option],
         }],
     }
