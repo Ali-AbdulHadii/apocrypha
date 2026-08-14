@@ -12,6 +12,7 @@
 //! - `lower` (next) resolves that against an archive into a `ModBundle`.
 //! - `eval` (after that) answers which options apply, given a set of choices.
 
+pub mod eval;
 pub(crate) mod lower;
 pub(crate) mod xml;
 
