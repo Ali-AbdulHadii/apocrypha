@@ -54,7 +54,7 @@ fn full_install_deploy_and_rollback_cycle() {
     assert!(bundle.option_count() >= 40);
 
     // ---- 2. Stage (outside the game dir) --------------------------------
-    let staging = paths.mod_staging(game_id, "mod-sample");
+    let staging = paths.staging_dir(game_id, "mod-sample");
     let report = apoc_modengine::stage_bundle(&zip, &bundle, &staging).expect("stage");
     assert!(report.files_written > 0);
     assert!(

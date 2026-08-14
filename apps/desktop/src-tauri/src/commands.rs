@@ -398,8 +398,13 @@ pub fn import_mod(
             .unwrap_or("unknown")
     );
 
+    // One generation per import. It equals the mod id today, because a mod is
+    // still only ever imported once; separating the two is what lets a later
+    // change stage a new version without overwriting the old one's bytes.
+    let staging_key = mod_id.clone();
+
     state.paths.ensure_game_dirs(&game_id).map_err(err)?;
-    let staging = staging_for(&state.paths, &game_id, &mod_id);
+    let staging = staging_for(&state.paths, &game_id, &staging_key);
     apoc_modengine::stage_bundle(&path, &bundle, &staging).map_err(err)?;
 
     let sel = if selection.is_empty() {
@@ -427,6 +432,7 @@ pub fn import_mod(
                 // an update check has nothing to ask about, which is correct.
                 nexus_mod_id: None,
                 nexus_file_id: None,
+                staging_key: staging_key.clone(),
                 bundle: bundle.clone(),
             })
             .map_err(err)?;
@@ -612,6 +618,7 @@ pub(crate) fn plan_for_profile(
         }
         parts.push(apoc_modengine::ModPlan {
             mod_id: m.id.clone(),
+            staging_key: m.staging_key.clone(),
             priority: st.priority,
             plan,
         });
@@ -690,7 +697,7 @@ pub fn preview_deploy(state: State<AppState>, game_id: String) -> CmdResult<DryR
 /// remove them, so the user is asked to undo the deployment first.
 #[tauri::command(async)]
 pub fn remove_mod(state: State<AppState>, game_id: String, mod_id: String) -> CmdResult<()> {
-    {
+    let staging_key = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
         if store
             .applied_mod_ids(&game_id)
@@ -702,11 +709,18 @@ pub fn remove_mod(state: State<AppState>, game_id: String, mod_id: String) -> Cm
                     .to_string(),
             );
         }
-    }
+        // Read the key before the row goes: after `delete_mod` there is nothing
+        // left to say which directory belonged to this mod.
+        store.get_mod(&mod_id).map_err(err)?.map(|m| m.staging_key)
+    };
 
     // Delete the staged payload before the record, so a failure here leaves the
     // mod visible and removable rather than orphaning files with no owner.
-    let staging = staging_for(&state.paths, &game_id, &mod_id);
+    let Some(staging_key) = staging_key else {
+        // No row, nothing staged to own. Deleting again is not an error.
+        return Ok(());
+    };
+    let staging = staging_for(&state.paths, &game_id, &staging_key);
     if staging.exists() {
         std::fs::remove_dir_all(&staging).map_err(err)?;
     }
@@ -1139,7 +1153,7 @@ pub fn preview_from_mod(
         return Ok(None);
     };
 
-    let staging = staging_for(&state.paths, &game_id, &mod_id);
+    let staging = staging_for(&state.paths, &game_id, &m.staging_key);
     if let Some(p) = apoc_modengine::staged_preview(&staging, &option_id, shot) {
         let bytes = std::fs::read(&p).map_err(err)?;
         return Ok(Some(to_data_uri(&bytes, shot)));
