@@ -105,6 +105,93 @@ fn windows_casing_is_folded_back_into_the_real_tree() {
 }
 
 #[test]
+fn the_directories_frameworks_read_by_name_fold_to_one_casing() {
+    // Not the game's own directories this time, but the ones its modding
+    // frameworks open by an exact path. Two mods disagreeing about the casing of
+    // `redsUserHints` produce two directories on Linux, and the compiler reads
+    // whichever one it was told about, so the other mod's hints are simply not
+    // there. The symptom is a mod that installs perfectly and does nothing.
+    assert_eq!(
+        all_dests(&analyze(&[("engine/Config/Base/scripts.ini", b"I")])),
+        vec!["engine/config/base/scripts.ini"]
+    );
+    assert_eq!(
+        all_dests(&analyze(&[("R6/Config/CyberCmd/scc.toml", b"T")])),
+        vec!["r6/config/cybercmd/scc.toml"]
+    );
+    // The one entry that is not lowercase: proof this is a casing table rather
+    // than a lowercasing pass, in both directions.
+    assert_eq!(
+        all_dests(&analyze(&[("r6/config/redsuserhints/mod.toml", b"T")])),
+        vec!["r6/config/redsUserHints/mod.toml"]
+    );
+    assert_eq!(
+        all_dests(&analyze(&[("r6/config/RedsUserHints/mod.toml", b"T")])),
+        vec!["r6/config/redsUserHints/mod.toml"]
+    );
+    assert_eq!(
+        all_dests(&analyze(&[(
+            "bin/X64/Plugins/Cyber_Engine_Tweaks/Fonts/n.ttf",
+            b"F"
+        )])),
+        vec!["bin/x64/plugins/cyber_engine_tweaks/fonts/n.ttf"]
+    );
+    assert_eq!(
+        all_dests(&analyze(&[(
+            "bin/x64/plugins/cyber_engine_tweaks/TweakDB/usedhashes.kark",
+            b"K"
+        )])),
+        vec!["bin/x64/plugins/cyber_engine_tweaks/tweakdb/usedhashes.kark"]
+    );
+}
+
+#[test]
+fn a_folder_the_author_named_keeps_the_casing_they_gave_it() {
+    // The other half of the rule. Nothing fixed reads these names, so folding
+    // them would be inventing a convention on an author's behalf and would break
+    // whichever mod spelled it the other way.
+    assert_eq!(
+        all_dests(&analyze(&[(
+            "r6/scripts/VirtualCarDealer/UI/Hub.reds",
+            b"R"
+        )])),
+        vec!["r6/scripts/VirtualCarDealer/UI/Hub.reds"]
+    );
+    // Vendored inside Cyber Engine Tweaks' own distribution, so there is no
+    // second author to converge with and the list deliberately omits both.
+    assert_eq!(
+        all_dests(&analyze(&[(
+            "bin/x64/plugins/cyber_engine_tweaks/scripts/IconGlyphs/icons.lua",
+            b"L"
+        )])),
+        vec!["bin/x64/plugins/cyber_engine_tweaks/scripts/IconGlyphs/icons.lua"]
+    );
+    assert_eq!(
+        all_dests(&analyze(&[("r6/scripts/MyMod/JSON/data.json", b"J")])),
+        vec!["r6/scripts/MyMod/JSON/data.json"]
+    );
+}
+
+#[test]
+fn a_file_is_not_mistaken_for_the_directory_it_is_named_after() {
+    // Cyber Engine Tweaks ships both `plugins/cyber_engine_tweaks.asi` and
+    // `plugins/cyber_engine_tweaks/`. The casing list holds the directory name,
+    // and matching is on whole segments, so the `.asi` beside it must come
+    // through untouched. A prefix match here would rename a file into a
+    // directory that already exists.
+    assert_eq!(
+        all_dests(&analyze(&[
+            ("bin/x64/plugins/cyber_engine_tweaks.asi", b"A"),
+            ("bin/x64/plugins/cyber_engine_tweaks/global.ini", b"I"),
+        ])),
+        vec![
+            "bin/x64/plugins/cyber_engine_tweaks.asi",
+            "bin/x64/plugins/cyber_engine_tweaks/global.ini",
+        ]
+    );
+}
+
+#[test]
 fn an_archive_packed_from_the_inside_out_still_imports() {
     // Authors zip the inside of a payload root often enough that treating this
     // as "0 files to install" would be a bug report every week.
