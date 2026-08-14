@@ -416,9 +416,22 @@ pub fn download_mod_update(
     domain: String,
     nexus_mod_id: u64,
     file_id: u64,
+    mod_id: String,
 ) -> CmdResult<Download> {
     let client = client(&state)?;
-    spawn_download(app, &state, &client, &domain, nexus_mod_id, file_id, None)
+    // The local mod id travels with the file. Without it, the archive arrives in
+    // Downloads indistinguishable from any other, and installing it would add a
+    // second row rather than update the mod this download was asked for.
+    spawn_download(
+        app,
+        &state,
+        &client,
+        &domain,
+        nexus_mod_id,
+        file_id,
+        None,
+        Some(mod_id),
+    )
 }
 
 /// Open a mod page in the browser so the user can press "Mod Manager Download".
@@ -445,16 +458,32 @@ fn open_external(url: &str) -> CmdResult<()> {
 pub fn list_downloads(state: State<AppState>) -> CmdResult<Vec<Download>> {
     let mut list = state.downloads.list(&state.downloads_dir());
 
-    let installed: std::collections::HashMap<String, String> = {
+    let (installed, update_targets) = {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
-        store
+        let installed: std::collections::HashMap<String, String> = store
             .installed_archives()
             .map_err(|e| e.to_string())?
             .into_iter()
-            .collect()
+            .collect();
+
+        // Provenance names the mod id an archive was fetched to update; the row
+        // it names may since have been removed, in which case the file is just a
+        // download again and is described as one.
+        let provenance = store.all_archive_provenance().map_err(|e| e.to_string())?;
+        let mut update_targets = std::collections::HashMap::new();
+        for (path, p) in provenance {
+            let Some(mod_id) = p.replaces_mod_id else {
+                continue;
+            };
+            if let Some(m) = store.get_mod(&mod_id).map_err(|e| e.to_string())? {
+                update_targets.insert(path, m.name);
+            }
+        }
+        (installed, update_targets)
     };
     for d in &mut list {
         d.installed_as = installed.get(&d.path).cloned();
+        d.update_for = update_targets.get(&d.path).cloned();
     }
 
     Ok(list)
@@ -544,7 +573,18 @@ pub fn start_nxm_download(
         _ => None,
     };
 
-    spawn_download(app, &state, &client, &link.domain, mod_id, file_id, token)
+    // An nxm:// link says which file to fetch, never which local mod it is for.
+    // A matching Nexus mod id is what identifies it as an update at import.
+    spawn_download(
+        app,
+        &state,
+        &client,
+        &link.domain,
+        mod_id,
+        file_id,
+        token,
+        None,
+    )
 }
 
 /// Resolve a file to a CDN URL and start fetching it on its own thread.
@@ -561,6 +601,7 @@ fn spawn_download(
     mod_id: u64,
     file_id: u64,
     token: Option<(&str, u64)>,
+    replaces: Option<String>,
 ) -> CmdResult<Download> {
     let (links, _limits) = client
         .download_link(domain, mod_id, file_id, token)
@@ -577,6 +618,24 @@ fn spawn_download(
     let dest_dir = state.downloads_dir();
     std::fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
     let dest = dest_dir.join(downloads::safe_name(&file_name));
+
+    // Note the origin before starting, not after finishing. The destination is
+    // already decided — `fetch` writes to a `.part` beside it and renames onto
+    // exactly this path — and recording it here means a download that is
+    // cancelled, resumed, or interrupted by a restart still knows what it was
+    // for. Writing it after `begin` would also skip the already-running case.
+    {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .record_archive_provenance(&apoc_storage::Provenance {
+                archive_path: dest.display().to_string(),
+                domain: Some(domain.to_string()),
+                nexus_mod_id: Some(mod_id as i64),
+                nexus_file_id: Some(file_id as i64),
+                replaces_mod_id: replaces,
+            })
+            .map_err(|e| e.to_string())?;
+    }
 
     // A link delivered twice must not start a second writer for the same file.
     let entry = match state.downloads.begin(&file_name, &dest, "Nexus Mods") {

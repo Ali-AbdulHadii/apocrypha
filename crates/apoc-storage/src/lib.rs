@@ -116,7 +116,26 @@ pub struct ModState {
     pub selection: Selection,
 }
 
-const SCHEMA_VERSION: i64 = 4;
+/// Where a downloaded archive came from.
+///
+/// Recorded when a download begins, keyed on the path the file will have, and
+/// kept after the download queue has forgotten it — the queue is in memory and
+/// rebuilds itself by scanning the downloads folder, so a row here is the only
+/// thing that still knows the origin of a file tomorrow.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Provenance {
+    pub archive_path: String,
+    /// Nexus game domain, e.g. `monsterhunterwilds`.
+    pub domain: Option<String>,
+    pub nexus_mod_id: Option<i64>,
+    pub nexus_file_id: Option<i64>,
+    /// The local mod this file was fetched to update, when it was fetched from
+    /// the update screen. A hint: the row it names may since have been removed,
+    /// so it is checked before it is believed.
+    pub replaces_mod_id: Option<String>,
+}
+
+const SCHEMA_VERSION: i64 = 5;
 
 /// The application's persistent store.
 pub struct Store {
@@ -265,6 +284,28 @@ impl Store {
         self.conn.execute(
             "UPDATE mods SET staging_key = id WHERE staging_key IS NULL OR staging_key = ''",
             [],
+        )?;
+
+        // v5: where a downloaded archive came from, so importing it can tell an
+        // update of something installed from a new mod that happens to share a
+        // name.
+        //
+        // Deliberately no foreign key onto `mods`. The archive outlives the mod
+        // it produced — a file stays in the downloads folder after its mod is
+        // removed — and a cascade here would forget its origin at exactly the
+        // moment someone might reinstall it. `replaces_mod_id` is a hint,
+        // validated when it is used and never trusted on its own.
+        self.conn.execute_batch(
+            r#"
+            CREATE TABLE IF NOT EXISTS archive_provenance (
+                archive_path    TEXT PRIMARY KEY,
+                domain          TEXT,
+                nexus_mod_id    INTEGER,
+                nexus_file_id   INTEGER,
+                replaces_mod_id TEXT,
+                recorded_at     INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+            );
+            "#,
         )?;
 
         self.conn
@@ -474,6 +515,77 @@ impl Store {
         let mut stmt = self.conn.prepare("SELECT archive_path, name FROM mods")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    // ---- archive provenance ---------------------------------------------
+
+    /// Record where an archive came from, replacing any earlier note for the
+    /// same path.
+    ///
+    /// Upserts because a path can be re-downloaded: the same file fetched again
+    /// as a plain download after being fetched as an update should stop claiming
+    /// to replace anything.
+    pub fn record_archive_provenance(&self, p: &Provenance) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO archive_provenance(archive_path,domain,nexus_mod_id,nexus_file_id,replaces_mod_id)
+             VALUES(?1,?2,?3,?4,?5)
+             ON CONFLICT(archive_path) DO UPDATE SET
+                domain=excluded.domain, nexus_mod_id=excluded.nexus_mod_id,
+                nexus_file_id=excluded.nexus_file_id,
+                replaces_mod_id=excluded.replaces_mod_id",
+            params![
+                p.archive_path,
+                p.domain,
+                p.nexus_mod_id,
+                p.nexus_file_id,
+                p.replaces_mod_id
+            ],
+        )?;
+        Ok(())
+    }
+
+    const PROVENANCE_COLUMNS: &'static str =
+        "archive_path,domain,nexus_mod_id,nexus_file_id,replaces_mod_id";
+
+    fn row_to_provenance(row: &rusqlite::Row) -> rusqlite::Result<Provenance> {
+        Ok(Provenance {
+            archive_path: row.get(0)?,
+            domain: row.get(1)?,
+            nexus_mod_id: row.get(2)?,
+            nexus_file_id: row.get(3)?,
+            replaces_mod_id: row.get(4)?,
+        })
+    }
+
+    pub fn archive_provenance(&self, archive_path: &str) -> Result<Option<Provenance>> {
+        Ok(self
+            .conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM archive_provenance WHERE archive_path=?1",
+                    Self::PROVENANCE_COLUMNS
+                ),
+                params![archive_path],
+                Self::row_to_provenance,
+            )
+            .optional()?)
+    }
+
+    /// Every archive's provenance, keyed by path.
+    ///
+    /// Whole-map like [`Store::conflict_overrides`], because the downloads list
+    /// asks about every row it displays at once and one query beats one per row.
+    pub fn all_archive_provenance(&self) -> Result<HashMap<String, Provenance>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {} FROM archive_provenance",
+            Self::PROVENANCE_COLUMNS
+        ))?;
+        let rows = stmt.query_map([], Self::row_to_provenance)?;
+        Ok(rows
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .map(|p| (p.archive_path.clone(), p))
+            .collect())
     }
 
     /// Every staging directory the library still needs, for one game.
@@ -1409,5 +1521,85 @@ mod tests {
             vec!["mod-a__v2".to_string()],
             "the old generation is no longer claimed, so pruning may reclaim it"
         );
+    }
+
+    #[test]
+    fn provenance_round_trips_and_outlives_the_mod_it_produced() {
+        // Keyed on the archive, not the mod, and deliberately without a foreign
+        // key: a file stays in the downloads folder after its mod is removed,
+        // and forgetting where it came from at that moment is exactly wrong.
+        let s = seeded();
+        add_mod(&s, "mod-a", None);
+        s.record_archive_provenance(&Provenance {
+            archive_path: "/downloads/armour-v2.zip".into(),
+            domain: Some("monsterhunterwilds".into()),
+            nexus_mod_id: Some(1234),
+            nexus_file_id: Some(99),
+            replaces_mod_id: Some("mod-a".into()),
+        })
+        .unwrap();
+
+        let got = s
+            .archive_provenance("/downloads/armour-v2.zip")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.nexus_mod_id, Some(1234));
+        assert_eq!(got.replaces_mod_id.as_deref(), Some("mod-a"));
+
+        s.delete_mod("mod-a").unwrap();
+        let after = s
+            .archive_provenance("/downloads/armour-v2.zip")
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            after.replaces_mod_id.as_deref(),
+            Some("mod-a"),
+            "a dangling hint is checked at use, not cascaded away"
+        );
+    }
+
+    #[test]
+    fn re_downloading_an_archive_replaces_what_was_known_about_it() {
+        // The same file fetched again as a plain download must stop claiming to
+        // update anything, or it would silently replace a mod nobody named.
+        let s = seeded();
+        s.record_archive_provenance(&Provenance {
+            archive_path: "/downloads/armour.zip".into(),
+            domain: Some("monsterhunterwilds".into()),
+            nexus_mod_id: Some(1234),
+            nexus_file_id: Some(99),
+            replaces_mod_id: Some("mod-a".into()),
+        })
+        .unwrap();
+        s.record_archive_provenance(&Provenance {
+            archive_path: "/downloads/armour.zip".into(),
+            domain: Some("monsterhunterwilds".into()),
+            nexus_mod_id: Some(1234),
+            nexus_file_id: Some(100),
+            replaces_mod_id: None,
+        })
+        .unwrap();
+
+        let got = s
+            .archive_provenance("/downloads/armour.zip")
+            .unwrap()
+            .unwrap();
+        assert_eq!(got.nexus_file_id, Some(100));
+        assert_eq!(got.replaces_mod_id, None);
+        assert_eq!(
+            s.all_archive_provenance().unwrap().len(),
+            1,
+            "one row per path"
+        );
+    }
+
+    #[test]
+    fn an_archive_nothing_was_recorded_for_simply_has_no_provenance() {
+        let s = seeded();
+        assert!(s
+            .archive_provenance("/downloads/saved-by-hand.zip")
+            .unwrap()
+            .is_none());
+        assert!(s.all_archive_provenance().unwrap().is_empty());
     }
 }

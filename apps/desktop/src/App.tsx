@@ -40,6 +40,7 @@ import {
   type ModView,
   type PreviewSource,
   type ProfileView,
+  type ReplaceCandidateView,
   type SettingsView,
   type UpdateCheckView,
   type LinkPreviewView,
@@ -60,6 +61,28 @@ function carriedSummary(names: string[]): string {
   if (names.length === 1) return `keeping ${names[0]}`;
   if (names.length === 2) return `keeping ${names[0]} and ${names[1]}`;
   return `keeping ${names[0]} and ${names.length - 1} more`;
+}
+
+/**
+ * Whether an archive can be installed without opening the wizard.
+ *
+ * Two separate questions have to be settled, not one. Every option must have
+ * carried, *and* the identity must be known rather than guessed: a match on name
+ * alone could be a different mod entirely, and silently overwriting someone's
+ * library on that evidence is the one mistake here they cannot undo. So an
+ * uncertain match opens the wizard even when every option carried perfectly —
+ * the identity is itself the unanswered question.
+ */
+function canInstallDirectly(
+  mod: ModView,
+  carry: CarryView | null,
+  replaces: ReplaceCandidateView | null,
+): boolean {
+  // An archive with nothing to install is shown rather than installed: the empty
+  // wizard is the explanation for why nothing happened.
+  if (mod.totalFiles === 0) return false;
+  if (!carry?.complete) return false;
+  return replaces === null || replaces.certain;
 }
 
 type Screen =
@@ -103,6 +126,12 @@ export default function App() {
    * options of an installed mod carries nothing, so it stays null there.
    */
   const [wizardCarry, setWizardCarry] = useState<CarryView | null>(null);
+  /**
+   * The installed mod this archive appears to update. Only ever set alongside an
+   * archive; editing an installed mod's options replaces nothing.
+   */
+  const [wizardReplaces, setWizardReplaces] =
+    useState<ReplaceCandidateView | null>(null);
   const [pendingArchive, setPendingArchive] = useState<string | null>(null);
   const [preview, setPreview] = useState<DryRunView | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -280,7 +309,9 @@ export default function App() {
       if (u.newFileId === null) return;
       setUpdateBusyId(u.id);
       try {
-        await api.downloadModUpdate(u.domain, u.nexusModId, u.newFileId);
+        // `u.id` is the local mod. Sending it is what lets the install, whenever
+      // it happens, update this mod rather than add a second copy of it.
+      await api.downloadModUpdate(u.domain, u.nexusModId, u.newFileId, u.id);
         await refreshDownloads();
         push(`Downloading ${u.name}. It will wait in Downloads.`, "ok");
       } catch (e) {
@@ -486,16 +517,26 @@ export default function App() {
    * already installed, without opening the wizard.
    *
    * The wizard exists to ask questions. When `carry.complete` says there are
-   * none left to ask — nothing dropped, every choice set still answered —
-   * showing it anyway makes someone click through their own previous answers to
-   * arrive where they already were. What they get instead is a summary naming
-   * what was kept, so a silent reinstall is still a reported one.
+   * none left to ask — nothing dropped, every choice set still answered — and
+   * the identity is settled, showing it anyway makes someone click through their
+   * own previous answers to arrive where they already were. What they get
+   * instead is a summary naming what was kept, so a silent reinstall is still a
+   * reported one.
    */
   const installCarried = useCallback(
-    async (gameId: string, archivePath: string, mod: ModView, carry: CarryView) => {
-      await api.importMod(gameId, archivePath, mod.selection);
+    async (
+      gameId: string,
+      archivePath: string,
+      mod: ModView,
+      carry: CarryView,
+      replaces: ReplaceCandidateView | null,
+    ) => {
+      await api.importMod(gameId, archivePath, mod.selection, replaces?.modId);
+      const version = mod.version ? ` ${mod.version}` : "";
       push(
-        `${mod.name}${mod.version ? ` ${mod.version}` : ""} installed, ${carriedSummary(carry.carried)}`,
+        replaces
+          ? `${mod.name} updated to${version || " a new version"}, ${carriedSummary(carry.carried)} and its place in load order`
+          : `${mod.name}${version} installed, ${carriedSummary(carry.carried)}`,
         "ok",
       );
       refreshDownloads().catch(() => {});
@@ -504,6 +545,7 @@ export default function App() {
     },
     [push, refreshMods, refreshDownloads],
   );
+
 
   const startImport = useCallback(async () => {
     if (!activeGameId) {
@@ -514,21 +556,23 @@ export default function App() {
       const path = await pickArchive();
       if (!path) return;
       setBusy(true);
-      const { mod, carry } = await api.analyzeArchive(activeGameId, path);
+      const { mod, carry, replaces } = await api.analyzeArchive(
+        activeGameId,
+        path,
+      );
       if (mod.totalFiles === 0) {
         push(
           `${mod.name} has no files this game can install. It may be packed in an unusual way.`,
           "bad",
         );
       }
-      // An archive with nothing to install is shown rather than installed, even
-      // when the carry is clean: the empty wizard is the explanation.
-      if (carry?.complete && mod.totalFiles > 0) {
-        await installCarried(activeGameId, path, mod, carry);
+      if (canInstallDirectly(mod, carry, replaces)) {
+        await installCarried(activeGameId, path, mod, carry!, replaces);
         return;
       }
       setPendingArchive(path);
       setWizardCarry(carry);
+      setWizardReplaces(replaces);
       setWizardMod(mod);
     } catch (e) {
       fail(e);
@@ -549,19 +593,23 @@ export default function App() {
       setInstallingId(d.id);
       setBusy(true);
       try {
-        const { mod, carry } = await api.analyzeArchive(activeGameId, d.path);
+        const { mod, carry, replaces } = await api.analyzeArchive(
+          activeGameId,
+          d.path,
+        );
         if (mod.totalFiles === 0) {
           push(
             `${mod.name} has no files this game can install. It may be packed in an unusual way.`,
             "bad",
           );
         }
-        if (carry?.complete && mod.totalFiles > 0) {
-          await installCarried(activeGameId, d.path, mod, carry);
+        if (canInstallDirectly(mod, carry, replaces)) {
+          await installCarried(activeGameId, d.path, mod, carry!, replaces);
           return;
         }
         setPendingArchive(d.path);
         setWizardCarry(carry);
+        setWizardReplaces(replaces);
         setWizardMod(mod);
       } catch (e) {
         fail(e);
@@ -610,13 +658,23 @@ export default function App() {
   );
 
   const confirmWizard = useCallback(
-    async (selection: string[]) => {
+    async (selection: string[], replaces: string | null) => {
       if (!activeGameId) return;
       setBusy(true);
       try {
         if (pendingArchive) {
-          await api.importMod(activeGameId, pendingArchive, selection);
-          push("Mod added to your library", "ok");
+          const updated = await api.importMod(
+            activeGameId,
+            pendingArchive,
+            selection,
+            replaces,
+          );
+          push(
+            replaces
+              ? `${updated.name} updated, keeping its place in load order`
+              : "Mod added to your library",
+            "ok",
+          );
           // So the Downloads row stops offering to install what is now in the
           // library. Failing to refresh is not worth reporting as an error.
           refreshDownloads().catch(() => {});
@@ -628,6 +686,7 @@ export default function App() {
         setDirty(true);
         setWizardMod(null);
         setWizardCarry(null);
+        setWizardReplaces(null);
         setPendingArchive(null);
       } catch (e) {
         fail(e);
@@ -913,6 +972,7 @@ export default function App() {
                     onConfigure={(m) => {
                       setPendingArchive(null);
                       setWizardCarry(null);
+                      setWizardReplaces(null);
                       setWizardMod(m);
                     }}
                     onRemove={removeMod}
@@ -1019,10 +1079,12 @@ export default function App() {
             busy={busy}
             previewSource={previewSource}
             carry={wizardCarry}
+            replaces={wizardReplaces}
             confirmLabel={pendingArchive ? "Add mod" : "Save options"}
             onCancel={() => {
               setWizardMod(null);
               setWizardCarry(null);
+              setWizardReplaces(null);
               setPendingArchive(null);
             }}
             onConfirm={confirmWizard}
