@@ -193,6 +193,25 @@ pub struct RewrapRule {
     pub prefix: String,
 }
 
+/// Game-specific FOMOD behaviour.
+///
+/// A FOMOD declares where each file goes, but it declares it in the terms its
+/// own community uses. A Skyrim installer writes `destination="meshes/x.nif"`
+/// and means `Data/meshes/x.nif`, because on that game every mod lives under
+/// `Data` and nobody writes it out. An RE Engine mod means what it says.
+///
+/// That difference belongs to the game, so it is declared here rather than
+/// discovered by looking at which game is loaded — which is the rule the whole
+/// gamedef layer exists to keep.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FomodSpec {
+    /// Prefixed to every destination a FOMOD declares. Empty when the game's
+    /// installers already write game-root-relative paths.
+    #[serde(default)]
+    pub dest_prefix: String,
+}
+
 /// A complete, declarative game definition. This is the plugin unit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameProfile {
@@ -214,11 +233,18 @@ pub struct GameProfile {
     /// Where each payload root lands relative to the game install directory.
     pub deploy_targets: Vec<DeployTarget>,
     /// Archive shapes this game's mods come in (`fluffy-aio`, `loose-roots`,
-    /// ...). Descriptive: detection derives what it needs from the payload
-    /// roots, the rewrap rules and the loader, so this records intent for
-    /// whoever reads the profile rather than driving behaviour.
+    /// ...).
+    ///
+    /// Mostly descriptive: detection derives what it needs from the payload
+    /// roots, the rewrap rules and the loader. The exception is `fomod`, which
+    /// no amount of looking at an archive's shape can imply — a FOMOD announces
+    /// itself in a manifest, and whether this game's mods are expected to use
+    /// one is a statement only the profile can make.
     #[serde(default)]
     pub formats: Vec<String>,
+    /// How FOMOD installers behave for this game, when its mods ship them.
+    #[serde(default)]
+    pub fomod: Option<FomodSpec>,
     /// Root folders to re-wrap under a payload prefix when an archive is packed
     /// from the inside out.
     #[serde(default)]

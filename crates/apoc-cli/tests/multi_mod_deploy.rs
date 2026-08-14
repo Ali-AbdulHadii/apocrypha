@@ -17,6 +17,8 @@ fn wilds_rules() -> GameRules {
         accepts_pak: true,
         rewrap: vec![],
         canonical_case: vec!["STM".into()],
+        formats: Vec::new(),
+        fomod_dest_prefix: String::new(),
     }
 }
 

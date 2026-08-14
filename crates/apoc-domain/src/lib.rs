@@ -19,8 +19,8 @@ pub use fomod::{
     InstallStep, Plugin, PluginGroup, PluginTypeName, SortOrder, Truth, TypeDescriptor,
 };
 pub use game::{
-    ConflictScope, DeployTarget, Engine, GameProfile, LoadOrderPolicy, LoaderKind, LoaderSpec,
-    PakChainSpec, ProtonLoaderSpec, RewrapRule, SteamDetection,
+    ConflictScope, DeployTarget, Engine, FomodSpec, GameProfile, LoadOrderPolicy, LoaderKind,
+    LoaderSpec, PakChainSpec, ProtonLoaderSpec, RewrapRule, SteamDetection,
 };
 pub use modpack::{
     DeployRoot, FilePayload, InstallerModel, ModBundle, ModOption, OptionGroup, SelectMode,
