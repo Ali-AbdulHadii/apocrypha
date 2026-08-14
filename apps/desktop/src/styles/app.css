@@ -332,6 +332,28 @@
   background: var(--accent-hover);
 }
 
+/* Play: tinted with the colour sampled from the game's own cover art, which
+   arrives as `--play-accent` on the element. The fallback is the app accent, so
+   a game Steam has cached no art for gets a button that still looks deliberate
+   rather than one that looks broken. `--play-ink` is whichever of black or
+   white the label survives on, decided by luminance where the colour was
+   sampled. */
+.btn.play {
+  background: hsl(var(--play-accent, var(--accent-h) var(--accent-s) 42%));
+  border-color: transparent;
+  color: var(--play-ink, var(--accent-contrast));
+  font-weight: 600;
+}
+
+.btn.play:hover:not(:disabled) {
+  /* Lifted rather than recoloured, so the game's identity survives the hover. */
+  filter: brightness(1.12);
+}
+
+.btn.play:active:not(:disabled) {
+  filter: brightness(0.94);
+}
+
 .btn.danger {
   color: var(--danger);
   border-color: var(--border);
