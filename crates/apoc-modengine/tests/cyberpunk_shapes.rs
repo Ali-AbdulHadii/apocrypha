@@ -97,6 +97,128 @@ fn a_redmod_keeps_its_own_folder() {
 }
 
 #[test]
+fn a_redmod_with_the_trees_redmod_actually_defines_survives_whole() {
+    // REDmod is CDPR's own format and its folder is a small specification:
+    // `info.json` names the mod, and the loader looks for archives, tweaks,
+    // scripts and sounds in fixed places beside it. Losing any one of them
+    // leaves a mod REDmod will load and then find half of.
+    let b = analyze(&[
+        ("mods/car_dealer/info.json", b"{\"name\":\"car_dealer\"}"),
+        ("mods/car_dealer/archives/car_dealer.archive", b"A"),
+        ("mods/car_dealer/archives/car_dealer.archive.xl", b"X"),
+        ("mods/car_dealer/tweaks/vehicles.yaml", b"T"),
+        ("mods/car_dealer/scripts/core/dealer.script", b"S"),
+        ("mods/car_dealer/customSounds/horn.wav", b"W"),
+    ]);
+    let mut dests = all_dests(&b);
+    dests.sort();
+    assert_eq!(
+        dests,
+        vec![
+            "mods/car_dealer/archives/car_dealer.archive",
+            "mods/car_dealer/archives/car_dealer.archive.xl",
+            "mods/car_dealer/customSounds/horn.wav",
+            "mods/car_dealer/info.json",
+            "mods/car_dealer/scripts/core/dealer.script",
+            "mods/car_dealer/tweaks/vehicles.yaml",
+        ]
+    );
+    // `scripts` and `tweaks` are in the casing list and also rewrap folders, but
+    // inside a REDmod they are already where they belong. Neither rule may reach
+    // in and move them out to `r6/`.
+    assert!(
+        dests.iter().all(|d| d.starts_with("mods/car_dealer/")),
+        "a REDmod's own subtrees escaped its folder: {dests:?}"
+    );
+    // customSounds is the author-facing spelling REDmod defines, and nothing in
+    // the casing list may flatten it.
+    assert!(dests.contains(&"mods/car_dealer/customSounds/horn.wav".to_string()));
+}
+
+#[test]
+fn an_archive_that_is_only_the_engine_tree_imports() {
+    // redscript ships exactly this and nothing else. No test had reached
+    // `engine/` at all before, which is the tree holding the compiler and the
+    // one shipped config file a mod replaces.
+    let b = analyze(&[
+        ("engine/config/base/scripts.ini", b"I"),
+        ("engine/tools/scc.exe", b"E"),
+        ("engine/tools/scc_lib.dll", b"D"),
+    ]);
+    let mut dests = all_dests(&b);
+    dests.sort();
+    assert_eq!(
+        dests,
+        vec![
+            "engine/config/base/scripts.ini",
+            "engine/tools/scc.exe",
+            "engine/tools/scc_lib.dll",
+        ]
+    );
+    assert_eq!(b.installer_model, InstallerModel::LooseRoots);
+}
+
+#[test]
+fn an_archive_that_is_only_the_bin_tree_imports() {
+    // Cyber Engine Tweaks' release is this shape: everything under `bin/x64`,
+    // including a proxy DLL. It must not be mistaken for a bare loader archive,
+    // because it carries its own full paths and the loader model would flatten
+    // them.
+    let b = analyze(&[
+        ("bin/x64/version.dll", b"V"),
+        ("bin/x64/global.ini", b"I"),
+        ("bin/x64/plugins/cyber_engine_tweaks.asi", b"A"),
+        (
+            "bin/x64/plugins/cyber_engine_tweaks/tweakdb/usedhashes.kark",
+            b"K",
+        ),
+    ]);
+    let mut dests = all_dests(&b);
+    dests.sort();
+    assert_eq!(
+        dests,
+        vec![
+            "bin/x64/global.ini",
+            "bin/x64/plugins/cyber_engine_tweaks.asi",
+            "bin/x64/plugins/cyber_engine_tweaks/tweakdb/usedhashes.kark",
+            "bin/x64/version.dll",
+        ]
+    );
+    assert_eq!(b.installer_model, InstallerModel::LooseRoots);
+}
+
+#[test]
+fn a_deep_script_tree_arrives_with_its_shape_intact() {
+    // A scripted mod is not a flat folder of files: redscript compiles a tree,
+    // and the tree is how the mod's own imports resolve. Flattening or renaming
+    // any level of it produces a mod that fails to compile at game start, with
+    // an error naming a file the author never wrote.
+    let b = analyze(&[
+        ("r6/scripts/VirtualCarDealer/Utils.reds", b"U"),
+        (
+            "r6/scripts/VirtualCarDealer/core/CarDealer-System.reds",
+            b"S",
+        ),
+        ("r6/scripts/VirtualCarDealer/UI/HubButton.reds", b"H"),
+        (
+            "r6/scripts/VirtualCarDealer/overrides/SetupNewTab.reds",
+            b"O",
+        ),
+    ]);
+    let mut dests = all_dests(&b);
+    dests.sort();
+    assert_eq!(
+        dests,
+        vec![
+            "r6/scripts/VirtualCarDealer/UI/HubButton.reds",
+            "r6/scripts/VirtualCarDealer/Utils.reds",
+            "r6/scripts/VirtualCarDealer/core/CarDealer-System.reds",
+            "r6/scripts/VirtualCarDealer/overrides/SetupNewTab.reds",
+        ]
+    );
+}
+
+#[test]
 fn windows_casing_is_folded_back_into_the_real_tree() {
     // Linux is case-sensitive and REDengine's directories are lowercase, so
     // `Archive/PC/Mod` would otherwise create a tree the game never reads.
