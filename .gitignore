@@ -25,6 +25,14 @@ apps/desktop/src-tauri/gen/schemas/
 # Working notes kept alongside the repo but not part of it.
 notes/
 
+# Real mod archives used to exercise the engine against what authors actually
+# ship. They are other people's work and some are tens of megabytes, so they are
+# kept outside version control and the tests that use them skip when they are
+# absent. The tests also look for a `scratch/` inside the repo, which is why the
+# rule is here rather than resting on the folder happening to live one level up:
+# the one protection worth having is the one that does not depend on remembering.
+/scratch/
+
 # docs/ holds design briefs, brand notes and correspondence drafts: useful
 # locally, not something to publish. Ignored entry by entry rather than as a
 # directory, because git cannot re-include a file whose parent directory is
