@@ -10,6 +10,7 @@ mod archive;
 pub mod carry;
 mod error;
 mod extract;
+mod fomod;
 mod modinfo;
 mod naming;
 mod normalize;

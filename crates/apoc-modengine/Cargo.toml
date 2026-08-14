@@ -16,6 +16,7 @@ tracing = { workspace = true }
 unrar = "0.5"
 apoc-gamedef = { path = "../apoc-gamedef" }
 sevenz-rust2 = "0.21"
+quick-xml = { workspace = true }
 
 [dev-dependencies]
 apoc-gamedef = { path = "../apoc-gamedef" }
