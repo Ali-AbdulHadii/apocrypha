@@ -142,6 +142,49 @@ pub fn game_art(game_id: String) -> CmdResult<Option<String>> {
     Ok(Some(format!("data:{mime};base64,{encoded}")))
 }
 
+/// The URL that asks Steam to run one game.
+///
+/// `rungameid` rather than `run`, because it is the form that also covers
+/// non-Steam shortcuts and is what Steam's own library links use.
+fn steam_run_url(steam_app_id: u32) -> String {
+    format!("steam://rungameid/{steam_app_id}")
+}
+
+/// Ask Steam to start the game.
+///
+/// Deliberately the whole of it. The roadmap rules out *running* the game on
+/// the grounds that a launcher wrapping Steam wrapping Proton only adds ways to
+/// fail, and that still holds: nothing here manages a process, chooses a Proton
+/// build, or touches launch options. It hands Steam a URL and Steam does
+/// exactly what it does when the user presses Play in their own library —
+/// including applying the launch options this app told them to set.
+///
+/// Handed to the opener from Rust rather than from the webview because the
+/// window's `opener:allow-open-url` capability is scoped to two documentation
+/// URLs, and widening it to a whole scheme so the UI can format a string is a
+/// worse trade than keeping the app id where the profile already lives.
+#[tauri::command(async)]
+pub fn launch_game(app: tauri::AppHandle, game_id: String) -> CmdResult<()> {
+    use tauri_plugin_opener::OpenerExt;
+
+    let profile = builtin_profile(&game_id)?;
+    let app_id = profile.detection.steam_app_id;
+
+    // Refused rather than handed over, because Steam's answer to an app id it
+    // does not own is a store page. Offering to start a game and opening a shop
+    // instead is worse than saying plainly that it is not installed.
+    if apoc_steam::find_game(app_id).is_none() {
+        return Err(format!(
+            "{} does not look installed. Use Find game if Steam has it somewhere unusual.",
+            profile.name
+        ));
+    }
+
+    app.opener()
+        .open_url(steam_run_url(app_id), None::<&str>)
+        .map_err(err)
+}
+
 /// List all known games, merged with detection and stored configuration.
 #[tauri::command(async)]
 pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
@@ -2124,5 +2167,36 @@ mod resolve_replacement_tests {
             !found.certain(),
             "a shared name could be two different mods, so this must be asked about"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_launch_url_is_the_one_steam_answers_to() {
+        // The whole of launching is this string, so it is the whole of what
+        // there is to get wrong. `rungameid` is the form Steam's own library
+        // links use; `run` exists but does not cover non-Steam shortcuts.
+        assert_eq!(steam_run_url(1091500), "steam://rungameid/1091500");
+        assert_eq!(steam_run_url(2246340), "steam://rungameid/2246340");
+    }
+
+    #[test]
+    fn both_shipped_games_produce_a_launch_url() {
+        // Reads the app id from the profile rather than restating it, so a
+        // profile that loses its detection block fails here.
+        for id in ["monster-hunter-wilds", "cyberpunk-2077"] {
+            let p = builtin_profile(id).expect("profile ships");
+            let url = steam_run_url(p.detection.steam_app_id);
+            assert!(url.starts_with("steam://rungameid/"), "{id}: {url}");
+            assert!(
+                url.rsplit('/')
+                    .next()
+                    .is_some_and(|n| n.parse::<u32>().is_ok()),
+                "{id}: {url} does not end in an app id"
+            );
+        }
     }
 }

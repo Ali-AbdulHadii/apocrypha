@@ -46,6 +46,7 @@ import {
   type LinkPreviewView,
 } from "./lib/api";
 import { useAppearance } from "./lib/appearance";
+import { accentFromImage, type Accent } from "./lib/artColor";
 import { useMaximized } from "./lib/window";
 import { useTheme } from "./lib/theme";
 
@@ -146,6 +147,7 @@ export default function App() {
   const [updateBusyId, setUpdateBusyId] = useState<string | null>(null);
   const [nexusPremium, setNexusPremium] = useState(false);
   const [gameArt, setGameArt] = useState<Record<string, string | null>>({});
+  const [accent, setAccent] = useState<Accent | null>(null);
   const [apocryphaSignedIn, setApocryphaSignedIn] = useState(false);
 
   const { push } = useToast();
@@ -271,6 +273,27 @@ export default function App() {
       alive = false;
     };
   }, [games]);
+
+  /**
+   * The active game's own colour, read out of the cover art already loaded
+   * above. Sampling is a canvas pass over a ~96px copy of an image that is
+   * already in memory, so it is cheap, but it is still only done when the art
+   * actually changes rather than on every render.
+   */
+  useEffect(() => {
+    const art = activeGameId ? gameArt[activeGameId] : null;
+    if (!art) {
+      setAccent(null);
+      return;
+    }
+    let alive = true;
+    void accentFromImage(art).then((a) => {
+      if (alive) setAccent(a);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [activeGameId, gameArt]);
 
   // Re-scan on arrival, so a file saved from a browser while the app was open
   // is already listed by the time the user looks.
@@ -619,6 +642,23 @@ export default function App() {
     },
     [importArchive, push],
   );
+
+  /**
+   * Hand the game to Steam. Steam decides everything after that, which is the
+   * point: launch options, Proton build and the process itself stay theirs.
+   */
+  const launchGame = useCallback(async () => {
+    if (!activeGameId) {
+      push("Select a game first", "bad");
+      return;
+    }
+    try {
+      await api.launchGame(activeGameId);
+      push("Handed to Steam", "ok");
+    } catch (e) {
+      fail(e);
+    }
+  }, [activeGameId, push, fail]);
 
   // Installing from Downloads joins the same path as Add mod: analyze, then the
   // wizard. Nothing about the archive is treated differently for having been
@@ -1009,8 +1049,10 @@ export default function App() {
             screen={screen}
             game={activeGame}
             busy={busy}
+            accent={accent}
             onImport={startImport}
             onDetect={detect}
+            onLaunch={launchGame}
           />
 
           <div className="scroll">
@@ -1301,14 +1343,19 @@ function TopBar({
   screen,
   game,
   busy,
+  accent,
   onImport,
   onDetect,
+  onLaunch,
 }: {
   screen: Screen;
   game: GameView | null;
   busy: boolean;
+  /** The game's own colour, sampled from its cover art. Null when it has none. */
+  accent: Accent | null;
   onImport: () => void;
   onDetect: () => void;
+  onLaunch: () => void;
 }) {
   const titles: Record<Screen, string> = {
     library: "Library",
@@ -1339,6 +1386,34 @@ function TopBar({
         <button className="btn primary" onClick={onImport} disabled={busy}>
           <Icon.plus /> Add mod
         </button>
+        {/* Only on Mods. It is the screen you are on when you have finished
+            deciding what to install, so it is the one place the next thing you
+            want is to go and look at it. */}
+        {screen === "mods" && (
+          <button
+            className="btn play"
+            onClick={onLaunch}
+            disabled={busy || !game?.installDir}
+            title={
+              game?.installDir
+                ? `Start ${game.name} through Steam`
+                : "Steam does not have this game installed"
+            }
+            // Tinted from the artwork when there is any, and left as the app's
+            // own accent when there is not, rather than falling back to a
+            // colour picked here that would be nobody's.
+            style={
+              accent
+                ? ({
+                    "--play-accent": accent.hsl,
+                    "--play-ink": accent.ink,
+                  } as React.CSSProperties)
+                : undefined
+            }
+          >
+            <Icon.play /> Play
+          </button>
+        )}
       </div>
     </header>
   );
