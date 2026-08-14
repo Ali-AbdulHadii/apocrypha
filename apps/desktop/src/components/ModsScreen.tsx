@@ -328,19 +328,40 @@ export function ModsScreen({
   canDrop = true,
   onOpenLoadOrder,
 }: ModsScreenProps) {
-  // Seeded from storage rather than defaulted and then corrected, so the first
-  // render is already the filtered list. Restoring in an effect would show the
-  // whole library for a frame and then snap.
-  const [criteria, setCriteria] = useState<Criteria>(() => loadLast(gameId));
+  /**
+   * The criteria, and the game they were loaded for, as one value.
+   *
+   * They travel together because they are only meaningful together. On the
+   * render where `gameId` changes, this still holds the previous game's
+   * criteria, and a save effect that could not tell would write one game's
+   * filters into another game's slot. It would usually be corrected a tick
+   * later, which is exactly the kind of bug that survives testing and then
+   * bites the one time the screen unmounts in between.
+   *
+   * Seeded from storage rather than defaulted and then corrected, so the first
+   * render is already the filtered list. Restoring in an effect would show the
+   * whole library for a frame and then snap.
+   */
+  const [filters, setFilters] = useState<{ game: string | null; criteria: Criteria }>(
+    () => ({ game: gameId, criteria: loadLast(gameId) }),
+  );
+  const criteria = filters.criteria;
   const [saved, setSaved] = useState<SavedFilter[]>(() => loadSaved(gameId));
   const [naming, setNaming] = useState(false);
   const [draftName, setDraftName] = useState("");
   const { query, sort, status, category } = criteria;
 
+  const setCriteria = useCallback(
+    (next: Criteria) => setFilters((prev) => ({ ...prev, criteria: next })),
+    [],
+  );
+
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** Where the last checkbox click landed, so shift-click has a range to span. */
   const anchorRef = useRef<string | null>(null);
+  /** Set by Escape, so a commit-on-blur knows the naming was abandoned. */
+  const cancelledRef = useRef(false);
   const duration = useCollapseDuration();
 
   const { over } = useFileDrop(canDrop && !!onDropArchives, (paths) =>
@@ -348,21 +369,29 @@ export function ModsScreen({
   );
 
   const patch = useCallback(
-    (part: Partial<Criteria>) => setCriteria((prev) => ({ ...prev, ...part })),
+    (part: Partial<Criteria>) =>
+      setFilters((prev) => ({
+        ...prev,
+        criteria: { ...prev.criteria, ...part },
+      })),
     [],
   );
 
   // Switching games must not carry one game's categories into another's list.
   useEffect(() => {
-    setCriteria(loadLast(gameId));
+    setFilters({ game: gameId, criteria: loadLast(gameId) });
     setSaved(loadSaved(gameId));
     setSelected(new Set());
     anchorRef.current = null;
   }, [gameId]);
 
   useEffect(() => {
-    saveLast(gameId, criteria);
-  }, [gameId, criteria]);
+    // Skipped on the render where the game has changed but the criteria have
+    // not caught up yet. The effect above is what makes them agree, and this
+    // one then runs again with both halves describing the same game.
+    if (filters.game !== gameId) return;
+    saveLast(gameId, filters.criteria);
+  }, [gameId, filters]);
 
   const categories = useMemo(() => {
     const set = new Set(mods.map(categoryOf));
@@ -480,7 +509,24 @@ export function ModsScreen({
     setCriteria(f.criteria);
   }
 
+  /**
+   * Naming is committed on blur, so that clicking away keeps what was typed
+   * rather than discarding it. Escape has to be able to mean *no*, and removing
+   * a focused input is exactly the case where whether `blur` arrives is a
+   * matter of which browser is asked — so the cancel is recorded rather than
+   * inferred from the order the two events happen to fire in.
+   */
+  function cancelName() {
+    cancelledRef.current = true;
+    setDraftName("");
+    setNaming(false);
+  }
+
   function commitName() {
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      return;
+    }
     const name = draftName.trim();
     if (name) setSaved(putSaved(gameId, name, criteria));
     setDraftName("");
@@ -605,17 +651,20 @@ export function ModsScreen({
               onBlur={commitName}
               onKeyDown={(e) => {
                 if (e.key === "Enter") commitName();
-                if (e.key === "Escape") {
-                  setDraftName("");
-                  setNaming(false);
-                }
+                if (e.key === "Escape") cancelName();
               }}
               placeholder="Name this filter"
               aria-label="Name for the saved filter"
             />
           ) : (
             !isDefault(criteria) && (
-              <button className="btn sm ghost" onClick={() => setNaming(true)}>
+              <button
+                className="btn sm ghost"
+                onClick={() => {
+                  cancelledRef.current = false;
+                  setNaming(true);
+                }}
+              >
                 <Icon.plus size={12} /> Save filter
               </button>
             )
