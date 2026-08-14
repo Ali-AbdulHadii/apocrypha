@@ -303,19 +303,27 @@ pub fn analyze_archive(
     state: State<AppState>,
     game_id: String,
     path: String,
-) -> CmdResult<ModView> {
+) -> CmdResult<AnalyzedArchive> {
     let bundle = apoc_modengine::analyze_archive_with(Path::new(&path), &rules_for(&game_id))
         .map_err(err)?;
 
-    // If this archive is a newer release of something already installed, open
-    // the wizard on the choices that were made last time rather than on a blank
+    // If this archive is a newer release of something already installed, carry
+    // the choices that were made last time rather than starting from a blank
     // slate. Rebuilding a body variant and three addons from memory on every
     // update is the difference between updating being a click and a chore.
-    let selection = match previous_selection(&state, &game_id, &bundle.name)? {
-        Some(previous) => apoc_modengine::carry_selection(&bundle, &previous).selection,
-        None => apoc_modengine::default_selection(&bundle),
+    //
+    // The caller gets the whole outcome, not just the selection: whether the
+    // wizard needs to open at all is its decision, and it cannot make it
+    // without knowing what failed to carry.
+    let (selection, carry) = match previous_selection(&state, &game_id, &bundle.name)? {
+        Some(previous) => {
+            let carried = apoc_modengine::carry_selection(&bundle, &previous);
+            let view = carry_view(&bundle, &carried);
+            (carried.selection, Some(view))
+        }
+        None => (apoc_modengine::default_selection(&bundle), None),
     };
-    Ok(ModView {
+    let mod_view = ModView {
         id: String::new(),
         name: bundle.name.clone(),
         version: bundle.version.clone(),
@@ -330,7 +338,44 @@ pub fn analyze_archive(
         selection: selection_vec(&selection),
         total_files: bundle.deployable_options().map(|o| o.payload.len()).sum(),
         total_bytes: bundle.deployable_options().map(|o| o.total_size()).sum(),
-    })
+    };
+    Ok(AnalyzedArchive { mod_view, carry })
+}
+
+/// Describe a carry outcome in the terms the person who made the choices used.
+///
+/// `carried` deliberately lists only options someone actually picked, not the
+/// forced entries `default_selection` adds back — telling a user their mod
+/// "kept" a base-files entry they never chose reads as noise, and hides the two
+/// real choices in a list of nine.
+fn carry_view(
+    bundle: &apoc_domain::ModBundle,
+    carried: &apoc_modengine::CarriedSelection,
+) -> CarryView {
+    let forced = apoc_modengine::default_selection(bundle);
+    let kept = bundle
+        .options()
+        .filter(|o| carried.selection.contains(&o.id) && !forced.contains(&o.id))
+        .map(|o| o.name.clone())
+        .collect();
+
+    // A dropped id may still name an option in the new bundle — one demoted to a
+    // notice or a header — in which case its name is more use than its id.
+    let dropped = carried
+        .dropped
+        .iter()
+        .map(|id| match bundle.options().find(|o| &o.id == id) {
+            Some(o) => o.name.clone(),
+            None => id.clone(),
+        })
+        .collect();
+
+    CarryView {
+        carried: kept,
+        dropped,
+        undecided: carried.undecided.clone(),
+        complete: carried.is_complete(),
+    }
 }
 
 /// Import a mod: analyze, stage its payloads, and register it in the active profile.
@@ -1136,4 +1181,113 @@ pub fn steam_diagnostics() -> CmdResult<serde_json::Value> {
         "libraries": libs,
         "steamRunning": apoc_deploy::loader::steam_is_running(),
     }))
+}
+
+#[cfg(test)]
+mod carry_view_tests {
+    use super::*;
+    use apoc_domain::{InstallerModel, ModBundle, ModOption, OptionGroup, SelectMode, Selection};
+
+    fn opt(id: &str, name: &str, mode: SelectMode) -> ModOption {
+        ModOption {
+            id: id.to_string(),
+            folder_name: id.to_string(),
+            group_index: None,
+            slot_token: None,
+            radio_set: None,
+            name: name.to_string(),
+            description: None,
+            category: None,
+            author: None,
+            screenshot: None,
+            screenshot_archive_path: None,
+            select_mode: mode,
+            deployable: mode != SelectMode::Info,
+            payload: Vec::new(),
+            raw_modinfo: Default::default(),
+        }
+    }
+
+    fn bundle(options: Vec<ModOption>) -> ModBundle {
+        ModBundle {
+            name: "Test".into(),
+            version: None,
+            author: None,
+            category: None,
+            installer_model: InstallerModel::FluffyAio,
+            archive_sha256: None,
+            groups: vec![OptionGroup {
+                index: None,
+                label: "Group".into(),
+                options,
+            }],
+        }
+    }
+
+    fn selection(ids: &[&str]) -> Selection {
+        let mut s = Selection::new();
+        for i in ids {
+            s.insert((*i).to_string());
+        }
+        s
+    }
+
+    #[test]
+    fn carried_names_the_choices_someone_made_not_the_forced_ones() {
+        let b = bundle(vec![
+            opt("core", "Base files", SelectMode::Forced),
+            opt("addon-a", "Glowing eyes", SelectMode::Stackable),
+            opt("addon-b", "Extra straps", SelectMode::Stackable),
+        ]);
+        let carried = apoc_modengine::carry_selection(&b, &selection(&["core", "addon-a"]));
+        let view = carry_view(&b, &carried);
+
+        assert_eq!(view.carried, vec!["Glowing eyes"]);
+        assert!(
+            !view.carried.contains(&"Base files".to_string()),
+            "forced entries are not choices anyone made"
+        );
+        assert!(view.complete);
+    }
+
+    #[test]
+    fn a_dropped_option_that_is_gone_is_reported_by_its_folder_name() {
+        // Nothing in the new bundle can name it, so the id it had is all there
+        // is to say — and it is what the person will recognise on disk.
+        let b = bundle(vec![opt("core", "Base files", SelectMode::Forced)]);
+        let carried = apoc_modengine::carry_selection(&b, &selection(&["core", "addon-gone"]));
+        let view = carry_view(&b, &carried);
+
+        assert_eq!(view.dropped, vec!["addon-gone"]);
+        assert!(!view.complete);
+    }
+
+    #[test]
+    fn a_dropped_option_still_present_is_reported_by_its_name() {
+        // Demoted to a notice: it exists, so it has a name worth showing.
+        let b = bundle(vec![
+            opt("core", "Base files", SelectMode::Forced),
+            opt("addon-a", "Glowing eyes", SelectMode::Info),
+        ]);
+        let carried = apoc_modengine::carry_selection(&b, &selection(&["core", "addon-a"]));
+        let view = carry_view(&b, &carried);
+
+        assert_eq!(view.dropped, vec!["Glowing eyes"]);
+        assert!(!view.complete);
+    }
+
+    #[test]
+    fn a_new_choice_set_leaves_the_install_incomplete() {
+        let mut variant = opt("body-a", "Body A", SelectMode::Exclusive);
+        variant.radio_set = Some("body".into());
+        let b = bundle(vec![opt("core", "Base files", SelectMode::Forced), variant]);
+        let carried = apoc_modengine::carry_selection(&b, &selection(&["core"]));
+        let view = carry_view(&b, &carried);
+
+        assert_eq!(view.undecided, vec!["body"]);
+        assert!(
+            !view.complete,
+            "a question with no answer must open the wizard"
+        );
+    }
 }

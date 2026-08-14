@@ -14,6 +14,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useState } from "react";
 import {
   formatBytes,
+  type CarryView,
   type GroupView,
   type ModView,
   type OptionView,
@@ -27,6 +28,12 @@ interface Props {
   busy?: boolean;
   /** Where option preview images are fetched from. */
   previewSource: PreviewSource | null;
+  /**
+   * Set when this archive updates a mod already installed and the carry left
+   * something to ask about. A complete carry never reaches the wizard — the
+   * caller installs it directly — so this is always an incomplete one.
+   */
+  carry?: CarryView | null;
   onCancel: () => void;
   onConfirm: (selection: string[]) => void;
   confirmLabel?: string;
@@ -60,10 +67,40 @@ function setLabel(key: string): string {
   return raw.replace(/[-_]+/g, " ").trim() || "Choice";
 }
 
+/**
+ * Explain why the wizard opened on an update instead of installing silently.
+ *
+ * Both halves are worth stating separately because they are different problems:
+ * a dropped option is something the person had and no longer can have, and an
+ * undecided set is a question this version asks that the last one did not.
+ * Returns null when there is nothing to say, so the banner disappears rather
+ * than rendering empty.
+ */
+function carryMessage(carry: CarryView): string | null {
+  const parts: string[] = [];
+  if (carry.dropped.length > 0) {
+    parts.push(
+      `${carry.dropped.length === 1 ? "An option you chose is" : `${carry.dropped.length} options you chose are`} not in this version: ${carry.dropped.join(", ")}.`,
+    );
+  }
+  if (carry.undecided.length > 0) {
+    parts.push(
+      `${carry.undecided.length === 1 ? "This choice needs" : "These choices need"} an answer: ${carry.undecided.map(setLabel).join(", ")}.`,
+    );
+  }
+  if (parts.length === 0) return null;
+  const kept =
+    carry.carried.length > 0
+      ? ` Your other ${carry.carried.length === 1 ? "choice is" : `${carry.carried.length} choices are`} already ticked.`
+      : "";
+  return `${parts.join(" ")}${kept}`;
+}
+
 export function InstallWizard({
   mod,
   busy,
   previewSource,
+  carry,
   onCancel,
   onConfirm,
   confirmLabel = "Install",
@@ -198,6 +235,19 @@ export function InstallWizard({
 
         {/* Step body */}
         <div className="wizard-body">
+          {/* Why this update stopped to ask. Deliberately outside the step
+              AnimatePresence: it applies to the whole install, not to whichever
+              step is on screen, so it must not slide away when someone moves
+              between steps to answer it. */}
+          {carry && carryMessage(carry) && (
+            <div
+              className={carry.dropped.length > 0 ? "notice" : "notice info"}
+              style={{ marginBottom: "var(--sp-4)" }}
+            >
+              {carryMessage(carry)}
+            </div>
+          )}
+
           <AnimatePresence mode="wait">
             <motion.div
               key={stepIndex}

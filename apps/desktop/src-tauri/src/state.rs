@@ -146,6 +146,43 @@ pub struct ModView {
     pub total_bytes: u64,
 }
 
+/// What happened when a previous install's choices were moved onto a new
+/// version of the same mod.
+///
+/// Names rather than ids, because this is shown to a person. A dropped option
+/// may not exist in the new bundle at all, so there is no name to resolve and
+/// its id — the folder name it had — is the best that can be said about it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CarryView {
+    /// Options kept from the last install, in bundle order.
+    pub carried: Vec<String>,
+    /// Chosen before, absent or no longer selectable now.
+    pub dropped: Vec<String>,
+    /// Choice sets in the new version with nothing chosen, as raw radio-set
+    /// keys. The UI prettifies them with the same rule the wizard already uses
+    /// for set headings, so the two cannot disagree about what a set is called.
+    pub undecided: Vec<String>,
+    /// True when nothing needs asking and the wizard can be skipped.
+    pub complete: bool,
+}
+
+/// An analyzed archive, plus the carry outcome when it is a new version of
+/// something already installed.
+///
+/// Separate from [`ModView`] rather than a field on it: carrying only ever
+/// applies to this one command, and `list_mods` returning a permanently null
+/// column would invite the UI to look for it where it can never be set.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AnalyzedArchive {
+    #[serde(rename = "mod")]
+    pub mod_view: ModView,
+    /// `None` when nothing by this name is installed, so there was nothing to
+    /// carry and every choice is being made for the first time.
+    pub carry: Option<CarryView>,
+}
+
 /// Result of previewing a deployment.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

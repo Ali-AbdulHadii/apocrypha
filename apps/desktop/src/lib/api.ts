@@ -49,6 +49,28 @@ export interface ModView {
   totalBytes: number;
 }
 
+/**
+ * What survived when a previous install's choices were moved onto a new version
+ * of the same mod. Option names, except `undecided`, which is raw radio-set keys
+ * for `setLabel` to prettify the way the wizard already does.
+ */
+export interface CarryView {
+  /** Options kept from the last install. Excludes forced entries. */
+  carried: string[];
+  /** Chosen before, gone or no longer selectable now. */
+  dropped: string[];
+  /** Choice sets in the new version with nothing chosen. */
+  undecided: string[];
+  /** True when nothing needs asking and the wizard can be skipped. */
+  complete: boolean;
+}
+
+export interface AnalyzedArchive {
+  mod: ModView;
+  /** Null when nothing by this name is installed — a first install, not an update. */
+  carry: CarryView | null;
+}
+
 export interface GameView {
   id: string;
   name: string;
@@ -427,7 +449,7 @@ export const api = {
     call<GameView>("set_game_path", { gameId, installDir, protonPrefix }),
 
   analyzeArchive: (gameId: string, path: string) =>
-    call<ModView>("analyze_archive", { gameId, path }),
+    call<AnalyzedArchive>("analyze_archive", { gameId, path }),
   importMod: (gameId: string, archivePath: string, selection: string[]) =>
     call<ModView>("import_mod", { gameId, archivePath, selection }),
   listMods: (gameId: string) => call<ModView[]>("list_mods", { gameId }),
