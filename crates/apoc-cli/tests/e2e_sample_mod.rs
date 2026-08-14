@@ -12,29 +12,27 @@ use apoc_deploy::{apply, dry_run, place::Ladder, rollback, DeployContext};
 use apoc_domain::SelectMode;
 use apoc_storage::Paths;
 use std::collections::BTreeSet;
-use std::path::PathBuf;
 
-fn sample_zip() -> Option<PathBuf> {
-    let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..");
-    for entry in std::fs::read_dir(&repo_root).ok()?.flatten() {
-        let path = entry.path();
-        let name = path.file_name()?.to_string_lossy().to_string();
-        if name.to_ascii_lowercase().ends_with(".zip") && name.contains("AIO") {
-            return Some(path);
-        }
-    }
-    None
+mod common;
+
+/// Where the sample archive is looked for, and what it is called.
+const SAMPLE_ENV: &str = "APOC_SAMPLE_MODS";
+const SAMPLE_SUBDIR: &str = "sample-archives";
+
+fn sample_zip() -> Option<std::path::PathBuf> {
+    common::find_archive(SAMPLE_ENV, SAMPLE_SUBDIR, &["aio"])
 }
 
 #[test]
 fn full_install_deploy_and_rollback_cycle() {
     let Some(zip) = sample_zip() else {
-        eprintln!("SKIP: sample AIO zip not found; skipping end-to-end test");
+        eprintln!(
+            "{}",
+            common::describe_missing("sample AIO", SAMPLE_ENV, SAMPLE_SUBDIR)
+        );
         return;
     };
+    eprintln!("running against {}", zip.display());
 
     let tmp = tempfile::tempdir().unwrap();
     let paths = Paths::with_root(tmp.path().join("apocrypha"));
