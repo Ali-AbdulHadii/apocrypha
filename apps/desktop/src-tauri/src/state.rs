@@ -362,7 +362,11 @@ pub fn selection_from(ids: &[String]) -> Selection {
     s
 }
 
-/// Resolve the staging directory for a mod.
-pub fn staging_for(paths: &Paths, game_id: &str, mod_id: &str) -> PathBuf {
-    paths.mod_staging(game_id, mod_id)
+/// Resolve the staging directory holding one archive's extracted files.
+///
+/// Takes the mod's `staging_key`, not its id. Reading it off the record is what
+/// keeps a mod that has been updated pointed at its current generation while the
+/// previous one stays where an applied deployment expects it.
+pub fn staging_for(paths: &Paths, game_id: &str, staging_key: &str) -> PathBuf {
+    paths.staging_dir(game_id, staging_key)
 }

@@ -220,11 +220,36 @@ pub fn plan(bundle: &ModBundle, sel: &Selection) -> DeploymentPlan {
 
 /// One mod's contribution to a combined deployment.
 pub struct ModPlan {
-    /// Staging namespace for this mod (its directory under the game's staging root).
+    /// Library identity: what conflict overrides name and what load order sorts.
+    /// Stable across versions of the same mod.
     pub mod_id: String,
+    /// Which directory under the game's staging root holds this mod's files.
+    ///
+    /// Separate from `mod_id` because a mod keeps its identity across an update
+    /// while its bytes do not. Reusing one directory per mod would mean staging
+    /// a new version over the old one's files, which an applied deployment is
+    /// still repairing from.
+    pub staging_key: String,
     /// Load-order priority; higher wins a conflict against lower.
     pub priority: i64,
     pub plan: DeploymentPlan,
+}
+
+impl ModPlan {
+    /// A plan whose staging directory is named after the mod itself.
+    ///
+    /// The shape every mod had before staging and identity were separated, and
+    /// still the right one for a caller that stages exactly once — tests, the
+    /// CLI, anything with no notion of a second version.
+    pub fn same_namespace(mod_id: impl Into<String>, priority: i64, plan: DeploymentPlan) -> Self {
+        let mod_id = mod_id.into();
+        Self {
+            staging_key: mod_id.clone(),
+            mod_id,
+            priority,
+            plan,
+        }
+    }
 }
 
 /// Which mod should win specific contested paths, overriding load order.
@@ -233,7 +258,7 @@ pub type ConflictOverrides = std::collections::HashMap<String, String>;
 
 /// Merge several mods' plans into a single deployment.
 ///
-/// Staged paths are namespaced by mod id so one staging root serves them all,
+/// Staged paths are namespaced by staging key so one staging root serves them all,
 /// and cross-mod conflicts on the same destination are resolved by load-order
 /// priority: higher priority is applied last and therefore wins.
 pub fn combine(mods: Vec<ModPlan>, bundle_name: &str) -> DeploymentPlan {
@@ -278,7 +303,13 @@ pub fn combine_with_overrides(
                 m.mod_id.clone(),
                 PlannedFile {
                     // Re-root the staged path into the shared staging directory.
-                    staged_rel_path: format!("{}/{}", option_dir(&m.mod_id), f.staged_rel_path),
+                    // Keyed by staging key, not mod id: the id says which mod
+                    // owns the file, the key says where its bytes actually are.
+                    staged_rel_path: format!(
+                        "{}/{}",
+                        option_dir(&m.staging_key),
+                        f.staged_rel_path
+                    ),
                     ..f.clone()
                 },
             ));
@@ -495,16 +526,8 @@ mod tests {
     fn combining_mods_namespaces_staging_and_keeps_every_file() {
         let combined = combine(
             vec![
-                ModPlan {
-                    mod_id: "mod-a".into(),
-                    priority: 0,
-                    plan: single_plan("mod-a", "natives/a.pak"),
-                },
-                ModPlan {
-                    mod_id: "mod-b".into(),
-                    priority: 0,
-                    plan: single_plan("mod-b", "dinput8.dll"),
-                },
+                ModPlan::same_namespace("mod-a", 0, single_plan("mod-a", "natives/a.pak")),
+                ModPlan::same_namespace("mod-b", 0, single_plan("mod-b", "dinput8.dll")),
             ],
             "All mods",
         );
@@ -521,19 +544,40 @@ mod tests {
     }
 
     #[test]
+    fn staged_paths_follow_the_staging_key_while_conflicts_follow_the_mod_id() {
+        // The single place the split can silently regress. A mod that has been
+        // updated keeps its id — which is what overrides name and what the UI
+        // reports — while its bytes live under a new generation.
+        let updated = ModPlan {
+            mod_id: "mod-a".into(),
+            staging_key: "mod-a__v2".into(),
+            priority: 0,
+            plan: single_plan("mod-a", "natives/shared.pak"),
+        };
+        let other =
+            ModPlan::same_namespace("mod-b", 10, single_plan("mod-b", "natives/shared.pak"));
+
+        let mut overrides = ConflictOverrides::new();
+        overrides.insert("natives/shared.pak".into(), "mod-a".into());
+        let combined = combine_with_overrides(vec![updated, other], "All mods", &overrides);
+
+        assert_eq!(combined.file_count(), 1);
+        assert_eq!(
+            combined.files[0].staged_rel_path, "mod-a__v2/opt/natives/shared.pak",
+            "bytes come from the generation, not the identity"
+        );
+        assert_eq!(
+            combined.conflicts[0].winner, "mod-a",
+            "an override naming the mod id wins, even against higher priority"
+        );
+    }
+
+    #[test]
     fn higher_priority_mod_wins_a_cross_mod_conflict() {
         let combined = combine(
             vec![
-                ModPlan {
-                    mod_id: "low".into(),
-                    priority: 0,
-                    plan: single_plan("low", "natives/shared.mdf2.45"),
-                },
-                ModPlan {
-                    mod_id: "high".into(),
-                    priority: 10,
-                    plan: single_plan("high", "natives/shared.mdf2.45"),
-                },
+                ModPlan::same_namespace("low", 0, single_plan("low", "natives/shared.mdf2.45")),
+                ModPlan::same_namespace("high", 10, single_plan("high", "natives/shared.mdf2.45")),
             ],
             "All mods",
         );
@@ -573,16 +617,8 @@ mod tests {
     fn an_override_gives_a_contested_path_to_a_lower_priority_mod() {
         let combined = combine_with_overrides(
             vec![
-                ModPlan {
-                    mod_id: "low".into(),
-                    priority: 0,
-                    plan: single_plan("low", "natives/shared.mdf2.45"),
-                },
-                ModPlan {
-                    mod_id: "high".into(),
-                    priority: 10,
-                    plan: single_plan("high", "natives/shared.mdf2.45"),
-                },
+                ModPlan::same_namespace("low", 0, single_plan("low", "natives/shared.mdf2.45")),
+                ModPlan::same_namespace("high", 10, single_plan("high", "natives/shared.mdf2.45")),
             ],
             "All mods",
             &overrides(&[("natives/shared.mdf2.45", "low")]),
@@ -603,16 +639,16 @@ mod tests {
     fn an_override_moves_only_the_path_it_names() {
         let combined = combine_with_overrides(
             vec![
-                ModPlan {
-                    mod_id: "low".into(),
-                    priority: 0,
-                    plan: multi_plan("low", &["natives/body.mesh", "natives/body.tex"]),
-                },
-                ModPlan {
-                    mod_id: "high".into(),
-                    priority: 10,
-                    plan: multi_plan("high", &["natives/body.mesh", "natives/body.tex"]),
-                },
+                ModPlan::same_namespace(
+                    "low",
+                    0,
+                    multi_plan("low", &["natives/body.mesh", "natives/body.tex"]),
+                ),
+                ModPlan::same_namespace(
+                    "high",
+                    10,
+                    multi_plan("high", &["natives/body.mesh", "natives/body.tex"]),
+                ),
             ],
             "All mods",
             &overrides(&[("natives/body.mesh", "low")]),
@@ -637,16 +673,8 @@ mod tests {
     fn an_override_naming_an_absent_mod_falls_back_to_load_order() {
         let combined = combine_with_overrides(
             vec![
-                ModPlan {
-                    mod_id: "low".into(),
-                    priority: 0,
-                    plan: single_plan("low", "natives/shared.mdf2.45"),
-                },
-                ModPlan {
-                    mod_id: "high".into(),
-                    priority: 10,
-                    plan: single_plan("high", "natives/shared.mdf2.45"),
-                },
+                ModPlan::same_namespace("low", 0, single_plan("low", "natives/shared.mdf2.45")),
+                ModPlan::same_namespace("high", 10, single_plan("high", "natives/shared.mdf2.45")),
             ],
             "All mods",
             &overrides(&[("natives/shared.mdf2.45", "uninstalled-mod")]),
@@ -661,16 +689,8 @@ mod tests {
     fn an_override_on_an_uncontested_path_changes_nothing() {
         let combined = combine_with_overrides(
             vec![
-                ModPlan {
-                    mod_id: "mod-a".into(),
-                    priority: 0,
-                    plan: single_plan("mod-a", "natives/a.pak"),
-                },
-                ModPlan {
-                    mod_id: "mod-b".into(),
-                    priority: 10,
-                    plan: single_plan("mod-b", "dinput8.dll"),
-                },
+                ModPlan::same_namespace("mod-a", 0, single_plan("mod-a", "natives/a.pak")),
+                ModPlan::same_namespace("mod-b", 10, single_plan("mod-b", "dinput8.dll")),
             ],
             "All mods",
             &overrides(&[("natives/a.pak", "mod-b"), ("dinput8.dll", "mod-a")]),
@@ -692,21 +712,9 @@ mod tests {
         let dest = "natives/three-way.tex";
         let combined = combine_with_overrides(
             vec![
-                ModPlan {
-                    mod_id: "bottom".into(),
-                    priority: 0,
-                    plan: single_plan("bottom", dest),
-                },
-                ModPlan {
-                    mod_id: "middle".into(),
-                    priority: 5,
-                    plan: single_plan("middle", dest),
-                },
-                ModPlan {
-                    mod_id: "top".into(),
-                    priority: 10,
-                    plan: single_plan("top", dest),
-                },
+                ModPlan::same_namespace("bottom", 0, single_plan("bottom", dest)),
+                ModPlan::same_namespace("middle", 5, single_plan("middle", dest)),
+                ModPlan::same_namespace("top", 10, single_plan("top", dest)),
             ],
             "All mods",
             &overrides(&[(dest, "middle")]),

@@ -91,9 +91,13 @@ impl Paths {
         self.game_dir(game_id).join("staging")
     }
 
-    /// Staging directory for one installed mod.
-    pub fn mod_staging(&self, game_id: &str, mod_id: &str) -> PathBuf {
-        self.staging_root(game_id).join(sanitize(mod_id))
+    /// Staging directory for one archive's extracted files.
+    ///
+    /// Keyed by staging key rather than mod id: a mod keeps its id across an
+    /// update, but each archive gets its own directory, so replacing a version
+    /// never writes over bytes an applied deployment still repairs from.
+    pub fn staging_dir(&self, game_id: &str, staging_key: &str) -> PathBuf {
+        self.staging_root(game_id).join(sanitize(staging_key))
     }
 
     pub fn vault(&self, game_id: &str) -> PathBuf {
@@ -200,7 +204,7 @@ mod tests {
     fn layout_is_nested_under_the_game_id() {
         let p = Paths::with_root("/data/apocrypha");
         assert_eq!(
-            p.mod_staging("monster-hunter-wilds", "mod-1"),
+            p.staging_dir("monster-hunter-wilds", "mod-1"),
             PathBuf::from("/data/apocrypha/games/monster-hunter-wilds/staging/mod-1")
         );
         assert!(p.vault("g").ends_with("games/g/vault"));
@@ -210,7 +214,7 @@ mod tests {
     #[test]
     fn ids_are_sanitized_into_one_segment() {
         let p = Paths::with_root("/data");
-        let staged = p.mod_staging("../etc", "../../passwd");
+        let staged = p.staging_dir("../etc", "../../passwd");
         assert!(staged.starts_with("/data/games"));
         // The real invariant: hostile ids contribute exactly one path segment
         // and can never walk upward.
