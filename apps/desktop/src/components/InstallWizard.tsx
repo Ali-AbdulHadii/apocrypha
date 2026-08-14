@@ -16,6 +16,7 @@ import {
   formatBytes,
   type CarryView,
   type GroupView,
+  type ReplaceCandidateView,
   type ModView,
   type OptionView,
   type PreviewSource,
@@ -34,8 +35,15 @@ interface Props {
    * caller installs it directly — so this is always an incomplete one.
    */
   carry?: CarryView | null;
+  /**
+   * The installed mod this archive appears to be a new version of. An uncertain
+   * candidate is offered as a choice; a certain one is stated, because it was
+   * not in doubt and the install is going to act on it either way.
+   */
+  replaces?: ReplaceCandidateView | null;
   onCancel: () => void;
-  onConfirm: (selection: string[]) => void;
+  /** `replaces` is the mod id to update in place, or null to add a new mod. */
+  onConfirm: (selection: string[], replaces: string | null) => void;
   confirmLabel?: string;
 }
 
@@ -101,6 +109,7 @@ export function InstallWizard({
   busy,
   previewSource,
   carry,
+  replaces,
   onCancel,
   onConfirm,
   confirmLabel = "Install",
@@ -109,6 +118,15 @@ export function InstallWizard({
     () => new Set(mod.selection),
   );
   const [stepIndex, setStepIndex] = useState(0);
+  /**
+   * Whether to update the mod this looks like a new version of, or add it
+   * alongside.
+   *
+   * Starts on "replace" because that is what an archive matching an installed
+   * mod usually is, and because the alternative — two rows of the same mod, both
+   * enabled, contesting every file — is the outcome nobody wants by accident.
+   */
+  const [replaceExisting, setReplaceExisting] = useState(true);
 
   const steps = mod.groups;
   const step = steps[stepIndex];
@@ -235,6 +253,45 @@ export function InstallWizard({
 
         {/* Step body */}
         <div className="wizard-body">
+          {/* The identity question, when there is one. It sits above the carry
+              banner because it is the larger of the two: which mod this is
+              decides what carrying even means. */}
+          {replaces && !replaces.certain && (
+            <div className="notice info" style={{ marginBottom: "var(--sp-4)" }}>
+              <div>
+                This looks like a new version of{" "}
+                <strong>{replaces.name}</strong>
+                {replaces.version ? ` ${replaces.version}` : ""}, but only the
+                name says so.
+              </div>
+              <div
+                className="row"
+                style={{ gap: "var(--sp-2)", marginTop: "var(--sp-3)" }}
+                role="radiogroup"
+                aria-label="What to do with the installed mod"
+              >
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={replaceExisting}
+                  className={`btn ${replaceExisting ? "primary" : ""}`}
+                  onClick={() => setReplaceExisting(true)}
+                >
+                  Replace it
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={!replaceExisting}
+                  className={`btn ${replaceExisting ? "" : "primary"}`}
+                  onClick={() => setReplaceExisting(false)}
+                >
+                  Add as a separate mod
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Why this update stopped to ask. Deliberately outside the step
               AnimatePresence: it applies to the whole install, not to whichever
               step is on screen, so it must not slide away when someone moves
@@ -425,10 +482,21 @@ export function InstallWizard({
           ) : (
             <button
               className="btn primary"
-              onClick={() => onConfirm([...selection])}
+              onClick={() =>
+                onConfirm(
+                  [...selection],
+                  // A certain match replaces without being asked about; an
+                  // uncertain one only if that is what was chosen above.
+                  replaces && (replaces.certain || replaceExisting)
+                    ? replaces.modId
+                    : null,
+                )
+              }
               disabled={busy || totals.files === 0}
             >
-              {busy ? "Working…" : `${confirmLabel} · ${totals.files} files`}
+              {busy
+                ? "Working…"
+                : `${replaces && (replaces.certain || replaceExisting) ? "Update" : confirmLabel} · ${totals.files} files`}
             </button>
           )}
         </footer>

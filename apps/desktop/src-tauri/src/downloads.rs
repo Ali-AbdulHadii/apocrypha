@@ -57,6 +57,14 @@ pub struct Download {
     /// question cannot yet apply.
     #[serde(default)]
     pub installed_as: Option<String>,
+    /// Name of the mod this archive was fetched to update, when it was fetched
+    /// from the update screen.
+    ///
+    /// Filled in by the command layer from recorded provenance, like
+    /// `installed_as` and for the same reason: the queue knows nothing about the
+    /// library, and nothing here should teach it.
+    #[serde(default)]
+    pub update_for: Option<String>,
 }
 
 #[derive(Default)]
@@ -152,6 +160,7 @@ impl Queue {
                 started_at: now(),
                 bytes_per_second: 0,
                 installed_as: None,
+                update_for: None,
             };
             items.insert(d.id.clone(), d.clone());
             d
@@ -240,6 +249,7 @@ impl Queue {
                     started_at: mtime,
                     bytes_per_second: 0,
                     installed_as: None,
+                    update_for: None,
                 });
             }
         }

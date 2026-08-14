@@ -7,7 +7,8 @@
 use apoc_domain::{ModBundle, Selection};
 use apoc_storage::{Paths, Store};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 pub struct AppState {
@@ -167,6 +168,20 @@ pub struct CarryView {
     pub complete: bool,
 }
 
+/// An installed mod an archive appears to be a new version of.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplaceCandidateView {
+    pub mod_id: String,
+    pub name: String,
+    pub version: Option<String>,
+    /// True when the match identifies the mod rather than guessing at it. A
+    /// certain match replaces the library row without asking; an uncertain one
+    /// is a question for the person installing, because the only evidence is a
+    /// shared name and names are neither stable nor unique.
+    pub certain: bool,
+}
+
 /// An analyzed archive, plus the carry outcome when it is a new version of
 /// something already installed.
 ///
@@ -181,6 +196,8 @@ pub struct AnalyzedArchive {
     /// `None` when nothing by this name is installed, so there was nothing to
     /// carry and every choice is being made for the first time.
     pub carry: Option<CarryView>,
+    /// The mod this archive appears to update, when it appears to update one.
+    pub replaces: Option<ReplaceCandidateView>,
 }
 
 /// Result of previewing a deployment.
@@ -369,4 +386,105 @@ pub fn selection_from(ids: &[String]) -> Selection {
 /// previous one stays where an applied deployment expects it.
 pub fn staging_for(paths: &Paths, game_id: &str, staging_key: &str) -> PathBuf {
     paths.staging_dir(game_id, staging_key)
+}
+
+/// Delete staging directories no mod claims any more, returning how many went.
+///
+/// Driven entirely by `keep`: a directory is removed because nothing in the
+/// library names it, never because its name looks stale. That is the whole
+/// safety argument, and it is why this takes a keep-list rather than working out
+/// for itself what looks abandoned — a bug in a "looks abandoned" rule deletes
+/// files a deployment needs, and a bug here leaves a directory behind.
+///
+/// Loose files directly under the root are left alone. Nothing puts them there,
+/// so one is a sign of something this function does not understand, and the
+/// conservative answer is to not touch it.
+pub fn prune_staging(staging_root: &Path, keep: &HashSet<String>) -> std::io::Result<usize> {
+    let Ok(entries) = std::fs::read_dir(staging_root) else {
+        // No staging root yet: nothing has ever been imported for this game.
+        return Ok(0);
+    };
+
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            continue;
+        }
+        let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+            continue;
+        };
+        if keep.contains(&name) {
+            continue;
+        }
+        std::fs::remove_dir_all(entry.path())?;
+        removed += 1;
+    }
+    Ok(removed)
+}
+
+#[cfg(test)]
+mod prune_staging_tests {
+    use super::*;
+
+    fn dir(root: &Path, name: &str) -> PathBuf {
+        let p = root.join(name);
+        std::fs::create_dir_all(p.join("opt")).unwrap();
+        std::fs::write(p.join("opt/a.pak"), b"bytes").unwrap();
+        p
+    }
+
+    fn keep(names: &[&str]) -> HashSet<String> {
+        names.iter().map(|s| (*s).to_string()).collect()
+    }
+
+    #[test]
+    fn removes_only_what_the_library_no_longer_names() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let live = dir(root, "mod-a__v2");
+        let stale = dir(root, "mod-a__v1");
+        let other = dir(root, "mod-b__v1");
+
+        let removed = prune_staging(root, &keep(&["mod-a__v2", "mod-b__v1"])).unwrap();
+
+        assert_eq!(removed, 1);
+        assert!(!stale.exists(), "the superseded generation is reclaimed");
+        assert!(live.exists(), "the current one is not");
+        assert!(other.exists(), "nor is an unrelated mod's");
+    }
+
+    #[test]
+    fn an_empty_keep_list_is_taken_at_its_word() {
+        // A game with no mods left really does have no staging worth keeping.
+        // Treating "keep nothing" as "something must be wrong, keep everything"
+        // would mean the directory could never be reclaimed.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        dir(root, "mod-a__v1");
+        dir(root, "mod-b__v1");
+
+        assert_eq!(prune_staging(root, &keep(&[])).unwrap(), 2);
+    }
+
+    #[test]
+    fn loose_files_are_left_alone() {
+        // Nothing puts a file directly under the staging root, so one is a sign
+        // of something this function does not understand. Deleting what you do
+        // not recognise is how a prune becomes a bug report.
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path();
+        let stray = root.join("notes.txt");
+        std::fs::write(&stray, b"why is this here").unwrap();
+        dir(root, "mod-a__v1");
+
+        assert_eq!(prune_staging(root, &keep(&[])).unwrap(), 1);
+        assert!(stray.exists(), "only directories are pruned");
+    }
+
+    #[test]
+    fn a_game_that_has_never_staged_anything_is_not_an_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("games/never-played/staging");
+        assert_eq!(prune_staging(&missing, &keep(&["mod-a"])).unwrap(), 0);
+    }
 }
