@@ -133,20 +133,21 @@ fn the_outermost_manifest_wins_when_a_repack_contains_two() {
 
 /* ------------------------------------------------------------ detection --- */
 
-fn analyze(rules: &GameRules, entries: &[(&str, &[u8])]) -> apoc_modengine::Result<()> {
+/// A manifest that installs something, so detection can be observed through the
+/// bundle it produces. One that declares no files at all is reported as an empty
+/// archive whatever format it is written in, which says nothing about detection.
+const INSTALLING_CONFIG: &[u8] = br#"<?xml version="1.0" encoding="utf-8"?>
+<config>
+  <moduleName>Test Mod</moduleName>
+  <requiredInstallFiles><file source="core.esp"/></requiredInstallFiles>
+</config>"#;
+
+fn detected_as_fomod(rules: &GameRules, entries: &[(&str, &[u8])]) -> bool {
     let tmp = tempfile::tempdir().unwrap();
     let path = zip_with(tmp.path(), entries);
-    apoc_modengine::analyze_archive_with(&path, rules).map(|_| ())
-}
-
-/// Until the manifest can be read, a detected FOMOD is refused. Detection is
-/// still observable through that refusal, which is the point: the alternative
-/// was installing every option at once without noticing there were options.
-fn detected_as_fomod(rules: &GameRules, entries: &[(&str, &[u8])]) -> bool {
-    matches!(
-        analyze(rules, entries),
-        Err(apoc_modengine::ModEngineError::FomodUnsupported { .. })
-    )
+    apoc_modengine::analyze_archive_with(&path, rules)
+        .map(|b| b.installer_model == apoc_domain::InstallerModel::Fomod)
+        .unwrap_or(false)
 }
 
 #[test]
@@ -154,8 +155,8 @@ fn a_game_that_expects_fomod_follows_the_manifest() {
     assert!(detected_as_fomod(
         &fomod_rules(),
         &[
-            ("fomod/ModuleConfig.xml", MINIMAL_CONFIG),
-            ("meshes/x.nif", b"N"),
+            ("fomod/ModuleConfig.xml", INSTALLING_CONFIG),
+            ("core.esp", b"E"),
         ]
     ));
 }
@@ -167,7 +168,8 @@ fn a_manifest_outranks_the_loose_metadata_of_another_format() {
     assert!(detected_as_fomod(
         &fomod_rules(),
         &[
-            ("fomod/ModuleConfig.xml", MINIMAL_CONFIG),
+            ("fomod/ModuleConfig.xml", INSTALLING_CONFIG),
+            ("core.esp", b"E"),
             ("Option A/modinfo.ini", b"name=A\n"),
             ("Option B/modinfo.ini", b"name=B\n"),
         ]
@@ -181,7 +183,8 @@ fn a_game_that_does_not_expect_fomod_ignores_the_manifest() {
     assert!(!detected_as_fomod(
         &no_fomod_rules(),
         &[
-            ("fomod/ModuleConfig.xml", MINIMAL_CONFIG),
+            ("fomod/ModuleConfig.xml", INSTALLING_CONFIG),
+            ("core.esp", b"E"),
             ("Option A/modinfo.ini", b"name=A\n"),
         ]
     ));
@@ -204,8 +207,9 @@ fn an_archive_that_is_only_a_fomod_directory_survives_wrapper_stripping() {
     assert!(detected_as_fomod(
         &fomod_rules(),
         &[
-            ("fomod/ModuleConfig.xml", MINIMAL_CONFIG),
+            ("fomod/ModuleConfig.xml", INSTALLING_CONFIG),
             ("fomod/info.xml", b"<fomod/>"),
+            ("core.esp", b"E"),
         ]
     ));
 }
@@ -215,8 +219,8 @@ fn a_manifest_inside_a_release_folder_is_still_found() {
     assert!(detected_as_fomod(
         &fomod_rules(),
         &[
-            ("My Mod v1.0/fomod/ModuleConfig.xml", MINIMAL_CONFIG),
-            ("My Mod v1.0/meshes/x.nif", b"N"),
+            ("My Mod v1.0/fomod/ModuleConfig.xml", INSTALLING_CONFIG),
+            ("My Mod v1.0/core.esp", b"E"),
         ]
     ));
 }
