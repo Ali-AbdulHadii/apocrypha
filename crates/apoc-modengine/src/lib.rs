@@ -116,3 +116,29 @@ pub fn analyze_archive_no_hash_with(path: &Path, rules: &GameRules) -> Result<Mo
 pub fn analyze_archive_no_hash(path: &Path) -> Result<ModBundle> {
     analyze_archive_no_hash_with(path, &GameRules::default())
 }
+
+/// The distinct top-level directory names an archive contains, in first-seen
+/// order, after any redundant wrapper directory has been stripped.
+///
+/// This exists for one purpose: explaining a mod that analysed to nothing. When
+/// no file matched a payload root, the bundle is empty and cannot say why, so
+/// the roots the archive actually has are the missing half of the answer —
+/// "this archive has `Data/` and `Meshes/`, this game reads `archive/`, `r6/`,
+/// …" is a diagnosis, where "0 files" is only a symptom. Deliberately narrower
+/// than exposing the archive index itself, which is an internal shape.
+pub fn archive_roots(path: &Path) -> Result<Vec<String>> {
+    let index = archive::read_index(path)?;
+    let mut roots: Vec<String> = Vec::new();
+    for entry in &index.entries {
+        let root = entry.path.split('/').next().unwrap_or_default();
+        if root.is_empty() {
+            continue;
+        }
+        // A file at the archive root is itself a root, and naming it matters:
+        // a bare `dinput8.dll` is a loader release, not an empty archive.
+        if !roots.iter().any(|r| r == root) {
+            roots.push(root.to_string());
+        }
+    }
+    Ok(roots)
+}
