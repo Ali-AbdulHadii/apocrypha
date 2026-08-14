@@ -139,6 +139,7 @@ pub fn run() {
             commands::game_for_domain,
             commands::set_game_path,
             commands::analyze_archive,
+            commands::evaluate_selection,
             commands::import_mod,
             commands::list_mods,
             commands::set_mod_enabled,
