@@ -12,9 +12,25 @@
 //! - `lower` (next) resolves that against an archive into a `ModBundle`.
 //! - `eval` (after that) answers which options apply, given a set of choices.
 
-// Nothing calls the parser yet: `normalize` still refuses a detected FOMOD, and
-// the lowering step that will call this arrives next. Kept as its own commit so
-// the parser can be read and reviewed on its own, against the format, without a
-// reviewer also holding the archive resolution in their head.
-#[allow(dead_code)]
+pub(crate) mod lower;
 pub(crate) mod xml;
+
+use crate::archive::ArchiveIndex;
+use crate::error::Result;
+use crate::rules::GameRules;
+use apoc_domain::ModBundle;
+
+/// Read an archive's FOMOD manifest and resolve it into a bundle.
+pub(crate) fn analyze(
+    index: &ArchiveIndex,
+    archive_stem: &str,
+    sha: Option<String>,
+    rules: &GameRules,
+) -> Result<ModBundle> {
+    let source = index
+        .fomod
+        .as_ref()
+        .expect("detection only reports Fomod when a manifest was found");
+    let module = xml::parse_module_config(&source.config)?;
+    lower::lower(&module, index, archive_stem, sha, rules)
+}

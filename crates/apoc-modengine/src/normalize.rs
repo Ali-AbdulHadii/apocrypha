@@ -2,7 +2,7 @@
 //! wrapper folder, classify the installer model, and derive option groups/roles.
 
 use crate::archive::ArchiveIndex;
-use crate::error::{ModEngineError, Result};
+use crate::error::Result;
 use crate::modinfo::Modinfo;
 use crate::naming;
 use crate::rules::GameRules;
@@ -508,15 +508,7 @@ pub fn normalize(
     let model = detect(&index, rules);
     Ok(match model {
         InstallerModel::FluffyAio => normalize_fluffy_aio(&index, archive_stem, sha, rules),
-        // Reading the manifest lands in the next commit. Until then a FOMOD is
-        // refused rather than handed to `normalize_single`, which would install
-        // every option at once because it cannot see that there were options.
-        InstallerModel::Fomod => {
-            return Err(ModEngineError::FomodUnsupported {
-                feature: "a conditional installer".to_string(),
-                detail: "support for reading fomod/ModuleConfig.xml is not finished".to_string(),
-            })
-        }
+        InstallerModel::Fomod => crate::fomod::analyze(&index, archive_stem, sha, rules)?,
         other => normalize_single(&index, other, archive_stem, sha, rules),
     })
 }
