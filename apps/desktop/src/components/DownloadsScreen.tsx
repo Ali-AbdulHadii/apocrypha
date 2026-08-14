@@ -158,6 +158,9 @@ function DownloadRow({
           {d.state === "ready" && d.source === "Downloads folder" && (
             <Chip>found on disk</Chip>
           )}
+          {d.updateFor && !d.installedAs && (
+            <Chip kind="accent">update for {d.updateFor}</Chip>
+          )}
           {d.installedAs && <Chip kind="ok">in your library</Chip>}
           {d.state === "cancelled" && <Chip kind="warn">stopped</Chip>}
           {d.state === "failed" && <Chip kind="bad">failed</Chip>}
@@ -201,7 +204,11 @@ function DownloadRow({
                 }
               >
                 {installing ? <Spinner /> : <Icon.plus size={14} />}
-                {d.installedAs ? "Install again" : "Install"}
+                {d.installedAs
+                  ? "Install again"
+                  : d.updateFor
+                    ? "Update"
+                    : "Install"}
               </button>
             )}
             <button

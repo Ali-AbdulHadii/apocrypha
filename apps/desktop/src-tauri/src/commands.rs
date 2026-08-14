@@ -269,32 +269,160 @@ pub fn set_game_path(
         .ok_or_else(|| "game not found".to_string())
 }
 
-/// The selection currently in force for a mod of this name, if one is installed.
+/// The selection currently in force for a given installed mod.
 ///
-/// Matched on the bundle name, which is the only identity shared between an
-/// archive on disk and a mod in the library — the id is derived from the
-/// archive hash and so differs for every release by definition. An author who
-/// renames their mod loses the match and gets a fresh wizard, which is the safe
-/// direction to fail in.
+/// Takes a resolved mod id rather than finding one itself. It used to scan for a
+/// matching bundle name, which meant this command and the replacement resolver
+/// each had their own idea of what "the same mod" was — and two identity notions
+/// in one code path is how they drift apart.
 fn previous_selection(
     state: &AppState,
     game_id: &str,
-    bundle_name: &str,
+    mod_id: &str,
 ) -> CmdResult<Option<apoc_domain::Selection>> {
     let profile_id = profile_of(state, game_id)?;
     let store = state.store.lock().map_err(|_| "state poisoned")?;
-    let Some(existing) = store
-        .list_mods(game_id)
-        .map_err(err)?
-        .into_iter()
-        .find(|m| m.name == bundle_name)
-    else {
-        return Ok(None);
-    };
     Ok(store
-        .get_mod_state(profile_id, &existing.id)
+        .get_mod_state(profile_id, mod_id)
         .map_err(err)?
         .map(|s| s.selection))
+}
+
+/// Why an archive was taken to be a new version of an installed mod.
+///
+/// Ordered by how much it can be trusted. Everything above `Name` identifies the
+/// mod exactly; `Name` is a guess, and the only one the user is asked about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplaceReason {
+    /// Byte-identical to an archive already imported: a reinstall.
+    SameArchive,
+    /// The download recorded which local mod it was fetched to update.
+    UpdateLink,
+    /// Same Nexus mod page. Two files on one page are two versions of one mod.
+    NexusMod,
+    /// Same bundle name, and nothing better. A guess — see [`resolve_replacement`].
+    Name,
+}
+
+/// An installed mod this archive appears to be a new version of.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplaceCandidate {
+    pub mod_id: String,
+    pub name: String,
+    pub version: Option<String>,
+    pub reason: ReplaceReason,
+}
+
+impl ReplaceCandidate {
+    /// True when the match identifies the mod rather than guessing at it, and so
+    /// can replace a library row without asking.
+    pub fn certain(&self) -> bool {
+        !matches!(self.reason, ReplaceReason::Name)
+    }
+}
+
+/// Decide which installed mod, if any, an archive is a new version of.
+///
+/// Pure so it can be tested against a list of records rather than a database.
+///
+/// The name match at the bottom is deliberately the weakest and the only one
+/// that is not acted on silently. A bundle name is derived, not declared: for an
+/// archive carrying no metadata it falls back to the file's own stem, which for
+/// a Nexus download changes with every release, and nothing makes it unique
+/// within a game either. Replacing a row on that evidence would merge two
+/// unrelated mods into one, so it is offered to the user instead.
+///
+/// An author renaming their mod is not matched by name and reads as a new mod.
+/// Guessing at renames — by position, by fuzzy name — would silently replace
+/// something the user did not mean, which is the worse failure.
+fn resolve_replacement(
+    existing: &[ModRecord],
+    sha: Option<&str>,
+    provenance: Option<&apoc_storage::Provenance>,
+    bundle_name: &str,
+) -> Option<ReplaceCandidate> {
+    let candidate = |m: &ModRecord, reason: ReplaceReason| ReplaceCandidate {
+        mod_id: m.id.clone(),
+        name: m.name.clone(),
+        version: m.version.clone(),
+        reason,
+    };
+
+    if let Some(sha) = sha {
+        if let Some(m) = existing
+            .iter()
+            .find(|m| m.archive_sha256.as_deref() == Some(sha))
+        {
+            return Some(candidate(m, ReplaceReason::SameArchive));
+        }
+    }
+
+    // A recorded update link names a row that may since have been removed. It is
+    // a hint, so a stale one falls through to the weaker signals rather than
+    // failing the import.
+    if let Some(wanted) = provenance.and_then(|p| p.replaces_mod_id.as_deref()) {
+        if let Some(m) = existing.iter().find(|m| m.id == wanted) {
+            return Some(candidate(m, ReplaceReason::UpdateLink));
+        }
+    }
+
+    if let Some(nexus_mod_id) = provenance.and_then(|p| p.nexus_mod_id) {
+        if let Some(m) = existing
+            .iter()
+            .find(|m| m.nexus_mod_id == Some(nexus_mod_id))
+        {
+            return Some(candidate(m, ReplaceReason::NexusMod));
+        }
+    }
+
+    existing
+        .iter()
+        .find(|m| m.name == bundle_name)
+        .map(|m| candidate(m, ReplaceReason::Name))
+}
+
+/// Nanoseconds since the epoch, in hex. The trick the download queue already
+/// uses to name things that need to be distinct and have nothing else to be
+/// named after.
+fn unique_suffix() -> String {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{nanos:x}")
+}
+
+/// A library id for a mod being imported for the first time.
+///
+/// Derived from the archive hash where there is one, because re-importing the
+/// same file should land on the same row rather than a duplicate. An archive
+/// that could not be hashed gets a unique id instead of a shared placeholder:
+/// every such mod used to collide on a single `mod-unknown`, so the second one
+/// silently overwrote the first.
+fn mint_mod_id(state: &AppState, sha: Option<&str>) -> CmdResult<String> {
+    let mut id = match sha {
+        Some(h) if h.len() >= 16 => format!("mod-{}", &h[..16]),
+        _ => format!("mod-{}", unique_suffix()),
+    };
+    let store = state.store.lock().map_err(|_| "state poisoned")?;
+    // Only reachable when a hash-derived id is already taken by a mod the caller
+    // did not ask to replace — a re-import that resolved to no candidate.
+    while store.get_mod(&id).map_err(err)?.is_some() {
+        id = format!("mod-{}", unique_suffix());
+    }
+    Ok(id)
+}
+
+/// The directory name for one archive's extracted files.
+///
+/// Distinct per import so a new version never lands on top of the one an applied
+/// deployment is still repairing from. Prefixed with the mod id so a stray
+/// directory can be traced back to its owner by eye.
+fn new_staging_key(mod_id: &str, sha: Option<&str>) -> String {
+    match sha {
+        Some(h) if h.len() >= 16 => format!("{mod_id}__{}", &h[..16]),
+        _ => format!("{mod_id}__{}", unique_suffix()),
+    }
 }
 
 /// Analyze an archive without importing it: powers the wizard preview.
@@ -307,6 +435,18 @@ pub fn analyze_archive(
     let bundle = apoc_modengine::analyze_archive_with(Path::new(&path), &rules_for(&game_id))
         .map_err(err)?;
 
+    let replaces = {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        let existing = store.list_mods(&game_id).map_err(err)?;
+        let provenance = store.archive_provenance(&path).map_err(err)?;
+        resolve_replacement(
+            &existing,
+            bundle.archive_sha256.as_deref(),
+            provenance.as_ref(),
+            &bundle.name,
+        )
+    };
+
     // If this archive is a newer release of something already installed, carry
     // the choices that were made last time rather than starting from a blank
     // slate. Rebuilding a body variant and three addons from memory on every
@@ -315,7 +455,11 @@ pub fn analyze_archive(
     // The caller gets the whole outcome, not just the selection: whether the
     // wizard needs to open at all is its decision, and it cannot make it
     // without knowing what failed to carry.
-    let (selection, carry) = match previous_selection(&state, &game_id, &bundle.name)? {
+    let previous = match &replaces {
+        Some(c) => previous_selection(&state, &game_id, &c.mod_id)?,
+        None => None,
+    };
+    let (selection, carry) = match previous {
         Some(previous) => {
             let carried = apoc_modengine::carry_selection(&bundle, &previous);
             let view = carry_view(&bundle, &carried);
@@ -339,7 +483,16 @@ pub fn analyze_archive(
         total_files: bundle.deployable_options().map(|o| o.payload.len()).sum(),
         total_bytes: bundle.deployable_options().map(|o| o.total_size()).sum(),
     };
-    Ok(AnalyzedArchive { mod_view, carry })
+    Ok(AnalyzedArchive {
+        mod_view,
+        carry,
+        replaces: replaces.map(|c| ReplaceCandidateView {
+            certain: c.certain(),
+            mod_id: c.mod_id,
+            name: c.name,
+            version: c.version,
+        }),
+    })
 }
 
 /// Describe a carry outcome in the terms the person who made the choices used.
@@ -385,23 +538,44 @@ pub fn import_mod(
     game_id: String,
     archive_path: String,
     selection: Vec<String>,
+    replaces: Option<String>,
 ) -> CmdResult<ModView> {
     let path = PathBuf::from(&archive_path);
     let bundle = apoc_modengine::analyze_archive_with(&path, &rules_for(&game_id)).map_err(err)?;
 
-    let mod_id = format!(
-        "mod-{}",
-        bundle
-            .archive_sha256
-            .as_deref()
-            .map(|h| &h[..16])
-            .unwrap_or("unknown")
-    );
+    let provenance = {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store.archive_provenance(&archive_path).map_err(err)?
+    };
 
-    // One generation per import. It equals the mod id today, because a mod is
-    // still only ever imported once; separating the two is what lets a later
-    // change stage a new version without overwriting the old one's bytes.
-    let staging_key = mod_id.clone();
+    // Replacing keeps the mod's identity and everything keyed to it: its place
+    // in load order, whether it is enabled, and any conflict override naming it.
+    // A fresh id would need all three copied across by hand, and `delete_mod`
+    // cascades them away in every profile, not just this one.
+    let (mod_id, previous_state) = match &replaces {
+        Some(id) => {
+            let store = state.store.lock().map_err(|_| "state poisoned")?;
+            // A caller asking to replace a row that is gone must not quietly get
+            // a new mod instead — that is exactly the duplicate this exists to
+            // prevent, and it would be invisible.
+            let existing = store.get_mod(id).map_err(err)?.ok_or_else(|| {
+                "The mod this update replaces is no longer installed.".to_string()
+            })?;
+            if existing.game_id != game_id {
+                return Err("That mod belongs to a different game.".to_string());
+            }
+            let profile_id = profile_of(&state, &game_id)?;
+            let st = store.get_mod_state(profile_id, id).map_err(err)?;
+            (existing.id, st)
+        }
+        None => (mint_mod_id(&state, bundle.archive_sha256.as_deref())?, None),
+    };
+
+    // A generation of its own, always. Staging over the previous one would
+    // destroy the bytes an applied deployment repairs from, and `stage_bundle`
+    // merges into its destination rather than clearing it, so the damage would
+    // be partial and silent.
+    let staging_key = new_staging_key(&mod_id, bundle.archive_sha256.as_deref());
 
     state.paths.ensure_game_dirs(&game_id).map_err(err)?;
     let staging = staging_for(&state.paths, &game_id, &staging_key);
@@ -412,6 +586,12 @@ pub fn import_mod(
     } else {
         selection_from(&selection)
     };
+
+    // An update inherits how the mod was already set up. Writing the defaults
+    // would re-enable a mod the user had turned off and drop it to the bottom of
+    // load order, both of which read as the app undoing their decisions.
+    let enabled = previous_state.as_ref().map(|s| s.enabled).unwrap_or(true);
+    let priority = previous_state.as_ref().map(|s| s.priority).unwrap_or(0);
 
     let profile_id = profile_of(&state, &game_id)?;
     {
@@ -427,11 +607,11 @@ pub fn import_mod(
                 archive_sha256: bundle.archive_sha256.clone(),
                 installer_model: format!("{:?}", bundle.installer_model),
                 imported_at: 0,
-                // Set by the Nexus import path, which knows the ids the file was
-                // fetched under. A mod added from disk has no Nexus identity, so
-                // an update check has nothing to ask about, which is correct.
-                nexus_mod_id: None,
-                nexus_file_id: None,
+                // Carried from what the download recorded. A mod added from disk
+                // has no Nexus identity, so an update check has nothing to ask
+                // about, which is correct.
+                nexus_mod_id: provenance.as_ref().and_then(|p| p.nexus_mod_id),
+                nexus_file_id: provenance.as_ref().and_then(|p| p.nexus_file_id),
                 staging_key: staging_key.clone(),
                 bundle: bundle.clone(),
             })
@@ -441,8 +621,8 @@ pub fn import_mod(
                 profile_id,
                 &ModState {
                     mod_id: mod_id.clone(),
-                    enabled: true,
-                    priority: 0,
+                    enabled,
+                    priority,
                     selection: sel.clone(),
                 },
             )
@@ -456,8 +636,8 @@ pub fn import_mod(
         author: bundle.author.clone(),
         category: bundle.category.clone(),
         installer_model: format!("{:?}", bundle.installer_model),
-        enabled: true,
-        priority: 0,
+        enabled,
+        priority,
         applied: false,
         added_at: 0,
         groups: groups_view(&bundle),
@@ -650,15 +830,47 @@ pub(crate) fn revert_current(
         store.applied_deployments(game_id).map_err(err)?
     };
 
+    // Whether the game directory is genuinely back to how it was. Pruning below
+    // depends on it: a rollback that failed has left files in the game, and
+    // deleting the staging they came from would take away the only source
+    // `repair` could put them back from.
+    let mut all_reverted = true;
+
     for (dep_id, journal_path) in outstanding {
-        if let Ok(journal) = apoc_deploy::journal::Journal::load(Path::new(&journal_path)) {
+        match apoc_deploy::journal::Journal::load(Path::new(&journal_path)) {
             // The loader override is left in place; only files are reconciled here.
-            let _ = apoc_deploy::rollback(ctx, &journal, None);
+            // `is_clean` is the right test rather than "no errors": a file left
+            // in place because its bytes changed under us is still in the game
+            // folder, and its staging is still the only thing repair could use.
+            Ok(journal) => {
+                if !apoc_deploy::rollback(ctx, &journal, None).is_clean() {
+                    all_reverted = false;
+                }
+            }
+            Err(_) => all_reverted = false,
         }
         let store = state.store.lock().map_err(|_| "state poisoned")?;
         store
             .record_deployment(&dep_id, game_id, None, &journal_path, "reverted")
             .map_err(err)?;
+    }
+
+    // Nothing is applied now, so every staging directory the library still names
+    // is live and everything else is a superseded generation left behind by an
+    // update. This is the only moment that is true, which is why pruning happens
+    // here rather than at import.
+    if all_reverted {
+        let keep: std::collections::HashSet<String> = {
+            let store = state.store.lock().map_err(|_| "state poisoned")?;
+            store
+                .staging_keys(game_id)
+                .map_err(err)?
+                .into_iter()
+                .collect()
+        };
+        // Reclaiming disk is a courtesy, not part of reverting. Failing it must
+        // not fail an apply the user asked for.
+        let _ = prune_staging(&state.paths.staging_root(game_id), &keep);
     }
     Ok(())
 }
@@ -1302,6 +1514,137 @@ mod carry_view_tests {
         assert!(
             !view.complete,
             "a question with no answer must open the wizard"
+        );
+    }
+}
+
+#[cfg(test)]
+mod resolve_replacement_tests {
+    use super::*;
+    use apoc_domain::{InstallerModel, ModBundle};
+    use apoc_storage::Provenance;
+
+    fn record(id: &str, name: &str) -> ModRecord {
+        ModRecord {
+            id: id.into(),
+            game_id: "monster-hunter-wilds".into(),
+            name: name.into(),
+            version: None,
+            author: None,
+            archive_path: format!("/downloads/{id}.zip"),
+            archive_sha256: None,
+            installer_model: "fluffy-aio".into(),
+            imported_at: 0,
+            nexus_mod_id: None,
+            nexus_file_id: None,
+            staging_key: id.into(),
+            bundle: ModBundle {
+                name: name.into(),
+                version: None,
+                author: None,
+                category: None,
+                installer_model: InstallerModel::FluffyAio,
+                archive_sha256: None,
+                groups: Vec::new(),
+            },
+        }
+    }
+
+    fn provenance(replaces: Option<&str>, nexus_mod_id: Option<i64>) -> Provenance {
+        Provenance {
+            archive_path: "/downloads/new.zip".into(),
+            domain: Some("monsterhunterwilds".into()),
+            nexus_mod_id,
+            nexus_file_id: Some(99),
+            replaces_mod_id: replaces.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn nothing_installed_means_nothing_to_replace() {
+        assert!(resolve_replacement(&[], Some("abc"), None, "Anything").is_none());
+    }
+
+    #[test]
+    fn the_same_archive_is_the_same_mod() {
+        let mut existing = record("mod-a", "Armour Overhaul");
+        existing.archive_sha256 = Some("deadbeef".into());
+        let found =
+            resolve_replacement(&[existing], Some("deadbeef"), None, "Renamed Since").unwrap();
+
+        assert_eq!(found.mod_id, "mod-a");
+        assert_eq!(found.reason, ReplaceReason::SameArchive);
+        assert!(found.certain(), "byte-identical is not a guess");
+    }
+
+    #[test]
+    fn a_recorded_update_link_beats_a_name_that_matches_something_else() {
+        // The download said what it was for. Nothing weaker should override it.
+        let existing = vec![record("mod-a", "Armour Overhaul"), record("mod-b", "Other")];
+        let found = resolve_replacement(
+            &existing,
+            None,
+            Some(&provenance(Some("mod-b"), None)),
+            "Armour Overhaul",
+        )
+        .unwrap();
+
+        assert_eq!(found.mod_id, "mod-b");
+        assert_eq!(found.reason, ReplaceReason::UpdateLink);
+        assert!(found.certain());
+    }
+
+    #[test]
+    fn an_update_link_naming_a_removed_mod_falls_through_rather_than_failing() {
+        // The row it named is gone. That is not a reason to refuse the import,
+        // only a reason to stop trusting the hint.
+        let existing = vec![record("mod-a", "Armour Overhaul")];
+        let found = resolve_replacement(
+            &existing,
+            None,
+            Some(&provenance(Some("mod-deleted"), None)),
+            "Armour Overhaul",
+        )
+        .unwrap();
+
+        assert_eq!(found.mod_id, "mod-a");
+        assert_eq!(found.reason, ReplaceReason::Name, "fell back to the guess");
+    }
+
+    #[test]
+    fn the_same_nexus_page_is_the_same_mod_whatever_it_is_called() {
+        // The strongest signal for a file fetched by nxm://, which never says
+        // which local mod it is for. A release renamed on the page still matches.
+        let mut existing = record("mod-a", "Armour Overhaul");
+        existing.nexus_mod_id = Some(1234);
+        let found = resolve_replacement(
+            &[existing],
+            None,
+            Some(&provenance(None, Some(1234))),
+            "Armour Overhaul Redux",
+        )
+        .unwrap();
+
+        assert_eq!(found.mod_id, "mod-a");
+        assert_eq!(found.reason, ReplaceReason::NexusMod);
+        assert!(found.certain());
+    }
+
+    #[test]
+    fn a_bare_name_match_is_offered_rather_than_acted_on() {
+        let found = resolve_replacement(
+            &[record("mod-a", "Armour Overhaul")],
+            None,
+            None,
+            "Armour Overhaul",
+        )
+        .unwrap();
+
+        assert_eq!(found.mod_id, "mod-a");
+        assert_eq!(found.reason, ReplaceReason::Name);
+        assert!(
+            !found.certain(),
+            "a shared name could be two different mods, so this must be asked about"
         );
     }
 }

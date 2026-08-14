@@ -65,10 +65,26 @@ export interface CarryView {
   complete: boolean;
 }
 
+/** An installed mod an archive appears to be a new version of. */
+export interface ReplaceCandidateView {
+  modId: string;
+  name: string;
+  version: string | null;
+  /**
+   * True when the match identifies the mod rather than guessing at it. A certain
+   * match replaces the library row without asking; an uncertain one is a
+   * question for the person installing, because the only evidence is a shared
+   * name and names are neither stable nor unique.
+   */
+  certain: boolean;
+}
+
 export interface AnalyzedArchive {
   mod: ModView;
   /** Null when nothing by this name is installed — a first install, not an update. */
   carry: CarryView | null;
+  /** The mod this archive appears to update, when it appears to update one. */
+  replaces: ReplaceCandidateView | null;
 }
 
 export interface GameView {
@@ -343,6 +359,8 @@ export interface DownloadView {
   bytesPerSecond: number;
   /** Name of the mod this archive was imported as, when it has been. */
   installedAs: string | null;
+  /** Name of the mod this archive was fetched to update, when it was. */
+  updateFor: string | null;
 }
 
 export interface SettingsView {
@@ -450,8 +468,23 @@ export const api = {
 
   analyzeArchive: (gameId: string, path: string) =>
     call<AnalyzedArchive>("analyze_archive", { gameId, path }),
-  importMod: (gameId: string, archivePath: string, selection: string[]) =>
-    call<ModView>("import_mod", { gameId, archivePath, selection }),
+  /**
+   * `replaces` names an installed mod this archive is a new version of. Passing
+   * it updates that mod in place, keeping its load-order position, whether it is
+   * enabled, and any conflict overrides naming it. Omit it to add a new mod.
+   */
+  importMod: (
+    gameId: string,
+    archivePath: string,
+    selection: string[],
+    replaces?: string | null,
+  ) =>
+    call<ModView>("import_mod", {
+      gameId,
+      archivePath,
+      selection,
+      replaces: replaces ?? null,
+    }),
   listMods: (gameId: string) => call<ModView[]>("list_mods", { gameId }),
   setModEnabled: (gameId: string, modId: string, enabled: boolean) =>
     call<void>("set_mod_enabled", { gameId, modId, enabled }),
@@ -576,8 +609,23 @@ export const api = {
    */
   checkModUpdates: (gameId: string) =>
     call<UpdateCheckView>("check_mod_updates", { gameId }),
-  downloadModUpdate: (domain: string, nexusModId: number, fileId: number) =>
-    call<DownloadView>("download_mod_update", { domain, nexusModId, fileId }),
+  /**
+   * `modId` is the *local* mod this update is for. It is recorded against the
+   * downloaded file so that installing it later replaces that mod rather than
+   * adding a second copy of it.
+   */
+  downloadModUpdate: (
+    domain: string,
+    nexusModId: number,
+    fileId: number,
+    modId: string,
+  ) =>
+    call<DownloadView>("download_mod_update", {
+      domain,
+      nexusModId,
+      fileId,
+      modId,
+    }),
   listDownloads: () => call<DownloadView[]>("list_downloads"),
   cancelDownload: (id: string) => call<void>("cancel_download", { id }),
   removeDownload: (id: string) => call<void>("remove_download", { id }),
