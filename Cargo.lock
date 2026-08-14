@@ -135,6 +135,7 @@ version = "0.5.0"
 dependencies = [
  "apoc-domain",
  "apoc-gamedef",
+ "quick-xml",
  "regex",
  "sevenz-rust2",
  "sha2 0.10.9",

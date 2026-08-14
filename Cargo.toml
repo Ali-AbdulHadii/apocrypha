@@ -30,6 +30,12 @@ thiserror = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 sha2 = "0.10"
 tracing = "0.1"
+# A pull parser, not a deserializer. Real ModuleConfig.xml files put the same
+# value in an attribute or a child element depending on which tool wrote them,
+# vary their casing, and ignore the schema's element order, so a derive fails on
+# files every other mod manager accepts. Pinned to the version Tauri already
+# resolves, so this compiles nothing new.
+quick-xml = { version = "0.41", default-features = false }
 
 # Faster, smaller release builds for a shipped desktop app.
 [profile.release]
