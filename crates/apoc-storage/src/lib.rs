@@ -82,6 +82,19 @@ pub struct ModRecord {
     pub nexus_mod_id: Option<i64>,
     #[serde(default)]
     pub nexus_file_id: Option<i64>,
+    /// Which directory under the game's staging root holds this mod's extracted
+    /// files.
+    ///
+    /// Deliberately not the mod id. The id is library identity — stable across
+    /// versions, and what conflict overrides and load order name — while staging
+    /// holds the bytes of one particular archive. Keeping them separate is what
+    /// lets a mod be replaced by a newer version without writing over the files
+    /// a live deployment still needs to repair from.
+    ///
+    /// Existing rows are backfilled to their id, which is where their files
+    /// already are, so nothing moves on disk.
+    #[serde(default)]
+    pub staging_key: String,
     /// Full normalized bundle, so the wizard can be reopened without the archive.
     pub bundle: ModBundle,
 }
@@ -103,7 +116,7 @@ pub struct ModState {
     pub selection: Selection,
 }
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 /// The application's persistent store.
 pub struct Store {
@@ -166,7 +179,8 @@ impl Store {
                 archive_sha256  TEXT,
                 installer_model TEXT NOT NULL,
                 bundle_json     TEXT NOT NULL,
-                imported_at     INTEGER NOT NULL DEFAULT (strftime('%s','now'))
+                imported_at     INTEGER NOT NULL DEFAULT (strftime('%s','now')),
+                staging_key     TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_mods_game ON mods(game_id);
 
@@ -235,6 +249,23 @@ impl Store {
                     .execute(&format!("ALTER TABLE mods ADD COLUMN {column} INTEGER"), []);
             }
         }
+
+        // Staging stopped being addressed by mod id. Every row that predates the
+        // split already has its files at `staging/<id>/`, so backfilling the key
+        // to the id is what makes this migration move nothing on disk.
+        let has_staging_key: bool = self
+            .conn
+            .prepare("SELECT staging_key FROM mods LIMIT 1")
+            .is_ok();
+        if !has_staging_key {
+            let _ = self
+                .conn
+                .execute("ALTER TABLE mods ADD COLUMN staging_key TEXT", []);
+        }
+        self.conn.execute(
+            "UPDATE mods SET staging_key = id WHERE staging_key IS NULL OR staging_key = ''",
+            [],
+        )?;
 
         self.conn
             .pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -346,17 +377,18 @@ impl Store {
     pub fn insert_mod(&self, rec: &ModRecord) -> Result<()> {
         let bundle_json = serde_json::to_string(&rec.bundle)?;
         self.conn.execute(
-            "INSERT INTO mods(id,game_id,name,version,author,archive_path,archive_sha256,installer_model,bundle_json,nexus_mod_id,nexus_file_id)
-             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)
+            "INSERT INTO mods(id,game_id,name,version,author,archive_path,archive_sha256,installer_model,bundle_json,nexus_mod_id,nexus_file_id,staging_key)
+             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)
              ON CONFLICT(id) DO UPDATE SET
                 name=excluded.name, version=excluded.version, author=excluded.author,
                 archive_path=excluded.archive_path, archive_sha256=excluded.archive_sha256,
                 installer_model=excluded.installer_model, bundle_json=excluded.bundle_json,
-                nexus_mod_id=excluded.nexus_mod_id, nexus_file_id=excluded.nexus_file_id",
+                nexus_mod_id=excluded.nexus_mod_id, nexus_file_id=excluded.nexus_file_id,
+                staging_key=excluded.staging_key",
             params![
                 rec.id, rec.game_id, rec.name, rec.version, rec.author,
                 rec.archive_path, rec.archive_sha256, rec.installer_model, bundle_json,
-                rec.nexus_mod_id, rec.nexus_file_id
+                rec.nexus_mod_id, rec.nexus_file_id, rec.staging_key
             ],
         )?;
         Ok(())
@@ -380,6 +412,13 @@ impl Store {
             imported_at,
             nexus_mod_id: row.get(10)?,
             nexus_file_id: row.get(11)?,
+            // A row written before the split has no key of its own; its files
+            // are at the id, which is what the migration backfills. The fallback
+            // is belt and braces for a row inserted between the two.
+            staging_key: row
+                .get::<_, Option<String>>(12)?
+                .filter(|k| !k.is_empty())
+                .unwrap_or_else(|| row.get::<_, String>(0).unwrap_or_default()),
             bundle,
         })
     }
@@ -387,7 +426,8 @@ impl Store {
     /// The column list every `ModRecord` read shares, so the positional indices
     /// in `row_to_mod` cannot drift between the two queries that use it.
     const MOD_COLUMNS: &'static str = "id,game_id,name,version,author,archive_path,\
-         archive_sha256,installer_model,bundle_json,imported_at,nexus_mod_id,nexus_file_id";
+         archive_sha256,installer_model,bundle_json,imported_at,nexus_mod_id,nexus_file_id,\
+         staging_key";
 
     pub fn get_mod(&self, id: &str) -> Result<Option<ModRecord>> {
         Ok(self
@@ -434,6 +474,24 @@ impl Store {
         let mut stmt = self.conn.prepare("SELECT archive_path, name FROM mods")?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?;
         Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Every staging directory the library still needs, for one game.
+    ///
+    /// The keep-list for pruning: anything under the game's staging root that is
+    /// not in here belongs to no mod and can go. Returned rather than a "find
+    /// the stale ones" query so that deletion is always driven by what is known
+    /// to be live, never by a pattern match on what looks dead.
+    pub fn staging_keys(&self, game_id: &str) -> Result<Vec<String>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT staging_key FROM mods WHERE game_id=?1 AND staging_key IS NOT NULL")?;
+        let rows = stmt.query_map(params![game_id], |r| r.get::<_, String>(0))?;
+        Ok(rows
+            .collect::<rusqlite::Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|k| !k.is_empty())
+            .collect())
     }
 
     pub fn delete_mod(&self, id: &str) -> Result<()> {
@@ -794,6 +852,7 @@ mod tests {
             imported_at: 0,
             nexus_mod_id: nexus.map(|(m, _)| m),
             nexus_file_id: nexus.map(|(_, f)| f),
+            staging_key: id.into(),
             bundle: empty_bundle(id),
         })
         .unwrap();
@@ -822,6 +881,7 @@ mod tests {
             imported_at: 0,
             nexus_mod_id: None,
             nexus_file_id: None,
+            staging_key: String::new(),
             bundle: empty_bundle("Ver.R Hirabami F-M Armor"),
         })
         .unwrap();
@@ -851,6 +911,7 @@ mod tests {
                 imported_at: 0,
                 nexus_mod_id: None,
                 nexus_file_id: None,
+                staging_key: String::new(),
                 bundle: empty_bundle(name),
             })
             .unwrap();
@@ -883,6 +944,7 @@ mod tests {
             imported_at: 0,
             nexus_mod_id: None,
             nexus_file_id: None,
+            staging_key: String::new(),
             bundle: empty_bundle("M"),
         })
         .unwrap();
@@ -937,6 +999,7 @@ mod tests {
             imported_at: 0,
             nexus_mod_id: None,
             nexus_file_id: None,
+            staging_key: String::new(),
             bundle: empty_bundle("M"),
         })
         .unwrap();
@@ -1001,6 +1064,7 @@ mod tests {
                 imported_at: 0,
                 nexus_mod_id: None,
                 nexus_file_id: None,
+                staging_key: String::new(),
                 bundle: empty_bundle(id),
             })
             .unwrap();
@@ -1055,6 +1119,7 @@ mod tests {
             imported_at: 0,
             nexus_mod_id: None,
             nexus_file_id: None,
+            staging_key: String::new(),
             bundle: empty_bundle("M"),
         })
         .unwrap();
@@ -1226,7 +1291,7 @@ mod tests {
             .conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, SCHEMA_VERSION);
 
         let kept = s.get_mod("mod-a").unwrap().unwrap();
         assert_eq!(kept.archive_path, "/downloads/mod-a.zip");
@@ -1244,6 +1309,105 @@ mod tests {
         assert_eq!(
             s.nexus_linked_mods("monster-hunter-wilds").unwrap(),
             vec![("mod-b".to_string(), 10, 20)]
+        );
+    }
+
+    #[test]
+    fn upgrading_from_v3_points_every_mod_at_the_directory_it_already_uses() {
+        // The whole safety argument for splitting staging from identity rests on
+        // this: an existing library's files are at `staging/<id>/`, so the
+        // backfill has to name exactly that and move nothing.
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("apocrypha.db");
+
+        {
+            let s = Store::open(&db).unwrap();
+            s.upsert_game(&GameRecord {
+                id: "monster-hunter-wilds".into(),
+                name: "Monster Hunter Wilds".into(),
+                install_dir: None,
+                proton_prefix: None,
+                active_profile_id: None,
+            })
+            .unwrap();
+            add_mod(&s, "mod-a", None);
+            add_mod(&s, "mod-b", Some((10, 20)));
+
+            // Reshape into what the previous release wrote: no staging_key.
+            s.conn
+                .execute_batch(
+                    "ALTER TABLE mods DROP COLUMN staging_key;
+                     PRAGMA user_version = 3;",
+                )
+                .unwrap();
+        }
+
+        let s = Store::open(&db).unwrap();
+        let version: i64 = s
+            .conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+
+        for id in ["mod-a", "mod-b"] {
+            let m = s.get_mod(id).unwrap().unwrap();
+            assert_eq!(
+                m.staging_key, id,
+                "{id} must keep pointing at its own files"
+            );
+        }
+
+        let mut keys = s.staging_keys("monster-hunter-wilds").unwrap();
+        keys.sort();
+        assert_eq!(keys, vec!["mod-a".to_string(), "mod-b".to_string()]);
+    }
+
+    #[test]
+    fn replacing_a_mod_in_place_keeps_its_profile_state_and_overrides() {
+        // What makes an update a replacement rather than a second row: the id is
+        // the identity, so an upsert can swap the bundle and the staging
+        // generation underneath it without disturbing anything keyed to it.
+        let s = seeded();
+        add_mod(&s, "mod-a", None);
+        let p = s.ensure_profile("monster-hunter-wilds", "Vanilla").unwrap();
+        s.set_mod_state(
+            p,
+            &ModState {
+                mod_id: "mod-a".into(),
+                enabled: false,
+                priority: 7,
+                selection: Selection::new(),
+            },
+        )
+        .unwrap();
+        s.set_conflict_override(p, "natives/stm/a.pak", "mod-a")
+            .unwrap();
+
+        let mut updated = s.get_mod("mod-a").unwrap().unwrap();
+        updated.version = Some("2.0".into());
+        updated.staging_key = "mod-a__v2".into();
+        s.insert_mod(&updated).unwrap();
+
+        let after = s.get_mod("mod-a").unwrap().unwrap();
+        assert_eq!(after.version.as_deref(), Some("2.0"));
+        assert_eq!(after.staging_key, "mod-a__v2", "a new generation of files");
+
+        let state = s.get_mod_state(p, "mod-a").unwrap().unwrap();
+        assert!(
+            !state.enabled,
+            "a disabled mod stays disabled across a swap"
+        );
+        assert_eq!(state.priority, 7, "load order survives");
+        assert_eq!(
+            s.conflict_overrides(p).unwrap().get("natives/stm/a.pak"),
+            Some(&"mod-a".to_string()),
+            "an override naming this mod still names it"
+        );
+
+        assert_eq!(
+            s.staging_keys("monster-hunter-wilds").unwrap(),
+            vec!["mod-a__v2".to_string()],
+            "the old generation is no longer claimed, so pruning may reclaim it"
         );
     }
 }

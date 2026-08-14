@@ -91,11 +91,7 @@ fn every_enabled_mod_is_deployed_in_one_transaction() {
             !plan.files.is_empty(),
             "{mod_id} produced no files: it would silently not install"
         );
-        parts.push(ModPlan {
-            mod_id: mod_id.to_string(),
-            priority,
-            plan,
-        });
+        parts.push(ModPlan::same_namespace(mod_id, priority, plan));
     }
 
     let combined = apoc_modengine::combine_plans(parts, "3 mods");
@@ -180,14 +176,11 @@ fn pak_index_does_not_drift_across_reverted_deployments() {
     let bundle = apoc_modengine::analyze_archive_with(&pak_zip, &wilds_rules()).unwrap();
     apoc_modengine::stage_bundle(&pak_zip, &bundle, &staging_root.join("mod-tex")).unwrap();
     let plan = apoc_modengine::combine_plans(
-        vec![ModPlan {
-            mod_id: "mod-tex".into(),
-            priority: 0,
-            plan: apoc_modengine::plan_deployment(
-                &bundle,
-                &apoc_modengine::default_selection(&bundle),
-            ),
-        }],
+        vec![ModPlan::same_namespace(
+            "mod-tex",
+            0,
+            apoc_modengine::plan_deployment(&bundle, &apoc_modengine::default_selection(&bundle)),
+        )],
         "1 mod",
     );
 
