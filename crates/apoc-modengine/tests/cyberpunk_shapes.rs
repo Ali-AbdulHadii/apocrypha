@@ -373,6 +373,35 @@ fn the_full_red4ext_release_keeps_its_own_layout() {
     );
 }
 
+/// A known-wrong output, pinned so it is visible rather than discovered.
+///
+/// `canonical_case` entries are bare segments and match anywhere in a path, so
+/// every generic word in the list is a global rename. The profile records that
+/// as a limitation; this is what it costs. `mod` earns its place because
+/// `Archive/PC/Mod/` is the commonest Windows-authored shape in this game, and
+/// the same entry then renames an author's own `r6/scripts/Mod/` — a change
+/// nobody asked for, in a directory that belongs to them.
+///
+/// Nothing breaks today: redscript compiles a tree and takes module names from
+/// inside the files, not from the folder. It is still a rename we have no right
+/// to make, and the same applies to `mods`, `base`, `tools`, `config`, `cache`,
+/// `input`, `tweaks`, `scripts`, `fonts`, `plugins`, `pc` and `x64`.
+///
+/// The fix is anchoring entries to a path prefix, which changes the profile
+/// schema, the order normalization applies rewrapping and casing in, and both
+/// shipped games. That is deliberately not done here. When it is, this test
+/// should fail, and the assertion below is the one to invert.
+#[test]
+fn an_author_folder_sharing_a_name_with_a_game_directory_is_renamed() {
+    let b = analyze(&[("r6/scripts/Mod/Main.reds", b"module Mod")]);
+    assert_eq!(
+        all_dests(&b),
+        vec!["r6/scripts/mod/Main.reds"],
+        "if this now reads `Mod`, casing became prefix-anchored and the \
+         limitation in the profile comment can be deleted"
+    );
+}
+
 #[test]
 fn documentation_only_archives_deploy_nothing() {
     // A readme is not content. Deploying it would put junk in the game folder.

@@ -17,6 +17,10 @@ apoc-modengine = { path = "../apoc-modengine" }
 apoc-steam = { path = "../apoc-steam" }
 apoc-deploy = { path = "../apoc-deploy" }
 apoc-storage = { path = "../apoc-storage" }
+# `apoc plan` stages for real, into a directory that does not outlive the
+# command. Staging against a temporary path is what keeps it from ever being
+# able to write into a game directory.
+tempfile = "3"
 
 [dev-dependencies]
 tempfile = "3"

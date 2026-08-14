@@ -7,11 +7,14 @@
 //!   apoc games                 List builtin game profiles.
 //!   apoc game <id>             Show one game profile.
 //!   apoc analyze <archive>     Parse a mod archive and print its wizard tree.
+//!   apoc plan <game> <archive> Show where the mod's files would land.
 
 use apoc_domain::{ModBundle, SelectMode};
 use apoc_gamedef::{GameDatabaseSource, LocalBuiltin};
 use std::path::Path;
 use std::process::ExitCode;
+
+mod plan_command;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -23,10 +26,24 @@ fn main() -> ExitCode {
             Some(id) => cmd_game(id),
             None => Err("usage: apoc game <id>".to_string()),
         },
+        // The game id is optional here only because omitting it is what this
+        // command has always done. Naming one is the correct way to use it, and
+        // `plan` is the command that makes naming one compulsory.
         "analyze" => match args.get(1) {
-            Some(p) => cmd_analyze(Path::new(p)),
-            None => Err("usage: apoc analyze <archive.zip>".to_string()),
+            Some(p) => cmd_analyze(Path::new(p), args.get(2).map(String::as_str)),
+            None => Err("usage: apoc analyze <archive.zip> [game-id]".to_string()),
         },
+        "plan" => {
+            let forced_only = args.iter().any(|a| a == "--forced-only");
+            let positional: Vec<&String> =
+                args[1..].iter().filter(|a| !a.starts_with("--")).collect();
+            match positional.as_slice() {
+                [game, archive] => {
+                    plan_command::run(game, Path::new(archive.as_str()), forced_only)
+                }
+                _ => Err("usage: apoc plan <game-id> <archive.zip> [--forced-only]".to_string()),
+            }
+        }
         "help" | "-h" | "--help" => {
             print_help();
             Ok(())
@@ -47,7 +64,10 @@ fn print_help() {
     println!("apoc: Apocrypha core CLI (developer tool)\n");
     println!("  apoc games              List builtin game profiles");
     println!("  apoc game <id>          Show one game profile");
-    println!("  apoc analyze <archive>  Parse a mod archive into its wizard tree");
+    println!("  apoc analyze <archive> [game-id]");
+    println!("                          Parse a mod archive into its wizard tree");
+    println!("  apoc plan <game-id> <archive> [--forced-only]");
+    println!("                          Show where that mod's files would land");
 }
 
 fn cmd_games() -> Result<(), String> {
@@ -88,8 +108,30 @@ fn cmd_game(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn cmd_analyze(path: &Path) -> Result<(), String> {
-    let bundle = apoc_modengine::analyze_archive(path).map_err(|e| e.to_string())?;
+/// Parse an archive and print its wizard tree.
+///
+/// Without a game id this uses RE Engine's rules, which is what it has always
+/// done and is wrong for every other game: run against a Cyberpunk mod it
+/// reports nothing deployable, because none of `archive/`, `r6/` or `red4ext/`
+/// is a payload root for Monster Hunter. The id is accepted so the answer can
+/// be right, and the warning is printed when it is absent so a wrong answer is
+/// at least a labelled one.
+fn cmd_analyze(path: &Path, game_id: Option<&str>) -> Result<(), String> {
+    let bundle = match game_id {
+        Some(id) => {
+            let profile = LocalBuiltin::new().get(id).map_err(|e| e.to_string())?;
+            let rules = apoc_modengine::GameRules::from_profile(&profile);
+            println!("Rules  : {} ({})\n", profile.name, profile.id);
+            apoc_modengine::analyze_archive_with(path, &rules).map_err(|e| e.to_string())?
+        }
+        None => {
+            eprintln!(
+                "note: no game given, so RE Engine rules are assumed. \
+                 For any other game run `apoc analyze <archive> <game-id>`."
+            );
+            apoc_modengine::analyze_archive(path).map_err(|e| e.to_string())?
+        }
+    };
     print_bundle(&bundle);
     Ok(())
 }
@@ -103,7 +145,7 @@ fn role_glyph(mode: SelectMode) -> &'static str {
     }
 }
 
-fn human_size(bytes: u64) -> String {
+pub(crate) fn human_size(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
     let mut v = bytes as f64;
     let mut u = 0;

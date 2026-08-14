@@ -49,9 +49,25 @@ nexus_domain = "cyberpunk2077"
 # `r6/scripts/MyMod/JSON/`, and renaming it there would be a change nobody asked
 # for.
 #
-# Known limitation: entries are bare segments and cannot be scoped to a prefix,
-# so a generic word cannot be folded only under `engine/config/`. Widening the
-# schema to allow that affects every game and is not done here.
+# Known limitation, and it is a real one rather than a theoretical one: entries
+# are bare segments and match anywhere in a path, so every generic word below is
+# a global rename of that word. `mod` is here because `Archive/PC/Mod/` is the
+# commonest Windows-authored shape in this game, and the same entry then renames
+# an author's own `r6/scripts/Mod/` to `r6/scripts/mod/`. So do `mods`, `base`,
+# `tools`, `config`, `cache`, `input`, `tweaks`, `scripts`, `fonts`, `plugins`,
+# `pc` and `x64`, all of which an author could reasonably use for a folder of
+# their own.
+#
+# Nothing is known to break: redscript compiles a tree and takes module names
+# from inside the files. It is still a change we have no right to make, and
+# `cyberpunk_shapes.rs` pins it under
+# `an_author_folder_sharing_a_name_with_a_game_directory_is_renamed` so it stays
+# visible.
+#
+# The fix is anchoring an entry to a path prefix, so `mod` folds only under
+# `archive/pc/`. That changes the profile schema, the order in which
+# normalization applies rewrapping and casing, and both shipped games, so it is
+# not done here.
 canonical_case = [
   "archive",
   "pc",
