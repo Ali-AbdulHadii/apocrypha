@@ -31,6 +31,7 @@ import {
   onNxmLink,
   subscribe,
   truncatePath,
+  type CarryView,
   type ConflictView,
   type DownloadView,
   type DryRunView,
@@ -46,6 +47,20 @@ import {
 import { useAppearance } from "./lib/appearance";
 import { useMaximized } from "./lib/window";
 import { useTheme } from "./lib/theme";
+
+/**
+ * Name what a silent reinstall kept, without listing nine things in a toast.
+ *
+ * An empty list is not a failure: it means every option in the mod is forced,
+ * so there was never a choice to carry, and saying so is more honest than
+ * claiming to have preserved decisions nobody made.
+ */
+function carriedSummary(names: string[]): string {
+  if (names.length === 0) return "it has no options to choose";
+  if (names.length === 1) return `keeping ${names[0]}`;
+  if (names.length === 2) return `keeping ${names[0]} and ${names[1]}`;
+  return `keeping ${names[0]} and ${names.length - 1} more`;
+}
 
 type Screen =
   | "library"
@@ -82,6 +97,12 @@ export default function App() {
   const [booting, setBooting] = useState(true);
   const [busy, setBusy] = useState(false);
   const [wizardMod, setWizardMod] = useState<ModView | null>(null);
+  /**
+   * Set only when the wizard was opened on an archive that updates something
+   * already installed, and only when the carry left a question. Editing the
+   * options of an installed mod carries nothing, so it stays null there.
+   */
+  const [wizardCarry, setWizardCarry] = useState<CarryView | null>(null);
   const [pendingArchive, setPendingArchive] = useState<string | null>(null);
   const [preview, setPreview] = useState<DryRunView | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -460,6 +481,30 @@ export default function App() {
     }
   }, [activeGameId, push, fail]);
 
+  /**
+   * Install an archive whose options all carried across from the version
+   * already installed, without opening the wizard.
+   *
+   * The wizard exists to ask questions. When `carry.complete` says there are
+   * none left to ask — nothing dropped, every choice set still answered —
+   * showing it anyway makes someone click through their own previous answers to
+   * arrive where they already were. What they get instead is a summary naming
+   * what was kept, so a silent reinstall is still a reported one.
+   */
+  const installCarried = useCallback(
+    async (gameId: string, archivePath: string, mod: ModView, carry: CarryView) => {
+      await api.importMod(gameId, archivePath, mod.selection);
+      push(
+        `${mod.name}${mod.version ? ` ${mod.version}` : ""} installed, ${carriedSummary(carry.carried)}`,
+        "ok",
+      );
+      refreshDownloads().catch(() => {});
+      await refreshMods(gameId);
+      setDirty(true);
+    },
+    [push, refreshMods, refreshDownloads],
+  );
+
   const startImport = useCallback(async () => {
     if (!activeGameId) {
       push("Select a game first", "bad");
@@ -469,21 +514,28 @@ export default function App() {
       const path = await pickArchive();
       if (!path) return;
       setBusy(true);
-      const analyzed = await api.analyzeArchive(activeGameId, path);
-      if (analyzed.totalFiles === 0) {
+      const { mod, carry } = await api.analyzeArchive(activeGameId, path);
+      if (mod.totalFiles === 0) {
         push(
-          `${analyzed.name} has no files this game can install. It may be packed in an unusual way.`,
+          `${mod.name} has no files this game can install. It may be packed in an unusual way.`,
           "bad",
         );
       }
+      // An archive with nothing to install is shown rather than installed, even
+      // when the carry is clean: the empty wizard is the explanation.
+      if (carry?.complete && mod.totalFiles > 0) {
+        await installCarried(activeGameId, path, mod, carry);
+        return;
+      }
       setPendingArchive(path);
-      setWizardMod(analyzed);
+      setWizardCarry(carry);
+      setWizardMod(mod);
     } catch (e) {
       fail(e);
     } finally {
       setBusy(false);
     }
-  }, [activeGameId, push, fail]);
+  }, [activeGameId, push, fail, installCarried]);
 
   // Installing from Downloads joins the same path as Add mod: analyze, then the
   // wizard. Nothing about the archive is treated differently for having been
@@ -497,15 +549,20 @@ export default function App() {
       setInstallingId(d.id);
       setBusy(true);
       try {
-        const analyzed = await api.analyzeArchive(activeGameId, d.path);
-        if (analyzed.totalFiles === 0) {
+        const { mod, carry } = await api.analyzeArchive(activeGameId, d.path);
+        if (mod.totalFiles === 0) {
           push(
-            `${analyzed.name} has no files this game can install. It may be packed in an unusual way.`,
+            `${mod.name} has no files this game can install. It may be packed in an unusual way.`,
             "bad",
           );
         }
+        if (carry?.complete && mod.totalFiles > 0) {
+          await installCarried(activeGameId, d.path, mod, carry);
+          return;
+        }
         setPendingArchive(d.path);
-        setWizardMod(analyzed);
+        setWizardCarry(carry);
+        setWizardMod(mod);
       } catch (e) {
         fail(e);
       } finally {
@@ -513,7 +570,7 @@ export default function App() {
         setBusy(false);
       }
     },
-    [activeGameId, push, fail],
+    [activeGameId, push, fail, installCarried],
   );
 
   const cancelDownload = useCallback(
@@ -570,6 +627,7 @@ export default function App() {
         await refreshMods(activeGameId);
         setDirty(true);
         setWizardMod(null);
+        setWizardCarry(null);
         setPendingArchive(null);
       } catch (e) {
         fail(e);
@@ -854,6 +912,7 @@ export default function App() {
                     onToggle={toggleMod}
                     onConfigure={(m) => {
                       setPendingArchive(null);
+                      setWizardCarry(null);
                       setWizardMod(m);
                     }}
                     onRemove={removeMod}
@@ -959,9 +1018,11 @@ export default function App() {
             mod={wizardMod}
             busy={busy}
             previewSource={previewSource}
+            carry={wizardCarry}
             confirmLabel={pendingArchive ? "Add mod" : "Save options"}
             onCancel={() => {
               setWizardMod(null);
+              setWizardCarry(null);
               setPendingArchive(null);
             }}
             onConfirm={confirmWizard}
