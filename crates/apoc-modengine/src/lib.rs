@@ -3,8 +3,8 @@
 //! deployment.
 //!
 //! Entry point: [`analyze_archive`]. It detects the installer model
-//! (Fluffy AIO / single Fluffy mod / flat `natives/` dump / REFramework-only)
-//! and returns a uniform bundle regardless of source shape.
+//! (Fluffy AIO / single Fluffy mod / flat `natives/` dump / REFramework-only /
+//! FOMOD) and returns a uniform bundle regardless of source shape.
 
 mod archive;
 pub mod carry;
@@ -16,6 +16,11 @@ mod normalize;
 pub mod plan;
 mod rules;
 
+// Indexing is exposed for tests and tooling that need to see what an archive
+// holds without committing to a bundle. The rest of `archive` stays internal:
+// the three container formats are not interchangeable, and callers should keep
+// going through the one shape that hides that.
+pub use archive::{read_index, ArchiveIndex, FomodSource};
 pub use carry::{carry_selection, CarriedSelection};
 pub use error::{ModEngineError, Result};
 pub use extract::{
@@ -51,7 +56,7 @@ pub fn analyze_archive_with(path: &Path, rules: &GameRules) -> Result<ModBundle>
         return Err(ModEngineError::Empty);
     }
     let sha = archive::hash_archive(path).ok();
-    Ok(normalize::normalize(index, &stem_of(path), sha, rules))
+    normalize::normalize(index, &stem_of(path), sha, rules)
 }
 
 /// Analyze with default (RE Engine) rules.
@@ -65,7 +70,7 @@ pub fn analyze_archive_no_hash_with(path: &Path, rules: &GameRules) -> Result<Mo
     if index.entries.is_empty() {
         return Err(ModEngineError::Empty);
     }
-    Ok(normalize::normalize(index, &stem_of(path), None, rules))
+    normalize::normalize(index, &stem_of(path), None, rules)
 }
 
 /// Analyze without hashing, using default rules.
