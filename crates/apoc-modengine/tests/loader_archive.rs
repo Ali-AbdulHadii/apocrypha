@@ -1,4 +1,4 @@
-//! Loader archives: a bare proxy DLL at the archive root, with no payload
+﻿//! Loader archives: a bare proxy DLL at the archive root, with no payload
 //! folders. REFramework's release zip is exactly this shape, and it is how a
 //! Linux user actually gets a loader into a Proton prefix.
 
@@ -32,6 +32,7 @@ fn mhw_rules() -> GameRules {
         canonical_case: vec!["STM".into()],
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),
+        plugin_extensions: Vec::new(),
     }
 }
 

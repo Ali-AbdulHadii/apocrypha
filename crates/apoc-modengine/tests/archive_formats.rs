@@ -1,4 +1,4 @@
-//! Container formats.
+﻿//! Container formats.
 //!
 //! Nexus ships mods as zip, 7z and rar interchangeably, and which one an author
 //! picked says nothing about what is inside. So the same mod, packed three
@@ -28,6 +28,7 @@ fn wilds_rules() -> GameRules {
         canonical_case: vec!["STM".into()],
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),
+        plugin_extensions: Vec::new(),
     }
 }
 

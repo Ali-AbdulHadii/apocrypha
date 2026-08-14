@@ -1,4 +1,4 @@
-//! Deploying a whole profile: several mods of different formats applied as one
+﻿//! Deploying a whole profile: several mods of different formats applied as one
 //! journaled transaction.
 //!
 //! This is the regression test for the bug where a modded game launched with
@@ -19,6 +19,7 @@ fn wilds_rules() -> GameRules {
         canonical_case: vec!["STM".into()],
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),
+        plugin_extensions: Vec::new(),
     }
 }
 

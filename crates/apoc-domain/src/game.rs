@@ -245,6 +245,19 @@ pub struct GameProfile {
     /// How FOMOD installers behave for this game, when its mods ship them.
     #[serde(default)]
     pub fomod: Option<FomodSpec>,
+    /// File extensions that carry load order rather than content, such as
+    /// Creation Engine's `esp`, `esm` and `esl`.
+    ///
+    /// Apocrypha deploys these files and does **not** enable or order them: a
+    /// Creation Engine game reads its own plugin list, which nothing here
+    /// writes. Declaring them is what lets the manager say so, instead of
+    /// leaving someone to conclude a mod failed to install when it was
+    /// installed and simply never switched on.
+    ///
+    /// Empty for engines with no such concept, which is every game shipped so
+    /// far except Skyrim.
+    #[serde(default)]
+    pub plugin_extensions: Vec<String>,
     /// Root folders to re-wrap under a payload prefix when an archive is packed
     /// from the inside out.
     #[serde(default)]

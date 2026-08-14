@@ -119,14 +119,26 @@ If the game needs behaviour the schema cannot express, open an issue before writ
 
 ## Adding a mod-format detector
 
-Detectors live in `crates/apoc-modengine/src/rules.rs` and are selected per game by the `formats` list in the game profile, in priority order. A detector answers one question: given this archive's file listing, does it look like my format, and if so, what are the options and deploy roots?
+Detection lives in `detect()` in `crates/apoc-modengine/src/normalize.rs`. It is one ordered chain of checks over the archive's file listing, not a registry of pluggable detectors: an earlier version of this document described a trait selected from a profile's `formats` list, and that has never existed. Build it when a second format needs it, and until then read the chain.
 
-To add one:
+Formats fall into two kinds, and which one you are adding decides where the work goes.
 
-1. Write the detector in `rules.rs`. It works from the normalised file listing, not from disk. Keep it pure so it is cheap to test.
-2. Give it a stable string ID and make it selectable from a profile's `formats` list.
-3. Add tests with a synthetic file listing for the positive case, plus at least one negative case proving it does not steal archives belonging to another format. Detector ordering bugs are the most common failure mode here, so the negative test is not optional.
-4. If you have a real archive that motivated the work, describe its structure in the pull request. Do not commit copyrighted mod archives to the repository.
+**A format recognised by its shape** — a `natives/` directory, a set of `modinfo.ini` folders, a bare proxy DLL at the root. These are inferred, and they are what the chain is made of.
+
+1. Add a `detect()` arm working from the normalised file listing, never from disk. What counts as a payload root, a rewrapped folder or a loader file comes from `GameRules`, which comes from the game profile: ask the profile rather than writing the game's directory names into the engine.
+2. Add a normaliser that turns a matching archive into a `ModBundle`.
+
+**A format that announces itself in a manifest** — FOMOD is the only one so far. These outrank the shape-based chain, because a file the author wrote saying what the archive is beats anything inferred from how it is arranged. They are also gated per game: a manifest is believed only if the profile's `formats` list names the format, since whether a game's mods ship one is a fact about that community rather than about the archive.
+
+Either way:
+
+1. Give it a stable string ID. For a manifest format, add it to `GameRules::supports_format` handling and to the profiles of games that use it. An empty `formats` list means "no opinion", which is read as permission.
+2. Add tests with a synthesised archive for the positive case, plus at least one negative case proving it does not steal archives belonging to another format. Detector ordering bugs are the most common failure mode here, so the negative test is not optional. Build the archive in the test rather than checking one in.
+3. If you have a real archive that motivated the work, describe its structure in the pull request. Do not commit copyrighted mod archives to the repository.
+
+### What a conditional installer must not do
+
+FOMOD can express things this engine deliberately refuses to guess at. If you extend it, hold to the rule the existing code follows: **anything that changes which files land, with no visible choice attached, either asks the user or refuses the install.** An installer whose conditions do not settle is reported as contradictory rather than iterated over; a destination that escapes the game directory refuses the whole archive rather than skipping one file; and a condition nobody can check stays unknown rather than being assumed either way.
 
 ## Code style
 

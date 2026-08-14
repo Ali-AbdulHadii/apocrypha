@@ -530,7 +530,12 @@ pub fn evaluate_selection(
 
     let chosen = selection_from(&selection);
     let game_dir = game_dir_of(&state, &game_id);
-    let (groups, resolved, warnings) = narrow_to_conditions(&bundle, game_dir.as_deref(), &chosen)?;
+    let (groups, resolved, mut warnings) =
+        narrow_to_conditions(&bundle, game_dir.as_deref(), &chosen)?;
+    warnings.extend(apoc_modengine::unmanaged_plugin_notice(
+        &bundle,
+        &rules_for(&game_id),
+    ));
 
     Ok(ModView {
         id: String::new(),
@@ -601,8 +606,14 @@ pub fn analyze_archive(
     // not on every step it declares. Showing gated ones and only hiding them
     // after the first click would offer choices the author meant to withhold.
     let game_dir = game_dir_of(&state, &game_id);
-    let (groups, selection, warnings) =
+    let (groups, selection, mut warnings) =
         narrow_to_conditions(&bundle, game_dir.as_deref(), &selection)?;
+    // Not a FOMOD concern: any format can ship a plugin, and the game will
+    // ignore all of them until somebody enables them.
+    warnings.extend(apoc_modengine::unmanaged_plugin_notice(
+        &bundle,
+        &rules_for(&game_id),
+    ));
 
     let mod_view = ModView {
         id: String::new(),

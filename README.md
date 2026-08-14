@@ -3,7 +3,7 @@
 
 # Apocrypha
 
-A native Linux desktop mod manager for games, built Linux-first rather than ported to it. Ships profiles for **Monster Hunter Wilds** and **Cyberpunk 2077**.
+A native Linux desktop mod manager for games, built Linux-first rather than ported to it. Ships profiles for **Monster Hunter Wilds**, **Cyberpunk 2077** and **Skyrim Special Edition**.
 
 Linux game modding is badly served. The established managers are Windows programs: Vortex needs a Wine prefix and a lot of goodwill to behave, Fluffy Mod Manager is a Windows GUI that people run through Proton and then fight over paths, and Mod Organizer 2 cannot be fixed by porting effort at all. MO2's whole design rests on USVFS, a user-space virtual filesystem built from Windows DLL injection and API hooking. There is no Linux equivalent to hook, so the feature that makes MO2 good is the feature that cannot cross over. That leaves Linux players doing the thing everyone eventually does: copying files into the game directory by hand, keeping a text file of what they changed, and hoping they can undo it later.
 
@@ -23,7 +23,8 @@ Known gaps today:
 | --- | --- |
 | Archive formats | ZIP, 7z and RAR. Encrypted and multi-volume archives are not handled. |
 | Game database | Local bundled TOML only. The online source is a stored setting, not a working client. |
-| Loader binary | Apocrypha configures REFramework for Proton but does not redistribute `dinput8.dll`. You supply it. |
+| Plugin order | Skyrim's plugin list is not managed. Mods install and their files land correctly, but `.esp`, `.esm` and `.esl` files must be enabled and sorted in your usual tool afterwards. The manager says so on every install that ships one, rather than leaving it to be discovered. |
+| Loader binary | Apocrypha configures REFramework for Proton but does not redistribute `dinput8.dll`. You supply it. SKSE is not provisioned at all. |
 | Platform | Linux only. No Windows or macOS build. |
 
 ## Features
@@ -32,6 +33,7 @@ What works today:
 
 - **Steam and Proton discovery.** VDF parsing for `libraryfolders.vdf`, `appmanifest_*.acf` and `config.vdf`. Finds native, Flatpak and Snap Steam roots, resolves library folders, install directories, the active Proton build, and the game's `compatdata` prefix.
 - **Mod format detection.** Fluffy segmented "AIO" installers (one `modinfo.ini` per option), single Fluffy mods, flat `natives/` dumps, `reframework/` script and plugin mods, bare loader DLLs such as `dinput8.dll`, standalone `.pak` mods renamed into the RE Engine patch chain, and `pak_mods/` directory mods.
+- **FOMOD installers.** The conditional format most of the Bethesda ecosystem ships in: install steps, groups with real cardinality, plugin types, condition flags, steps that appear because of an earlier answer, and per-file destinations and priorities. A manifest outranks anything inferred from an archive's shape, and where a manifest asks for something that cannot be honoured exactly, the installer says so or refuses rather than guessing at which files you wanted.
 - **Install wizard for segmented installers.** Options, roles and radio sets are derived from the mod's own payload and metadata, not from a hardcoded list. Independent choices stay independent instead of collapsing into one giant radio group.
 - **Profiles.** Separate selections per profile, so a "clean run" profile and a "everything on" profile can coexist over the same installed mods.
 - **Enable and disable without deleting.** Staged payloads live in Apocrypha's own directory. Turning a mod off removes its deployed files, not your download.

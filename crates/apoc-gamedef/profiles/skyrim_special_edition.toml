@@ -1,0 +1,115 @@
+# The Elder Scrolls V: Skyrim Special Edition.
+#
+# The first Creation Engine game, and the first whose mods ship FOMOD
+# installers as a matter of course. As with every other game, this document is
+# the entire game-specific footprint: no engine crate contains a branch on
+# whether it is Skyrim.
+#
+# One thing this profile deliberately does NOT claim: that Apocrypha manages
+# Skyrim's plugin order. It does not. See `plugin_extensions` below.
+
+id = "skyrim-special-edition"
+name = "The Elder Scrolls V: Skyrim Special Edition"
+engine = "creation"
+nexus_domain = "skyrimspecialedition"
+
+# What the engine actually does with this game's files: order them by the
+# priority a user sets, and let a later mod overwrite an earlier one.
+#
+# `explicit` describes Creation Engine's *plugin* list, which is a different
+# thing and is not implemented anywhere. Declaring it here would be a claim
+# about behaviour that does not exist, so this says what is true instead, and
+# `plugin_extensions` says what is missing.
+load_order = "priority"
+conflict_scope = "per-relative-path"
+
+# Windows-authored archives ship every casing, and Linux is case-sensitive. The
+# engine only reads `Data`, and only reads `SKSE/Plugins` under it, so these
+# components are forced to canonical casing on the way in.
+case_sensitive = true
+canonical_case = [
+  "Data",
+  "SKSE",
+  "Plugins",
+  "Interface",
+  "Meshes",
+  "Textures",
+  "Scripts",
+  "Source",
+  "Sound",
+  "Music",
+  "Seq",
+  "Shaders",
+  "Strings",
+]
+
+# Skyrim mods are either a FOMOD or a plain set of folders belonging under
+# `Data`. There is no Fluffy equivalent here.
+formats = ["fomod", "loose-roots"]
+
+# Extensions that carry load order rather than content. Apocrypha deploys these
+# files but does not enable or order them, so declaring them is what makes it
+# say so out loud instead of leaving someone to conclude the mod did not
+# install. When plugin management ships, this is what it will read.
+plugin_extensions = ["esp", "esm", "esl"]
+
+# There is no `[loader]` section, and that is deliberate. SKSE is a separate
+# launcher executable plus a DLL that nothing proxies, and `LoaderKind` offers
+# only `none` and `dll-proxy`. Declaring `dll-proxy` would write a Wine DLL
+# override for a DLL that overrides nothing, and would report "loader ready"
+# when nothing had been set up. Showing no loader is the honest option until a
+# launcher kind exists.
+
+[detection]
+steam_app_id = 489830
+executable = "SkyrimSE.exe"
+
+# Everything a Skyrim mod installs lives under `Data`.
+[[deploy_targets]]
+source = "Data"
+target = "Data"
+
+# Archives packed from the inside out: a bare `meshes/` at the archive root
+# really means `Data/meshes/`. This is the single most common way a Skyrim mod
+# is packaged, so without these an ordinary archive imports as zero files.
+[[rewrap]]
+folder = "meshes"
+prefix = "Data"
+
+[[rewrap]]
+folder = "textures"
+prefix = "Data"
+
+[[rewrap]]
+folder = "scripts"
+prefix = "Data"
+
+[[rewrap]]
+folder = "interface"
+prefix = "Data"
+
+[[rewrap]]
+folder = "sound"
+prefix = "Data"
+
+[[rewrap]]
+folder = "music"
+prefix = "Data"
+
+[[rewrap]]
+folder = "seq"
+prefix = "Data"
+
+[[rewrap]]
+folder = "skse"
+prefix = "Data"
+
+[[rewrap]]
+folder = "source"
+prefix = "Data"
+
+# A Skyrim FOMOD writes `destination="meshes/x.nif"` and means
+# `Data/meshes/x.nif`, because on this game everything lives under `Data` and
+# nobody writes it out.
+[fomod]
+dest_prefix = "Data"

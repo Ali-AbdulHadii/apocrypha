@@ -34,6 +34,9 @@ pub struct GameRules {
     pub formats: Vec<String>,
     /// Prefixed to every destination a FOMOD declares for this game.
     pub fomod_dest_prefix: String,
+    /// Extensions whose files carry load order this application does not
+    /// manage. Empty for engines with no such concept.
+    pub plugin_extensions: Vec<String>,
 }
 
 impl Default for GameRules {
@@ -47,6 +50,7 @@ impl Default for GameRules {
             canonical_case: Vec::new(),
             formats: Vec::new(),
             fomod_dest_prefix: String::new(),
+            plugin_extensions: Vec::new(),
         }
     }
 }
@@ -94,7 +98,18 @@ impl GameRules {
                 .as_ref()
                 .map(|f| f.dest_prefix.clone())
                 .unwrap_or_default(),
+            plugin_extensions: profile.plugin_extensions.clone(),
         }
+    }
+
+    /// True for a file that carries load order this application does not manage.
+    pub fn is_plugin_file(&self, path: &str) -> bool {
+        let Some(ext) = std::path::Path::new(path).extension() else {
+            return false;
+        };
+        self.plugin_extensions
+            .iter()
+            .any(|e| ext.eq_ignore_ascii_case(e.as_str()))
     }
 
     /// Whether this game's mods are expected to ship in a given archive format.
@@ -190,6 +205,7 @@ mod tests {
             }],
             formats: vec![],
             fomod: None,
+            plugin_extensions: vec![],
             rewrap: vec![],
             canonical_case: vec!["STM".into()],
             pak_chain: Some(apoc_domain::PakChainSpec {

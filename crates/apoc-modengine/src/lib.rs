@@ -38,6 +38,44 @@ pub use rules::GameRules;
 use apoc_domain::ModBundle;
 use std::path::Path;
 
+/// Say plainly when a mod ships files whose load order this application does
+/// not manage.
+///
+/// A Creation Engine game reads its own plugin list, and nothing here writes
+/// it. So a Skyrim mod installs, its files land exactly where they belong, and
+/// the game ignores them until the plugins are enabled somewhere else. That is
+/// the safe failure — the alternative is writing a user's load order without
+/// being asked — but it is invisible, and invisible is what makes it read as
+/// the manager having failed.
+///
+/// Driven entirely by what the game profile declares, so a game gets this by
+/// saying which extensions carry load order, never by being named in code.
+/// Returns nothing at all for an engine with no such concept.
+pub fn unmanaged_plugin_notice(bundle: &ModBundle, rules: &GameRules) -> Option<String> {
+    let mut names: Vec<&str> = bundle
+        .options()
+        .flat_map(|o| o.payload.iter())
+        .filter(|f| rules.is_plugin_file(&f.game_rel_path))
+        .filter_map(|f| f.game_rel_path.rsplit('/').next())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    if names.is_empty() {
+        return None;
+    }
+
+    let listed = if names.len() > 3 {
+        format!("{}, and {} more", names[..3].join(", "), names.len() - 3)
+    } else {
+        names.join(", ")
+    };
+    Some(format!(
+        "This mod includes plugin files ({listed}). Apocrypha installs them but does not manage \
+         the game's plugin list yet, so enable and sort them in your usual tool afterwards or the \
+         game will not load them."
+    ))
+}
+
 fn stem_of(path: &Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())

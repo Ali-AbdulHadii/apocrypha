@@ -1,4 +1,4 @@
-//! Archive shapes that would otherwise import as "0 files to install".
+﻿//! Archive shapes that would otherwise import as "0 files to install".
 //!
 //! Every case here is a real packaging habit found in the Monster Hunter Wilds
 //! mod ecosystem. The manager must recognise all of them, because a mod that
@@ -23,6 +23,7 @@ fn wilds_rules() -> GameRules {
         canonical_case: vec!["STM".into()],
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),
+        plugin_extensions: Vec::new(),
     }
 }
 
