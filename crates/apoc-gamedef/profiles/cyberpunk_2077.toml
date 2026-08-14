@@ -25,6 +25,33 @@ nexus_domain = "cyberpunk2077"
 # REDengine's directories are lowercase on disk and Linux is case-sensitive, so
 # a Windows-authored archive shipping `Archive/` or `R6/` must be folded back
 # into the real tree rather than creating a second one the game never reads.
+#
+# A name earns a place here only if BOTH of these hold, because a segment is
+# matched anywhere in a path and every entry is therefore a global rename of
+# that word:
+#
+#   1. Something fixed reads it. The game, or a framework, opens that exact
+#      path. A folder the mod's author named is theirs, and forcing a casing on
+#      it to suit somebody else's mod is the same bug pointing the other way.
+#   2. More than one party ships into it, so there is something to converge.
+#      A folder that only ever arrives inside one distribution has nothing to
+#      disagree with, and listing it spends a global rename for no gain.
+#
+# `redsUserHints` is the entry worth looking at twice: it is the only one that
+# is not lowercase, which is what makes this a casing table rather than a
+# lowercasing pass. redscript's compiler reads that exact spelling, and every
+# redscript mod may ship one.
+#
+# Deliberately absent, both from Cyber Engine Tweaks' own tree: `IconGlyphs` and
+# `json`. They pass the first test and fail the second, being vendored inside
+# CET itself, so nothing diverges from them. `json` also shows the hazard of the
+# first test alone: it is a word an author could reasonably use for their own
+# `r6/scripts/MyMod/JSON/`, and renaming it there would be a change nobody asked
+# for.
+#
+# Known limitation: entries are bare segments and cannot be scoped to a prefix,
+# so a generic word cannot be folded only under `engine/config/`. Widening the
+# schema to allow that affects every game and is not done here.
 canonical_case = [
   "archive",
   "pc",
@@ -36,10 +63,15 @@ canonical_case = [
   "input",
   "config",
   "cache",
+  "base",
+  "cybercmd",
+  "redsUserHints",
   "bin",
   "x64",
   "plugins",
   "cyber_engine_tweaks",
+  "fonts",
+  "tweakdb",
   "red4ext",
   "engine",
   "tools",
