@@ -87,14 +87,22 @@ pub fn stage_bundle(
     bundle: &ModBundle,
     dest_root: &Path,
 ) -> Result<StageReport> {
-    // archive entry path -> staged relative path
-    let mut wanted: HashMap<&str, String> = HashMap::new();
+    // archive entry path -> every staged relative path that wants those bytes.
+    //
+    // Many destinations per entry, because a manifest-driven installer can cite
+    // one source from two options, or map one file to two places. Under the
+    // folder conventions this predates, an entry belonged to exactly one option
+    // and a single destination was safe; with one it is not, and the loss is
+    // silent.
+    let mut wanted: HashMap<String, Vec<String>> = HashMap::new();
     for opt in bundle.deployable_options() {
         for f in &opt.payload {
-            wanted.insert(
-                f.archive_path.as_str(),
-                staged_rel_path(&opt.id, &f.game_rel_path),
-            );
+            let rel = staged_rel_path(&opt.id, &f.game_rel_path);
+            let dests = wanted.entry(f.archive_path.clone()).or_default();
+            // One option declaring the same destination twice writes it once.
+            if !dests.contains(&rel) {
+                dests.push(rel);
+            }
         }
     }
     if wanted.is_empty() {
@@ -104,14 +112,17 @@ pub fn stage_bundle(
     // Preview images for every option that declares one: including info-only
     // options (cover art, warnings), which carry no payload but are the images
     // the wizard most needs to show.
-    let mut preview_count = 0usize;
+    // Two options may well name the same image, which is another reason one
+    // destination per entry was never enough.
     for opt in bundle.options() {
         if let (Some(shot), Some(path)) = (&opt.screenshot, &opt.screenshot_archive_path) {
-            wanted.insert(path.as_str(), preview_rel_path(&opt.id, shot));
-            preview_count += 1;
+            let rel = preview_rel_path(&opt.id, shot);
+            let dests = wanted.entry(path.clone()).or_default();
+            if !dests.contains(&rel) {
+                dests.push(rel);
+            }
         }
     }
-    let _ = preview_count;
 
     fs::create_dir_all(dest_root)?;
 
@@ -160,5 +171,82 @@ mod tests {
         let root = Path::new("/tmp/stage-root");
         let p = safe_join(root, "Helm-01/natives/stm/x.mesh.241111606").unwrap();
         assert!(p.to_string_lossy().ends_with("x.mesh.241111606"));
+    }
+
+    #[test]
+    fn one_archive_entry_reaches_every_option_that_asked_for_it() {
+        use apoc_domain::{
+            DeployRoot, FilePayload, InstallerModel, ModBundle, ModOption, OptionGroup, SelectMode,
+        };
+        use std::io::Write;
+
+        // Two options citing the same source file. Impossible under the folder
+        // conventions, where each option owned its own directory; routine for a
+        // manifest, where options name the files they want.
+        fn option(id: &str, dest: &str) -> ModOption {
+            ModOption {
+                id: id.to_string(),
+                folder_name: id.to_string(),
+                group_index: None,
+                slot_token: None,
+                radio_set: None,
+                name: id.to_string(),
+                description: None,
+                category: None,
+                author: None,
+                screenshot: None,
+                screenshot_archive_path: None,
+                select_mode: SelectMode::Stackable,
+                recommended: false,
+                blocked_reason: None,
+                deployable: true,
+                payload: vec![FilePayload {
+                    archive_path: "shared/texture.dds".into(),
+                    game_rel_path: dest.into(),
+                    root: DeployRoot::GameRoot,
+                    size: 4,
+                    priority: 0,
+                }],
+                raw_modinfo: Default::default(),
+            }
+        }
+
+        let tmp = tempfile::tempdir().unwrap();
+        let archive = tmp.path().join("mod.zip");
+        {
+            let f = std::fs::File::create(&archive).unwrap();
+            let mut zip = zip::ZipWriter::new(f);
+            let opts: zip::write::FileOptions<'_, ()> = zip::write::FileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            zip.start_file("shared/texture.dds", opts).unwrap();
+            zip.write_all(b"DDS!").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let bundle = ModBundle {
+            name: "Shared".into(),
+            version: None,
+            author: None,
+            category: None,
+            installer_model: InstallerModel::Fomod,
+            archive_sha256: None,
+            fomod: None,
+            groups: vec![OptionGroup {
+                index: None,
+                label: "G".into(),
+                cardinality: None,
+                options: vec![option("first", "a/tex.dds"), option("second", "b/tex.dds")],
+            }],
+        };
+
+        let staged = tmp.path().join("staging");
+        let report = stage_bundle(&archive, &bundle, &staged).unwrap();
+
+        assert_eq!(
+            report.files_written, 2,
+            "both options must be staged, not just whichever was recorded last"
+        );
+        assert!(staged.join("first/a/tex.dds").is_file());
+        assert!(staged.join("second/b/tex.dds").is_file());
     }
 }
