@@ -16,6 +16,12 @@
  *    Row height is measured from a real row rather than written down here,
  *    because spacing and text size are user settings and any baked in number
  *    would be wrong the moment somebody changes them.
+ *
+ * Archives can also be dropped straight onto this screen. The zone is drawn
+ * only while a drag is actually over the window, so a full library is not
+ * paying permanent space for it; the empty state shows it outright, because
+ * there is nothing else on screen and it is the fastest way to explain what to
+ * do next. A dropped archive takes exactly the same path as Add mod.
  */
 
 import { AnimatePresence, motion } from "framer-motion";
@@ -28,6 +34,7 @@ import {
   useState,
 } from "react";
 import { formatBytes, type ModView } from "../lib/api";
+import { useFileDrop } from "../lib/drop";
 import { Icon } from "./icons";
 import { Chip, Switch } from "./ui";
 
@@ -43,6 +50,14 @@ export interface ModsScreenProps {
   onConfigure: (mod: ModView) => void;
   onRemove: (mod: ModView) => void;
   onImport: () => void;
+  /**
+   * An archive dropped on the window, by path. Given every dropped path in the
+   * order the OS listed them; what to do with more than one is decided there,
+   * alongside the rest of the install flow, rather than here.
+   */
+  onDropArchives?: (paths: string[]) => void;
+  /** False while something else already owns the install flow. */
+  canDrop?: boolean;
   /** Takes the user to the Load order screen, where the order is editable. */
   onOpenLoadOrder?: () => void;
 }
@@ -88,6 +103,30 @@ function useCollapseDuration(): number {
   }, []);
 
   return seconds;
+}
+
+/* ------------------------------------------------------------ drop zone --- */
+
+/**
+ * The dashed square.
+ *
+ * One component for both places it appears, so the thing that lights up under a
+ * drag is visibly the same thing the empty state was showing all along.
+ */
+function DropZone({ over }: { over: boolean }) {
+  return (
+    <div
+      className={`dropzone ${over ? "over" : ""}`}
+      aria-hidden={!over}
+      role={over ? "status" : undefined}
+    >
+      <span className="dropzone-icon">
+        <Icon.package size={40} strokeWidth={1} />
+      </span>
+      <span className="dropzone-title">Drop mod here to install</span>
+      <span className="dropzone-hint">ZIP, 7z and RAR archives</span>
+    </div>
+  );
 }
 
 /* ------------------------------------------------------------ windowing --- */
@@ -266,6 +305,8 @@ export function ModsScreen({
   onConfigure,
   onRemove,
   onImport,
+  onDropArchives,
+  canDrop = true,
   onOpenLoadOrder,
 }: ModsScreenProps) {
   const [query, setQuery] = useState("");
@@ -274,6 +315,10 @@ export function ModsScreen({
   const [category, setCategory] = useState("all");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const duration = useCollapseDuration();
+
+  const { over } = useFileDrop(canDrop && !!onDropArchives, (paths) =>
+    onDropArchives?.(paths),
+  );
 
   const categories = useMemo(() => {
     const set = new Set(mods.map(categoryOf));
@@ -336,13 +381,11 @@ export function ModsScreen({
   if (mods.length === 0) {
     return (
       <div className="empty">
-        <span className="empty-icon">
-          <Icon.package size={40} strokeWidth={1} />
-        </span>
+        <DropZone over={over} />
         <div className="empty-title">No mods yet</div>
         <div>
-          Add a ZIP archive to begin. Segmented installers, loose files, loaders
-          and PAK mods are all supported.
+          Drag an archive onto the window, or add one below. Segmented
+          installers, loose files, loaders and PAK mods are all supported.
         </div>
         <button
           className="btn primary"
@@ -450,6 +493,30 @@ export function ModsScreen({
           />
         ))
       )}
+
+      {/* Drawn over the whole window rather than inside the list, because a
+          drag lands wherever the pointer happens to be and the list may well be
+          scrolled somewhere else entirely. */}
+      <AnimatePresence>
+        {over && (
+          <motion.div
+            className="drop-overlay"
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration, ease: [0.16, 1, 0.3, 1] }}
+          >
+            <motion.div
+              initial={{ scale: duration ? 0.96 : 1 }}
+              animate={{ scale: 1 }}
+              exit={{ scale: duration ? 0.96 : 1 }}
+              transition={{ duration, ease: [0.16, 1, 0.3, 1] }}
+            >
+              <DropZone over />
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

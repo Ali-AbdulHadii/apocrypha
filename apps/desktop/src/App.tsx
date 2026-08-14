@@ -546,6 +546,43 @@ export default function App() {
     [push, refreshMods, refreshDownloads],
   );
 
+  // Everything that installs a picked or dropped archive meets here: analyse,
+  // install directly when nothing is left to ask, and otherwise hand the wizard
+  // the result.
+  const importArchive = useCallback(
+    async (path: string) => {
+      if (!activeGameId) {
+        push("Select a game first", "bad");
+        return;
+      }
+      setBusy(true);
+      try {
+        const { mod, carry, replaces } = await api.analyzeArchive(
+          activeGameId,
+          path,
+        );
+        if (mod.totalFiles === 0) {
+          push(
+            `${mod.name} has no files this game can install. It may be packed in an unusual way.`,
+            "bad",
+          );
+        }
+        if (canInstallDirectly(mod, carry, replaces)) {
+          await installCarried(activeGameId, path, mod, carry!, replaces);
+          return;
+        }
+        setPendingArchive(path);
+        setWizardCarry(carry);
+        setWizardReplaces(replaces);
+        setWizardMod(mod);
+      } catch (e) {
+        fail(e);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [activeGameId, push, fail, installCarried],
+  );
 
   const startImport = useCallback(async () => {
     if (!activeGameId) {
@@ -555,31 +592,33 @@ export default function App() {
     try {
       const path = await pickArchive();
       if (!path) return;
-      setBusy(true);
-      const { mod, carry, replaces } = await api.analyzeArchive(
-        activeGameId,
-        path,
-      );
-      if (mod.totalFiles === 0) {
-        push(
-          `${mod.name} has no files this game can install. It may be packed in an unusual way.`,
-          "bad",
-        );
-      }
-      if (canInstallDirectly(mod, carry, replaces)) {
-        await installCarried(activeGameId, path, mod, carry!, replaces);
-        return;
-      }
-      setPendingArchive(path);
-      setWizardCarry(carry);
-      setWizardReplaces(replaces);
-      setWizardMod(mod);
+      await importArchive(path);
     } catch (e) {
       fail(e);
-    } finally {
-      setBusy(false);
     }
-  }, [activeGameId, push, fail, installCarried]);
+  }, [activeGameId, importArchive, push, fail]);
+
+  // Dropped archives. One at a time, for the same reason a second scheme link
+  // is dropped rather than queued: the wizard is a single conversation about a
+  // single archive, and stacking them is how somebody ends up clicking through
+  // one they never looked at. The rest are named rather than silently ignored.
+  const dropArchives = useCallback(
+    (paths: string[]) => {
+      const [first, ...rest] = paths;
+      if (!first) return;
+      if (rest.length > 0) {
+        // Both separators, because the path comes from the OS and this build
+        // is no longer only ever Linux.
+        const name = first.split(/[\\/]/).pop() || first;
+        push(
+          `Installing ${name}. Drop the other ${rest.length} one at a time.`,
+          "info",
+        );
+      }
+      void importArchive(first);
+    },
+    [importArchive, push],
+  );
 
   // Installing from Downloads joins the same path as Add mod: analyze, then the
   // wizard. Nothing about the archive is treated differently for having been
@@ -977,6 +1016,10 @@ export default function App() {
                     }}
                     onRemove={removeMod}
                     onImport={startImport}
+                    onDropArchives={dropArchives}
+                    // A drop is refused while the wizard is open or an analyse
+                    // is already running, rather than queued behind them.
+                    canDrop={!busy && !wizardMod}
                     onOpenLoadOrder={() => setScreen("order")}
                   />
                 ) : screen === "order" ? (
