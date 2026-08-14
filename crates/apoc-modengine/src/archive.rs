@@ -379,16 +379,25 @@ pub fn read_entry(archive_path: &Path, entry_path: &str) -> Result<Vec<u8>> {
 
 /// Extract the named entries to disk.
 ///
-/// `wanted` maps an archive entry path to the staged relative path it should be
-/// written to; `resolve` turns that into an absolute destination and is where
-/// traversal is rejected. Returns `(staged_rel_path, bytes)` per file written.
+/// `wanted` maps an archive entry path to **every** staged relative path that
+/// wants its bytes; `resolve` turns each into an absolute destination and is
+/// where traversal is rejected. Returns `(staged_rel_path, bytes)` per file
+/// written.
+///
+/// One entry to many destinations, rather than one to one. Under the folder
+/// conventions this engine grew up with, no archive entry could ever belong to
+/// two options: each option owned a directory. A manifest-driven installer
+/// names its sources instead, so two options can cite the same texture, and one
+/// option can map one file to two places. With a single destination per entry
+/// the second claim silently replaced the first and an option staged short,
+/// with nothing anywhere reporting it.
 ///
 /// This does not go through [`scan`], because scan hands entries over as a
 /// `Vec<u8>` and a texture pack should not be held in memory to be copied to
 /// disk. Each format streams by its own best route instead.
 pub fn extract_entries(
     archive_path: &Path,
-    wanted: &HashMap<&str, String>,
+    wanted: &HashMap<String, Vec<String>>,
     resolve: Resolve,
 ) -> Result<Vec<(String, u64)>> {
     match detect(archive_path)? {
@@ -406,9 +415,24 @@ fn prepare(out_path: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Copy an already-written destination to the rest that wanted the same entry.
+///
+/// Decompressing once and copying is cheaper than decoding the entry again, and
+/// for rar it is the only option: the cursor has already moved on.
+fn fan_out(first: &Path, rest: &[String], resolve: Resolve) -> Result<Vec<(String, u64)>> {
+    let mut written = Vec::new();
+    for rel in rest {
+        let out_path = resolve(rel)?;
+        prepare(&out_path)?;
+        let n = std::fs::copy(first, &out_path)?;
+        written.push((rel.clone(), n));
+    }
+    Ok(written)
+}
+
 fn extract_zip(
     archive_path: &Path,
-    wanted: &HashMap<&str, String>,
+    wanted: &HashMap<String, Vec<String>>,
     resolve: Resolve,
 ) -> Result<Vec<(String, u64)>> {
     let file = File::open(archive_path)?;
@@ -421,21 +445,26 @@ fn extract_zip(
             continue;
         }
         let name = normalize_path(entry.name());
-        let Some(rel) = wanted.get(name.as_str()) else {
+        let Some(rels) = wanted.get(name.as_str()) else {
             continue;
         };
-        let out_path = resolve(rel)?;
+        let Some((first, rest)) = rels.split_first() else {
+            continue;
+        };
+        let out_path = resolve(first)?;
         prepare(&out_path)?;
         let mut out = File::create(&out_path)?;
         let n = std::io::copy(&mut entry, &mut out)?;
-        written.push((rel.clone(), n));
+        written.push((first.clone(), n));
+        drop(out);
+        written.extend(fan_out(&out_path, rest, resolve)?);
     }
     Ok(written)
 }
 
 fn extract_7z(
     archive_path: &Path,
-    wanted: &HashMap<&str, String>,
+    wanted: &HashMap<String, Vec<String>>,
     resolve: Resolve,
 ) -> Result<Vec<(String, u64)>> {
     use sevenz_rust2::{ArchiveReader, Password};
@@ -451,18 +480,25 @@ fn extract_7z(
             return Ok(true);
         }
         let name = normalize_path(&entry.name);
-        let Some(rel) = wanted.get(name.as_str()) else {
+        let Some(rels) = wanted.get(name.as_str()) else {
             return Ok(true);
         };
-        let result = (|| -> Result<u64> {
-            let out_path = resolve(rel)?;
+        let Some((first, rest)) = rels.split_first() else {
+            return Ok(true);
+        };
+        let result = (|| -> Result<Vec<(String, u64)>> {
+            let out_path = resolve(first)?;
             prepare(&out_path)?;
             let mut out = File::create(&out_path)?;
-            Ok(std::io::copy(rd, &mut out)?)
+            let n = std::io::copy(rd, &mut out)?;
+            drop(out);
+            let mut done = vec![(first.clone(), n)];
+            done.extend(fan_out(&out_path, rest, resolve)?);
+            Ok(done)
         })();
         match result {
-            Ok(n) => {
-                written.push((rel.clone(), n));
+            Ok(done) => {
+                written.extend(done);
                 Ok(true)
             }
             Err(e) => {
@@ -480,7 +516,7 @@ fn extract_7z(
 
 fn extract_rar(
     archive_path: &Path,
-    wanted: &HashMap<&str, String>,
+    wanted: &HashMap<String, Vec<String>>,
     resolve: Resolve,
 ) -> Result<Vec<(String, u64)>> {
     let mut archive = unrar::Archive::new(archive_path).open_for_processing()?;
@@ -502,13 +538,17 @@ fn extract_rar(
             archive = at_file.skip()?;
             continue;
         }
-        match wanted.get(name.as_str()) {
-            Some(rel) => {
-                let out_path = resolve(rel)?;
+        match wanted.get(name.as_str()).and_then(|r| r.split_first()) {
+            Some((first, rest)) => {
+                let out_path = resolve(first)?;
                 prepare(&out_path)?;
                 // unrar writes the file itself, so nothing is buffered.
                 archive = at_file.extract_to(&out_path)?;
-                written.push((rel.clone(), size));
+                written.push((first.clone(), size));
+                // The cursor has moved past this entry and cannot go back, so
+                // the remaining destinations are copies of what was just
+                // written rather than a second extraction.
+                written.extend(fan_out(&out_path, rest, resolve)?);
             }
             None => archive = at_file.skip()?,
         }
