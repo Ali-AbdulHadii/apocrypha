@@ -8,6 +8,7 @@ mod app_update;
 mod commands;
 mod deploy_cmds;
 mod downloads;
+mod gamedb;
 mod nexus_cmds;
 mod state;
 
@@ -138,6 +139,8 @@ pub fn run() {
             commands::game_art,
             commands::game_for_domain,
             commands::set_game_path,
+            commands::game_db_status,
+            commands::refresh_game_db,
             commands::analyze_archive,
             commands::evaluate_selection,
             commands::import_mod,

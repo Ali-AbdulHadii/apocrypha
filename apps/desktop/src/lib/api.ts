@@ -383,6 +383,24 @@ export interface DownloadView {
   updateFor: string | null;
 }
 
+/**
+ * Where the game definitions in use came from.
+ *
+ * Distinct from the setting on purpose: choosing Online and then being unable
+ * to reach the service is indistinguishable from it working, unless something
+ * says so.
+ */
+export interface ProfileSourceView {
+  /** What the setting asks for. */
+  selected: string;
+  /** Whether published definitions are actually in use. */
+  onlineInEffect: boolean;
+  /** How many games came from the service. */
+  published: number;
+  /** Unix seconds of the last successful fetch, if there has been one. */
+  fetchedAt: number | null;
+}
+
 export interface SettingsView {
   gameDbSource: string;
   dataRoot: string;
@@ -501,6 +519,16 @@ export const api = {
    */
   evaluateSelection: (gameId: string, path: string, selection: string[]) =>
     call<ModView>("evaluate_selection", { gameId, path, selection }),
+  /** What game information is in force, which the setting alone cannot say. */
+  gameDbStatus: () => call<ProfileSourceView>("game_db_status"),
+  /**
+   * Fetch the published game profiles now.
+   *
+   * Only ever called by somebody pressing a button. Profiles are read while
+   * analysing an archive and while planning a deployment, and neither should
+   * wait on a network timeout, so fetching is deliberately not on that path.
+   */
+  refreshGameDb: () => call<string>("refresh_game_db"),
   /**
    * `replaces` names an installed mod this archive is a new version of. Passing
    * it updates that mod in place, keeping its load-order position, whether it is

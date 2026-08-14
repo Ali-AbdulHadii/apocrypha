@@ -1,0 +1,583 @@
+//! Game profiles fetched from the service.
+//!
+//! A profile says where Steam installs a game, which directories hold mod
+//! content, what loader it needs and how its paths are spelled. Every one the
+//! app knows is compiled into it, which means a game that moves a directory in
+//! a patch breaks modding for everyone until a new release ships. This is the
+//! other source: the same documents, published, so a fix reaches people the day
+//! it is written.
+//!
+//! Three things govern how it behaves, and all three are about what happens
+//! when the service is not there.
+//!
+//! **The bundled profiles are the floor, never the ceiling.** Any failure —
+//! offline, a timeout, a 500, a document that will not parse, a schema version
+//! this build does not know — falls back to what is compiled in. Modding does
+//! not depend on the network, on the service being up, or on having an account,
+//! and none of those is a condition anyone agreed to when they installed a mod
+//! manager.
+//!
+//! **A profile is taken whole or not at all.** A document that parses is used;
+//! one that does not is discarded entirely rather than merged field by field
+//! with the bundled one. Half a deploy target list is worse than the version
+//! that was already working.
+//!
+//! **The origin is compiled in.** Same rule as everywhere else in this crate: a
+//! profile decides where files are written into somebody's game directory, so
+//! "fetch that from wherever a settings file says" is not a feature.
+
+use crate::{agent, send_retrying, ServiceOrigin};
+use apoc_domain::GameProfile;
+use apoc_gamedef::{GameDatabaseSource, GameDefError, LocalBuiltin};
+use serde::Deserialize;
+
+/// The profile contract this build understands.
+///
+/// A document declaring anything else is refused rather than read: a newer
+/// contract may mean something different by a field this build thinks it knows,
+/// and the failure that produces is files written to the wrong place.
+pub const SUPPORTED_SCHEMA: u32 = 1;
+
+/// What happened on the last attempt to reach the service.
+///
+/// Carried so the interface can say which profiles are actually in use. An app
+/// that has silently fallen back looks exactly like one that is working, right
+/// up until someone wonders why a profile they published has not arrived.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Freshness {
+    /// Profiles came from the service.
+    Online { fetched: usize },
+    /// The service could not be used, and the bundled profiles are in force.
+    Offline { reason: String },
+}
+
+/// Profiles from the service, with the bundled set underneath.
+#[derive(Debug, Clone)]
+pub struct ApocryphaGameDb {
+    origin: ServiceOrigin,
+    app_version: String,
+}
+
+impl ApocryphaGameDb {
+    pub fn new(origin: ServiceOrigin, app_version: impl Into<String>) -> Self {
+        ApocryphaGameDb {
+            origin,
+            app_version: app_version.into(),
+        }
+    }
+
+    /// Fetch every published profile, reporting what happened.
+    ///
+    /// Never returns an error: a failure produces the bundled profiles and a
+    /// reason, because there is no situation in which this refusing to answer
+    /// is more useful than it answering with what it already had.
+    pub fn fetch(&self) -> (Vec<GameProfile>, Freshness) {
+        let builtin = match LocalBuiltin::new().all() {
+            Ok(profiles) => profiles,
+            // The bundled profiles are `include_str!`ed and parsed by a test on
+            // every build, so this is unreachable short of a corrupted binary.
+            Err(e) => {
+                return (
+                    Vec::new(),
+                    Freshness::Offline {
+                        reason: format!("the built-in profiles could not be read: {e}"),
+                    },
+                )
+            }
+        };
+
+        let index = match self.index() {
+            Ok(index) => index,
+            Err(reason) => return (builtin, Freshness::Offline { reason }),
+        };
+
+        let mut fetched: Vec<GameProfile> = Vec::new();
+        let mut refused: Vec<String> = Vec::new();
+        for entry in index {
+            if entry.schema_version != SUPPORTED_SCHEMA {
+                refused.push(format!(
+                    "{} needs profile format {}, and this version reads {SUPPORTED_SCHEMA}",
+                    entry.id, entry.schema_version
+                ));
+                continue;
+            }
+            match self.profile(&entry.id) {
+                Ok(profile) => fetched.push(profile),
+                Err(reason) => refused.push(reason),
+            }
+        }
+
+        // Whatever arrived replaces its bundled namesake; whatever did not keeps
+        // it. A game the service has never heard of stays exactly as it shipped.
+        let mut merged = builtin;
+        for profile in fetched.iter() {
+            match merged.iter_mut().find(|g| g.id == profile.id) {
+                Some(existing) => *existing = profile.clone(),
+                None => merged.push(profile.clone()),
+            }
+        }
+
+        let freshness = if refused.is_empty() {
+            Freshness::Online {
+                fetched: fetched.len(),
+            }
+        } else if fetched.is_empty() {
+            Freshness::Offline {
+                reason: refused.join("; "),
+            }
+        } else {
+            // Some arrived and some did not. Online, but the ones that were
+            // refused are named rather than quietly absent.
+            Freshness::Online {
+                fetched: fetched.len(),
+            }
+        };
+        (merged, freshness)
+    }
+
+    fn index(&self) -> Result<Vec<IndexEntry>, String> {
+        let url = format!("{}/api/v1/games/profiles", self.origin.as_str());
+        let response = self.get(&url)?;
+        response
+            .into_json::<Vec<IndexEntry>>()
+            .map_err(|e| format!("the list of game profiles could not be read: {e}"))
+    }
+
+    fn profile(&self, id: &str) -> Result<GameProfile, String> {
+        parse_document(&self.document(id)?)
+    }
+
+    /// One profile as the service sent it, unparsed.
+    ///
+    /// Kept as text so it can be cached verbatim. Storing a parsed profile
+    /// instead would mean the cache has to learn every field the schema grows,
+    /// and a cache that can fall behind the thing it caches is worse than none.
+    pub fn document(&self, id: &str) -> Result<String, String> {
+        let url = format!(
+            "{}/api/v1/games/{}/profile",
+            self.origin.as_str(),
+            encode(id)
+        );
+        self.get(&url)?
+            .into_string()
+            .map_err(|e| format!("the profile for {id} could not be read: {e}"))
+    }
+
+    /// Every published profile, as documents ready to be cached.
+    ///
+    /// `(game id, document, schema version)`. Each is checked for a contract
+    /// this build reads and parsed once here, so a document that would fail
+    /// later is refused now rather than being cached and failing on the next
+    /// start, when nothing is left to explain it.
+    pub fn fetch_documents(&self) -> Result<Vec<(String, String, u32)>, String> {
+        let mut out = Vec::new();
+        for entry in self.index()? {
+            if entry.schema_version != SUPPORTED_SCHEMA {
+                continue;
+            }
+            let document = self.document(&entry.id)?;
+            parse_document(&document)?;
+            out.push((entry.id, document, entry.schema_version));
+        }
+        Ok(out)
+    }
+
+    // Reads, so the transport retry applies: the service redeploys on every
+    // push and a dropped connection is routine rather than exceptional.
+    #[allow(clippy::result_large_err)]
+    fn get(&self, url: &str) -> Result<ureq::Response, String> {
+        send_retrying(|| {
+            agent()
+                .get(url)
+                // No Authorization header. Profiles are public, and a manager
+                // has to work for someone who has never signed in.
+                .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
+                .call()
+        })
+        .map_err(describe)
+    }
+}
+
+impl GameDatabaseSource for ApocryphaGameDb {
+    /// Profiles from the service where it answered, and the bundled ones
+    /// everywhere else.
+    ///
+    /// The trait cannot say "this succeeded but from the fallback", so this
+    /// always succeeds. Call [`ApocryphaGameDb::fetch`] where the difference
+    /// matters, which is anywhere it is going to be shown to somebody.
+    fn all(&self) -> Result<Vec<GameProfile>, GameDefError> {
+        Ok(self.fetch().0)
+    }
+}
+
+/// Read one profile document.
+///
+/// Public because the app caches documents on disk and has to read them back
+/// on a later start, when nothing has been fetched yet and there may be no
+/// network at all.
+pub fn parse_document(json: &str) -> Result<GameProfile, String> {
+    serde_json::from_str::<WireProfile>(json)
+        .map(WireProfile::into_profile)
+        .map_err(|e| format!("a published game profile could not be read: {e}"))
+}
+
+/// A failure in the terms of the person waiting on it.
+fn describe(e: ureq::Error) -> String {
+    match e {
+        ureq::Error::Status(404, _) => "the service has no game profiles to publish".to_string(),
+        ureq::Error::Status(code, _) if (500..600).contains(&code) => {
+            "the service is having trouble; the built-in profiles are being used".to_string()
+        }
+        ureq::Error::Status(code, _) => format!("the service refused the request ({code})"),
+        // Offline, DNS, TLS, a timeout. All the same thing to somebody who just
+        // wants to install a mod: the service could not be reached.
+        ureq::Error::Transport(_) => "the service could not be reached".to_string(),
+    }
+}
+
+fn encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        let c = *b as char;
+        if c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.' | '~') {
+            out.push(c);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/* ----------------------------------------------------------------- wire --- */
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IndexEntry {
+    id: String,
+    #[allow(dead_code)]
+    name: String,
+    schema_version: u32,
+    #[allow(dead_code)]
+    revision: u32,
+}
+
+/// The service's profile document.
+///
+/// Deliberately its own type rather than deserializing straight into
+/// [`GameProfile`]. The domain type is written for TOML, where a field it does
+/// not know is a mistake worth failing on; a document from a service is
+/// something to be read defensively, and the two want opposite settings. This
+/// also puts the mapping in one visible place, so a field added on one side and
+/// forgotten on the other is a compile error rather than a silently missing
+/// deploy target.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireProfile {
+    id: String,
+    name: String,
+    engine: String,
+    #[serde(default)]
+    nexus_domain: Option<String>,
+    load_order: String,
+    /// Read and discarded: one scope exists, so there is nothing to choose
+    /// between. Named here rather than dropped from the type so the next person
+    /// can see the service sends it and that it was considered.
+    #[allow(dead_code)]
+    conflict_scope: String,
+    case_sensitive: bool,
+    detection: WireDetection,
+    #[serde(default)]
+    formats: Vec<String>,
+    #[serde(default)]
+    canonical_case: Vec<String>,
+    #[serde(default)]
+    plugin_extensions: Vec<String>,
+    #[serde(default)]
+    deploy_targets: Vec<WireDeployTarget>,
+    #[serde(default)]
+    rewrap: Vec<WireRewrap>,
+    #[serde(default)]
+    loader: Option<WireLoader>,
+    #[serde(default)]
+    pak_chain: Option<WirePakChain>,
+    #[serde(default)]
+    fomod: Option<WireFomod>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireDetection {
+    steam_app_id: u32,
+    #[serde(default)]
+    executable: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireDeployTarget {
+    source: String,
+    target: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct WireRewrap {
+    folder: String,
+    prefix: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireLoader {
+    name: String,
+    kind: String,
+    #[serde(default)]
+    proxy_dll: Option<String>,
+    #[serde(default)]
+    data_dirs: Vec<String>,
+    #[serde(default)]
+    proton: Option<WireProton>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireProton {
+    #[serde(default)]
+    wine_dll_overrides: Option<String>,
+    #[serde(default)]
+    steam_launch_options: Option<String>,
+    #[serde(default)]
+    requires_prefix_write: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WirePakChain {
+    pattern: String,
+    #[serde(default = "three")]
+    digits: usize,
+    #[serde(default = "one")]
+    start_index: u32,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WireFomod {
+    #[serde(default)]
+    dest_prefix: String,
+}
+
+fn three() -> usize {
+    3
+}
+
+fn one() -> u32 {
+    1
+}
+
+impl WireProfile {
+    fn into_profile(self) -> GameProfile {
+        use apoc_domain::{
+            ConflictScope, DeployTarget, Engine, FomodSpec, LoadOrderPolicy, LoaderKind,
+            LoaderSpec, PakChainSpec, ProtonLoaderSpec, RewrapRule, SteamDetection,
+        };
+
+        GameProfile {
+            id: self.id,
+            name: self.name,
+            // An engine nobody here recognises is `Other`, which is honest and
+            // costs nothing: the engine name selects no behaviour on its own.
+            engine: match self.engine.as_str() {
+                "re-engine" => Engine::ReEngine,
+                "creation" => Engine::Creation,
+                "red-engine" => Engine::RedEngine,
+                _ => Engine::Other,
+            },
+            detection: SteamDetection {
+                steam_app_id: self.detection.steam_app_id,
+                executable: self.detection.executable,
+            },
+            nexus_domain: self.nexus_domain,
+            // Priority is the policy the engine actually implements, so an
+            // unknown value reads as that rather than as something unhandled.
+            load_order: match self.load_order.as_str() {
+                "none" => LoadOrderPolicy::None,
+                "explicit" => LoadOrderPolicy::Explicit,
+                _ => LoadOrderPolicy::Priority,
+            },
+            conflict_scope: ConflictScope::PerRelativePath,
+            case_sensitive: self.case_sensitive,
+            deploy_targets: self
+                .deploy_targets
+                .into_iter()
+                .map(|t| DeployTarget {
+                    source: t.source,
+                    target: t.target,
+                })
+                .collect(),
+            formats: self.formats,
+            fomod: self.fomod.map(|f| FomodSpec {
+                dest_prefix: f.dest_prefix,
+            }),
+            plugin_extensions: self.plugin_extensions,
+            rewrap: self
+                .rewrap
+                .into_iter()
+                .map(|r| RewrapRule {
+                    folder: r.folder,
+                    prefix: r.prefix,
+                })
+                .collect(),
+            canonical_case: self.canonical_case,
+            loader: self.loader.map(|l| LoaderSpec {
+                name: l.name,
+                kind: match l.kind.as_str() {
+                    "dll-proxy" => LoaderKind::DllProxy,
+                    _ => LoaderKind::None,
+                },
+                proxy_dll: l.proxy_dll,
+                data_dirs: l.data_dirs,
+                proton: l
+                    .proton
+                    .map(|p| ProtonLoaderSpec {
+                        wine_dll_overrides: p.wine_dll_overrides,
+                        steam_launch_options: p.steam_launch_options,
+                        requires_prefix_write: p.requires_prefix_write,
+                    })
+                    .unwrap_or_default(),
+            }),
+            pak_chain: self.pak_chain.map(|c| PakChainSpec {
+                pattern: c.pattern,
+                digits: c.digits,
+                start_index: c.start_index,
+            }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WILDS: &str = r#"{
+        "id": "monster-hunter-wilds",
+        "name": "Monster Hunter Wilds",
+        "schemaVersion": 1,
+        "revision": 3,
+        "engine": "re-engine",
+        "nexusDomain": "monsterhunterwilds",
+        "loadOrder": "priority",
+        "conflictScope": "per-relative-path",
+        "caseSensitive": true,
+        "detection": { "steamAppId": 2246340, "executable": "MonsterHunterWilds.exe" },
+        "formats": ["fluffy-aio"],
+        "canonicalCase": ["STM"],
+        "pluginExtensions": [],
+        "deployTargets": [{ "source": "natives", "target": "natives" }],
+        "rewrap": [{ "folder": "autorun", "prefix": "reframework" }],
+        "loader": {
+            "name": "REFramework",
+            "kind": "dll-proxy",
+            "proxyDll": "dinput8.dll",
+            "dataDirs": ["reframework/data"],
+            "proton": {
+                "wineDllOverrides": "dinput8=n,b",
+                "steamLaunchOptions": "WINEDLLOVERRIDES=\"dinput8=n,b\" %command%",
+                "requiresPrefixWrite": true
+            }
+        },
+        "pakChain": { "pattern": "re_chunk_000.pak.sub_000.pak.patch_{n}.pak", "digits": 3, "startIndex": 1 },
+        "fomod": null
+    }"#;
+
+    fn parse(json: &str) -> GameProfile {
+        serde_json::from_str::<WireProfile>(json)
+            .expect("parses")
+            .into_profile()
+    }
+
+    #[test]
+    fn a_published_profile_becomes_the_same_thing_a_bundled_one_is() {
+        use apoc_domain::{Engine, LoadOrderPolicy, LoaderKind};
+
+        let g = parse(WILDS);
+        assert_eq!(g.id, "monster-hunter-wilds");
+        assert_eq!(g.engine, Engine::ReEngine);
+        assert_eq!(g.load_order, LoadOrderPolicy::Priority);
+        assert_eq!(g.detection.steam_app_id, 2246340);
+        assert_eq!(g.target_for("natives"), Some("natives"));
+        assert_eq!(g.canonical_case, vec!["STM"]);
+
+        // The loader is the part that writes into somebody's Proton prefix, so
+        // it is the part most worth pinning field by field.
+        let loader = g.loader.expect("loader");
+        assert_eq!(loader.kind, LoaderKind::DllProxy);
+        assert_eq!(loader.proxy_dll.as_deref(), Some("dinput8.dll"));
+        assert_eq!(
+            loader.proton.wine_dll_overrides.as_deref(),
+            Some("dinput8=n,b")
+        );
+        assert!(loader.proton.requires_prefix_write);
+
+        let chain = g.pak_chain.expect("pak chain");
+        assert_eq!(chain.digits, 3);
+        assert_eq!(chain.start_index, 1);
+    }
+
+    #[test]
+    fn a_profile_for_a_game_this_build_has_never_heard_of_still_reads() {
+        // The whole point of publishing profiles: a game arrives without an app
+        // release. An unrecognised engine name selects no behaviour, so it is
+        // recorded as other rather than refused.
+        use apoc_domain::Engine;
+
+        let g = parse(
+            r#"{
+                "id": "some-new-game", "name": "Some New Game",
+                "engine": "unheard-of", "loadOrder": "priority",
+                "conflictScope": "per-relative-path", "caseSensitive": true,
+                "detection": { "steamAppId": 42 },
+                "deployTargets": [{ "source": "Data", "target": "Data" }]
+            }"#,
+        );
+        assert_eq!(g.engine, Engine::Other);
+        assert_eq!(g.target_for("Data"), Some("Data"));
+        assert!(g.loader.is_none());
+    }
+
+    #[test]
+    fn a_document_missing_something_required_is_refused_rather_than_half_read() {
+        // Half a profile is worse than the bundled one it would replace, so the
+        // failure has to be at the parse rather than in the fields.
+        let broken = r#"{ "id": "x", "name": "X", "engine": "creation" }"#;
+        assert!(serde_json::from_str::<WireProfile>(broken).is_err());
+    }
+
+    #[test]
+    fn a_field_this_build_does_not_know_is_ignored_rather_than_fatal() {
+        // The reason this has its own wire type: the domain type denies unknown
+        // fields, which is right for a file somebody edits and wrong for a
+        // document a newer service sent.
+        let with_extra = r#"{
+            "id": "x", "name": "X", "engine": "creation", "loadOrder": "priority",
+            "conflictScope": "per-relative-path", "caseSensitive": true,
+            "detection": { "steamAppId": 1 },
+            "somethingAddedLater": { "nested": true }
+        }"#;
+        assert!(serde_json::from_str::<WireProfile>(with_extra).is_ok());
+    }
+
+    #[test]
+    fn a_refusal_says_what_happened_without_naming_a_protocol() {
+        // These reach somebody who wants to install a mod, not a log.
+        let reached = describe(ureq::Error::Status(
+            503,
+            ureq::Response::new(503, "Service Unavailable", "").unwrap(),
+        ));
+        assert!(reached.contains("built-in profiles"), "{reached}");
+
+        let refused = describe(ureq::Error::Status(
+            418,
+            ureq::Response::new(418, "Teapot", "").unwrap(),
+        ));
+        assert!(refused.contains("418"), "{refused}");
+    }
+}
