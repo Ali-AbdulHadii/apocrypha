@@ -39,6 +39,24 @@ pub struct ArchiveIndex {
     pub entries: Vec<RawEntry>,
     /// `(containing_dir, raw_modinfo_text)` in first-seen order, deduped by dir.
     pub modinfos: Vec<(String, String)>,
+    /// The FOMOD manifest, when the archive ships one.
+    pub fomod: Option<FomodSource>,
+}
+
+/// A `fomod/` directory's documents, captured during the same pass that indexes
+/// everything else.
+#[derive(Debug, Clone)]
+pub struct FomodSource {
+    /// Working path of the directory *containing* `fomod/`, empty at the root.
+    /// Rewritten alongside [`RawEntry::path`] when a wrapper is stripped.
+    pub dir: String,
+    /// `ModuleConfig.xml`'s true name inside the archive. Discovery matches
+    /// case-insensitively but extraction does not, so the casing found here is
+    /// the only one that will ever open the file again.
+    pub config_archive_path: String,
+    pub config: Vec<u8>,
+    /// `info.xml`, when present. Optional metadata; a missing one is not an error.
+    pub info: Option<Vec<u8>>,
 }
 
 /// Container formats the engine can read.
@@ -230,20 +248,86 @@ fn scan_rar(archive_path: &Path, want: Want, on_entry: OnEntry) -> Result<()> {
     Ok(())
 }
 
-/// Read an archive into an [`ArchiveIndex`], capturing `modinfo.ini` bodies.
+/// Which FOMOD document a path is, if it is one.
+///
+/// Both the directory and the file name are matched case-insensitively, because
+/// `fomod/ModuleConfig.xml`, `FOMOD/moduleconfig.xml` and every casing between
+/// them appear in the wild and all of them are the same file to the tools that
+/// wrote them. The directory must genuinely be named `fomod`: a stray
+/// `info.xml` elsewhere in an archive is somebody's documentation.
+fn fomod_doc(path: &str) -> Option<FomodDoc> {
+    if !parent_dir(path)
+        .rsplit('/')
+        .next()
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("fomod")
+    {
+        return None;
+    }
+    let file = basename(path);
+    if file.eq_ignore_ascii_case("moduleconfig.xml") {
+        Some(FomodDoc::Config)
+    } else if file.eq_ignore_ascii_case("info.xml") {
+        Some(FomodDoc::Info)
+    } else {
+        None
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FomodDoc {
+    Config,
+    Info,
+}
+
+/// How deep in the archive a path sits, used to prefer the outermost manifest.
+fn depth(path: &str) -> usize {
+    path.matches('/').count()
+}
+
+/// Read an archive into an [`ArchiveIndex`], capturing `modinfo.ini` bodies and
+/// any FOMOD manifest.
+///
+/// Both are collected in the **same** forward pass. Rar is a cursor that cannot
+/// be rewound, so a second walk would mean opening the archive again, and the
+/// module's whole shape exists to avoid that.
 pub fn read_index(archive_path: &Path) -> Result<ArchiveIndex> {
     let mut index = ArchiveIndex::default();
     let mut seen_modinfo_dirs = std::collections::HashSet::new();
+    // Kept separately from `index.fomod` because config and info arrive in
+    // whichever order the archive stored them, and either may be missing.
+    let mut config: Option<(String, Vec<u8>)> = None;
+    let mut info: Option<(String, Vec<u8>)> = None;
 
     scan(
         archive_path,
-        &mut |path| basename(path).eq_ignore_ascii_case("modinfo.ini"),
+        &mut |path| basename(path).eq_ignore_ascii_case("modinfo.ini") || fomod_doc(path).is_some(),
         &mut |path, size, bytes| {
             if let Some(buf) = bytes {
-                let text = String::from_utf8_lossy(&buf).into_owned();
-                let dir = parent_dir(path);
-                if seen_modinfo_dirs.insert(dir.clone()) {
-                    index.modinfos.push((dir, text));
+                match fomod_doc(path) {
+                    Some(FomodDoc::Config) => {
+                        // An archive containing two FOMODs is a repack, and
+                        // merging two installers would be inventing a third.
+                        // The outermost one is the one the repacker meant.
+                        if config
+                            .as_ref()
+                            .map_or(true, |(p, _)| depth(path) < depth(p))
+                        {
+                            config = Some((path.to_string(), buf));
+                        }
+                    }
+                    Some(FomodDoc::Info) => {
+                        if info.as_ref().map_or(true, |(p, _)| depth(path) < depth(p)) {
+                            info = Some((path.to_string(), buf));
+                        }
+                    }
+                    None => {
+                        let text = String::from_utf8_lossy(&buf).into_owned();
+                        let dir = parent_dir(path);
+                        if seen_modinfo_dirs.insert(dir.clone()) {
+                            index.modinfos.push((dir, text));
+                        }
+                    }
                 }
             }
             index.entries.push(RawEntry {
@@ -254,6 +338,21 @@ pub fn read_index(archive_path: &Path) -> Result<ArchiveIndex> {
             Ok(())
         },
     )?;
+
+    // `info.xml` alone is not a FOMOD. The manifest is what declares the
+    // installer, and without it there is nothing to install from.
+    if let Some((config_path, config_bytes)) = config {
+        let fomod_dir = parent_dir(&config_path);
+        index.fomod = Some(FomodSource {
+            dir: parent_dir(&fomod_dir),
+            config_archive_path: config_path,
+            config: config_bytes,
+            // Only an `info.xml` belonging to the same `fomod/` directory.
+            info: info
+                .filter(|(p, _)| parent_dir(p) == fomod_dir)
+                .map(|(_, b)| b),
+        });
+    }
 
     Ok(index)
 }

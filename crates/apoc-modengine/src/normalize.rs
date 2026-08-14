@@ -2,6 +2,7 @@
 //! wrapper folder, classify the installer model, and derive option groups/roles.
 
 use crate::archive::ArchiveIndex;
+use crate::error::{ModEngineError, Result};
 use crate::modinfo::Modinfo;
 use crate::naming;
 use crate::rules::GameRules;
@@ -53,6 +54,12 @@ fn strip_wrapper(index: &mut ArchiveIndex, rules: &GameRules) {
         if rules.is_payload_root(&only) || rules.rewrap_prefix(&only).is_some() {
             break;
         }
+        // `fomod/` is the installer itself, not a wrapper around one. An archive
+        // whose only top-level entry is `fomod/` would otherwise be stripped
+        // down to nothing at all.
+        if only.eq_ignore_ascii_case("fomod") {
+            break;
+        }
         let candidate = format!("{prefix}{only}/");
         let has_direct_modinfo = index.entries.iter().any(|e| {
             e.path
@@ -78,10 +85,26 @@ fn strip_wrapper(index: &mut ArchiveIndex, rules: &GameRules) {
             *dir = stripped.to_string();
         }
     }
+    // The manifest's working directory moves with everything else. Its
+    // `config_archive_path` deliberately does not: that is the archive's own
+    // name for the file, and extraction still has to find it there.
+    if let Some(f) = &mut index.fomod {
+        let with_slash = format!("{}/", f.dir);
+        f.dir = match with_slash.strip_prefix(&prefix) {
+            Some(stripped) => stripped.trim_end_matches('/').to_string(),
+            None => f.dir.clone(),
+        };
+    }
 }
 
 /// Classify the archive into an installer model from its shape.
 fn detect(index: &ArchiveIndex, rules: &GameRules) -> InstallerModel {
+    // A manifest the author wrote outranks anything inferred from folder shape.
+    // A repack shipping both a ModuleConfig.xml and stray modinfo.ini files has
+    // exactly one statement of intent in it, and this is it.
+    if index.fomod.is_some() && rules.supports_format("fomod") {
+        return InstallerModel::Fomod;
+    }
     match index.modinfos.len() {
         n if n >= 2 => InstallerModel::FluffyAio,
         1 => InstallerModel::FluffySingle,
@@ -469,18 +492,33 @@ fn normalize_single(
 }
 
 /// Normalize a fully-read archive index into a canonical bundle.
+///
+/// Fallible since FOMOD arrived. Every other model is derived from what the
+/// archive contains and cannot fail: the worst case is `Unknown`, which is a
+/// classification rather than an error. A manifest can be malformed, or can ask
+/// for something this build will not do, and both have to be reportable —
+/// refusing loudly is the whole reason the format is worth supporting at all.
 pub fn normalize(
     mut index: ArchiveIndex,
     archive_stem: &str,
     sha: Option<String>,
     rules: &GameRules,
-) -> ModBundle {
+) -> Result<ModBundle> {
     strip_wrapper(&mut index, rules);
     let model = detect(&index, rules);
-    match model {
+    Ok(match model {
         InstallerModel::FluffyAio => normalize_fluffy_aio(&index, archive_stem, sha, rules),
+        // Reading the manifest lands in the next commit. Until then a FOMOD is
+        // refused rather than handed to `normalize_single`, which would install
+        // every option at once because it cannot see that there were options.
+        InstallerModel::Fomod => {
+            return Err(ModEngineError::FomodUnsupported {
+                feature: "a conditional installer".to_string(),
+                detail: "support for reading fomod/ModuleConfig.xml is not finished".to_string(),
+            })
+        }
         other => normalize_single(&index, other, archive_stem, sha, rules),
-    }
+    })
 }
 
 /// Small helper trait so bundle metadata can read raw modinfo values.
