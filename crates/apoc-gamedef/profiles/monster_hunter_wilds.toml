@@ -17,6 +17,11 @@ nexus_domain = "monsterhunterwilds"
 canonical_case = ["STM"]
 
 # Format detectors this game accepts, in priority order.
+#
+# One entry in a list like this now changes behaviour rather than recording
+# intent: `fomod`. A FOMOD announces itself in a manifest instead of being
+# inferred from an archive's shape, so a game only follows that manifest if it
+# says so here. Wilds mods ship in Fluffy's formats, so it does not.
 formats = ["fluffy-aio", "fluffy-single", "loose-natives", "reframework-only", "pak"]
 
 [detection]

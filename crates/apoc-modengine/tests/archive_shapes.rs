@@ -21,6 +21,8 @@ fn wilds_rules() -> GameRules {
             ("STM".into(), "natives".into()),
         ],
         canonical_case: vec!["STM".into()],
+        formats: Vec::new(),
+        fomod_dest_prefix: String::new(),
     }
 }
 

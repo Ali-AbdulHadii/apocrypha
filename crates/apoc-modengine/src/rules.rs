@@ -28,6 +28,12 @@ pub struct GameRules {
     /// Windows-authored archives use random casing and Linux is case-sensitive,
     /// so without this the game silently ignores half a mod's files.
     pub canonical_case: Vec<String>,
+    /// Archive formats this game's mods are expected to ship in. Empty means
+    /// the profile has no opinion, which is treated as permission rather than
+    /// refusal: see [`GameRules::supports_format`].
+    pub formats: Vec<String>,
+    /// Prefixed to every destination a FOMOD declares for this game.
+    pub fomod_dest_prefix: String,
 }
 
 impl Default for GameRules {
@@ -39,6 +45,8 @@ impl Default for GameRules {
             accepts_pak: false,
             rewrap: Vec::new(),
             canonical_case: Vec::new(),
+            formats: Vec::new(),
+            fomod_dest_prefix: String::new(),
         }
     }
 }
@@ -80,7 +88,25 @@ impl GameRules {
                 .map(|r| (r.folder.clone(), r.prefix.clone()))
                 .collect(),
             canonical_case: profile.canonical_case.clone(),
+            formats: profile.formats.clone(),
+            fomod_dest_prefix: profile
+                .fomod
+                .as_ref()
+                .map(|f| f.dest_prefix.clone())
+                .unwrap_or_default(),
         }
+    }
+
+    /// Whether this game's mods are expected to ship in a given archive format.
+    ///
+    /// An empty list means the profile has said nothing, and that is read as
+    /// permission rather than refusal. The alternative would make
+    /// [`GameRules::default`] — which the CLI and every test fixture use —
+    /// silently reject formats it has always accepted, and a mod that fails to
+    /// install because a profile forgot to enumerate something is a worse
+    /// outcome than one installed on a reasonable default.
+    pub fn supports_format(&self, id: &str) -> bool {
+        self.formats.is_empty() || self.formats.iter().any(|f| f.eq_ignore_ascii_case(id))
     }
 
     /// The prefix a stray root folder must be re-wrapped under, if any.
@@ -163,6 +189,7 @@ mod tests {
                 target: "natives".into(),
             }],
             formats: vec![],
+            fomod: None,
             rewrap: vec![],
             canonical_case: vec!["STM".into()],
             pak_chain: Some(apoc_domain::PakChainSpec {
@@ -214,6 +241,42 @@ mod tests {
             r.canonicalize("natives/STM/art/x.mesh.1"),
             "natives/STM/art/x.mesh.1"
         );
+    }
+
+    #[test]
+    fn a_profile_that_names_no_formats_permits_all_of_them() {
+        // GameRules::default() backs the CLI and every test fixture. Reading an
+        // empty list as "supports nothing" would silently refuse archives that
+        // have always installed.
+        let r = GameRules::default();
+        assert!(r.supports_format("fomod"));
+        assert!(r.supports_format("anything-at-all"));
+    }
+
+    #[test]
+    fn a_profile_that_names_formats_answers_only_for_those() {
+        let mut p = profile();
+        p.formats = vec!["fluffy-aio".into(), "pak".into()];
+        let r = GameRules::from_profile(&p);
+
+        assert!(r.supports_format("fluffy-aio"));
+        assert!(r.supports_format("FLUFFY-AIO"), "matching ignores casing");
+        assert!(!r.supports_format("fomod"));
+    }
+
+    #[test]
+    fn a_game_without_a_fomod_section_prefixes_nothing() {
+        let r = GameRules::from_profile(&profile());
+        assert_eq!(r.fomod_dest_prefix, "");
+    }
+
+    #[test]
+    fn a_game_can_declare_where_its_fomod_destinations_are_rooted() {
+        let mut p = profile();
+        p.fomod = Some(apoc_domain::FomodSpec {
+            dest_prefix: "Data".into(),
+        });
+        assert_eq!(GameRules::from_profile(&p).fomod_dest_prefix, "Data");
     }
 
     #[test]
