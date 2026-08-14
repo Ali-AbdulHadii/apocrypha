@@ -55,6 +55,30 @@ pub struct DeployContext {
     /// How standalone `.pak` mods are named into the engine's patch chain.
     /// `None` for games that do not support PAK mods.
     pub pak_chain: Option<PakChainSpec>,
+    /// Game-relative destinations that must be real copies, never links.
+    ///
+    /// Populate from the active profile's proxy DLLs. This exists because the
+    /// heuristic below cannot express Cyberpunk: it asks whether a path has no
+    /// `/` in it, which is true of REFramework's root-level `dinput8.dll` and
+    /// false of both of Cyberpunk's, which live at `bin/x64/`. So the proxies
+    /// were being hardlinked while `place.rs` said they were "always a real
+    /// copy" and `apoc game cyberpunk-2077` printed the same promise.
+    ///
+    /// Keeping the game-specific answer in data rather than in a branch here is
+    /// also what stops this crate learning the names of games.
+    pub copy_only_paths: Vec<String>,
+}
+
+impl DeployContext {
+    /// Game-relative destinations that must be real copies, taken from a
+    /// profile's loader. Use it to fill [`Self::copy_only_paths`].
+    pub fn copy_only_from(profile: &apoc_domain::GameProfile) -> Vec<String> {
+        profile
+            .loader
+            .as_ref()
+            .map(|l| l.proxy_dlls().into_iter().map(str::to_string).collect())
+            .unwrap_or_default()
+    }
 }
 
 /// What a plan *would* do, without touching anything.
@@ -75,11 +99,24 @@ impl DryRun {
     }
 }
 
-/// Loader proxy DLLs sitting in the game root are always placed as **real
-/// copies**, never links. Wine resolves the proxy DLL before the game starts and
-/// link indirection there is a known source of loaders silently not loading, so
-/// the small disk cost buys reliability at the exact point Linux modding fails.
-fn is_loader_file(game_rel_path: &str) -> bool {
+/// Loader proxy DLLs are always placed as **real copies**, never links. Wine
+/// resolves the proxy DLL before the game starts and link indirection there is a
+/// known source of loaders silently not loading, so the small disk cost buys
+/// reliability at the exact point Linux modding fails.
+///
+/// A root-level `.dll` is the fallback answer, kept because it is what the
+/// profile-free [`GameRules::default`](apoc_modengine) path relies on and it is
+/// correct for REFramework. It is only a heuristic: it cannot see a proxy in a
+/// subdirectory, which is where both of Cyberpunk's live. When the profile says
+/// which paths are proxies, [`DeployContext::copy_only_paths`] answers instead.
+fn is_loader_file(ctx: &DeployContext, game_rel_path: &str) -> bool {
+    if ctx
+        .copy_only_paths
+        .iter()
+        .any(|p| p.eq_ignore_ascii_case(game_rel_path))
+    {
+        return true;
+    }
     !game_rel_path.contains('/')
         && std::path::Path::new(game_rel_path)
             .extension()
@@ -88,7 +125,7 @@ fn is_loader_file(game_rel_path: &str) -> bool {
 
 /// The ladder to use for one file: copy-only for loader DLLs, else the context's.
 fn ladder_for<'a>(ctx: &'a DeployContext, game_rel_path: &str) -> std::borrow::Cow<'a, Ladder> {
-    if is_loader_file(game_rel_path) {
+    if is_loader_file(ctx, game_rel_path) {
         std::borrow::Cow::Owned(Ladder::copy_only())
     } else {
         std::borrow::Cow::Borrowed(&ctx.ladder)
@@ -552,6 +589,8 @@ mod tests {
             journal_dir: dir.path().join("journal"),
             ladder: Ladder::default(),
             pak_chain: None,
+            // Empty, so these tests keep exercising the root-DLL fallback.
+            copy_only_paths: Vec::new(),
         };
         fs::create_dir_all(&ctx.game_dir).unwrap();
         fs::create_dir_all(&ctx.staging_dir).unwrap();

@@ -148,6 +148,12 @@ kind = "dll-proxy"
 # Unlike REFramework's root-level `dinput8.dll`, this proxy belongs beside the
 # game binary. A copy at the game root is simply never loaded.
 proxy_dll = "bin/x64/winmm.dll"
+# Cyber Engine Tweaks is a second, independent proxy in the same folder. It is
+# not RED4ext's, but it is part of this game's loader stack and the manager has
+# to be able to install it: without this line an archive shipping a bare
+# `version.dll` imports as zero files, while a bare `winmm.dll` imports fine.
+# `wine_dll_overrides` below has always named both.
+also_provides = ["bin/x64/version.dll"]
 data_dirs = [
   "red4ext/plugins",
   "r6/scripts",
@@ -195,3 +201,19 @@ prefix = "red4ext"
 [[rewrap]]
 folder = "x64"
 prefix = "bin"
+
+# A Cyber Engine Tweaks lua mod packed from inside `plugins/`, which is a common
+# way to zip one: without this the archive matches no payload root and imports as
+# zero files. It cannot go through the `plugins` rewrap above, because that one
+# resolves to RED4ext.
+[[rewrap]]
+folder = "cyber_engine_tweaks"
+prefix = "bin/x64/plugins"
+
+# Not rewrapped, and this is a decision rather than an omission: a bare `mods/`
+# is ambiguous between REDmod, whose mods live at `{game}/mods/<name>/`, and a
+# CET lua mod, which belongs at `bin/x64/plugins/cyber_engine_tweaks/mods/`.
+# Nothing in the shape of the archive distinguishes them, and guessing wrong
+# puts a mod somewhere the game will not look while reporting success. `mods` is
+# a declared deploy target, so the REDmod reading is what a bare `mods/` gets;
+# a CET mod has to ship its own path.

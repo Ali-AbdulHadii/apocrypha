@@ -293,6 +293,7 @@ mod tests {
             journal_dir: dir.path().join("journal"),
             ladder: Ladder::default(),
             pak_chain: None,
+            copy_only_paths: Vec::new(),
         };
         fs::create_dir_all(&ctx.game_dir).unwrap();
         fs::create_dir_all(&ctx.staging_dir).unwrap();

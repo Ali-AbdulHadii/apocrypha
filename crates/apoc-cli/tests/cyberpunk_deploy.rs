@@ -152,6 +152,7 @@ fn context(tmp: &Path, game_dir: &Path, staging_root: &Path) -> DeployContext {
         // Cyberpunk declares no patch chain: REDengine loads every `.archive`
         // under `archive/pc/mod` directly, so nothing may be renamed.
         pak_chain: None,
+        copy_only_paths: DeployContext::copy_only_from(&cp77_profile()),
     }
 }
 
@@ -318,6 +319,66 @@ fn the_vault_still_has_the_original_on_a_second_install() {
             "cycle {cycle}: the vaulted original did not come back"
         );
     }
+}
+
+#[test]
+fn a_proxy_in_a_subdirectory_is_still_a_real_copy() {
+    // `place.rs` says the loader DLL is "always a real copy, never linked", and
+    // `apoc game cyberpunk-2077` prints the same promise. The test for it asked
+    // whether the path had a `/` in it, which is true of REFramework's
+    // root-level `dinput8.dll` and false of both of Cyberpunk's, so both were
+    // being hardlinked. Wine resolves the proxy before the game starts and link
+    // indirection there is a known cause of a loader silently not loading.
+    let tmp = tempfile::tempdir().unwrap();
+    let game_dir = tmp.path().join("Cyberpunk 2077");
+    let staging_root = tmp.path().join("staging");
+    seed_game_dir(&game_dir);
+
+    let plan = combined_plan(tmp.path(), &staging_root);
+    let ctx = context(tmp.path(), &game_dir, &staging_root);
+    let journal = apply(&ctx, &plan).unwrap();
+
+    // Read from the journal, which records what was actually done, rather than
+    // from the filesystem, where a hardlink and a copy look the same.
+    for proxy in ["bin/x64/winmm.dll", "bin/x64/version.dll"] {
+        let method = journal
+            .ops()
+            .iter()
+            .find_map(|op| match op {
+                JournalOp::Created {
+                    game_rel_path,
+                    method,
+                    ..
+                } if game_rel_path == proxy => Some(*method),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("{proxy} was never deployed"));
+        assert_eq!(
+            method,
+            apoc_domain::DeployMethod::Copy,
+            "{proxy} was linked, against a guarantee the tool prints"
+        );
+    }
+
+    // A file that is not a proxy still takes the context's ladder, so this is
+    // not simply copy-everything with extra steps.
+    let other = journal
+        .ops()
+        .iter()
+        .find_map(|op| match op {
+            JournalOp::Created {
+                game_rel_path,
+                method,
+                ..
+            } if game_rel_path == "red4ext/RED4ext.dll" => Some(*method),
+            _ => None,
+        })
+        .expect("the framework DLL was deployed");
+    assert_ne!(
+        other,
+        apoc_domain::DeployMethod::Copy,
+        "only proxies are copied; everything else uses the link ladder"
+    );
 }
 
 #[test]

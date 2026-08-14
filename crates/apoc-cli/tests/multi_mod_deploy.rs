@@ -109,6 +109,8 @@ fn every_enabled_mod_is_deployed_in_one_transaction() {
         journal_dir: tmp.path().join("journal"),
         ladder: Ladder::default(),
         pak_chain: Some(wilds_chain()),
+        // Wilds' proxy is a root-level DLL, which the fallback already covers.
+        copy_only_paths: Vec::new(),
     };
 
     let dr = dry_run(&ctx, &combined).unwrap();
@@ -195,6 +197,8 @@ fn pak_index_does_not_drift_across_reverted_deployments() {
         journal_dir: tmp.path().join("journal"),
         ladder: Ladder::default(),
         pak_chain: Some(wilds_chain()),
+        // Wilds' proxy is a root-level DLL, which the fallback already covers.
+        copy_only_paths: Vec::new(),
     };
 
     let j1 = apply(&ctx, &plan).unwrap();

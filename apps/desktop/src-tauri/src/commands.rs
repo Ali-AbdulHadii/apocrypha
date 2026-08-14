@@ -935,6 +935,11 @@ pub(crate) fn build_context(state: &AppState, game_id: &str) -> CmdResult<Deploy
     let install_dir = game
         .install_dir
         .ok_or_else(|| "game install directory unknown".to_string())?;
+    // From the profile in force, not the bundled one. A patch chain or a
+    // copy-only path that changed in a game update is exactly the kind of
+    // correction publishing profiles exists to deliver, and a deployment
+    // reading the stale one would put a mod in a slot the game no longer reads.
+    let profile = effective_profile(state, game_id).ok();
     Ok(DeployContext {
         game_id: game_id.to_string(),
         game_dir: PathBuf::from(install_dir),
@@ -942,13 +947,11 @@ pub(crate) fn build_context(state: &AppState, game_id: &str) -> CmdResult<Deploy
         vault_dir: state.paths.vault(game_id),
         journal_dir: state.paths.journal(game_id),
         ladder: Ladder::default(),
-        // From the profile in force, not the bundled one. A patch chain that
-        // changed in a game update is exactly the kind of correction publishing
-        // profiles exists to deliver, and a deployment reading the stale one
-        // would put a mod in a slot the game no longer reads.
-        pak_chain: effective_profile(state, game_id)
-            .ok()
-            .and_then(|p| p.pak_chain),
+        pak_chain: profile.as_ref().and_then(|p| p.pak_chain.clone()),
+        copy_only_paths: profile
+            .as_ref()
+            .map(DeployContext::copy_only_from)
+            .unwrap_or_default(),
     })
 }
 
@@ -1182,6 +1185,10 @@ pub fn rollback_last(state: State<AppState>, game_id: String) -> CmdResult<Rollb
         journal_dir: state.paths.journal(&game_id),
         ladder: Ladder::default(),
         pak_chain: builtin_profile(&game_id).ok().and_then(|p| p.pak_chain),
+        copy_only_paths: builtin_profile(&game_id)
+            .ok()
+            .map(|p| DeployContext::copy_only_from(&p))
+            .unwrap_or_default(),
     };
     let user_reg = proton_prefix.map(|p| PathBuf::from(p).join("user.reg"));
 

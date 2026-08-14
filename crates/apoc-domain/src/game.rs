@@ -98,6 +98,22 @@ pub struct LoaderSpec {
     /// `dinput8.dll` in the game root, RED4ext wants `bin/x64/winmm.dll`.
     #[serde(default)]
     pub proxy_dll: Option<String>,
+    /// Further proxy DLLs this game's stack uses, game-relative like
+    /// [`Self::proxy_dll`].
+    ///
+    /// One `proxy_dll` was enough while a game had one loader. Cyberpunk has
+    /// two independent ones in the same folder — RED4ext takes `winmm`, Cyber
+    /// Engine Tweaks takes `version` — and the profile already knew that,
+    /// because `wine_dll_overrides` has always named both. It just had nowhere
+    /// to say so. The consequence was asymmetric and hard to guess at: an
+    /// archive shipping a bare `winmm.dll` imported, an archive shipping a bare
+    /// `version.dll` imported nothing at all, and both are ordinary shapes on
+    /// Nexus.
+    ///
+    /// Every entry is treated exactly as `proxy_dll` is: recognised at an
+    /// archive root, and placed as a real copy rather than a link.
+    #[serde(default)]
+    pub also_provides: Vec<String>,
     /// Game-relative directories the loader reads its own data from.
     #[serde(default)]
     pub data_dirs: Vec<String>,
@@ -113,6 +129,18 @@ impl LoaderSpec {
         let dll = self.proxy_dll.as_deref()?;
         let name = dll.rsplit('/').next().unwrap_or(dll);
         Some(name.strip_suffix(".dll").unwrap_or(name))
+    }
+
+    /// Every proxy DLL this loader places, game-relative, `proxy_dll` first.
+    ///
+    /// The single source of truth for both questions asked about proxies: what
+    /// an archive may ship at its root, and what must never be linked.
+    pub fn proxy_dlls(&self) -> Vec<&str> {
+        self.proxy_dll
+            .as_deref()
+            .into_iter()
+            .chain(self.also_provides.iter().map(String::as_str))
+            .collect()
     }
 
     /// The DLL overrides this loader needs, as `(module, value)` pairs.
@@ -298,6 +326,7 @@ mod tests {
             name: "L".into(),
             kind: LoaderKind::DllProxy,
             proxy_dll: Some(dll.into()),
+            also_provides: vec![],
             data_dirs: vec![],
             proton: ProtonLoaderSpec {
                 wine_dll_overrides: overrides.map(str::to_string),

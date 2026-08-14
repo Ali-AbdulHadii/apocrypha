@@ -121,6 +121,9 @@ fn full_install_deploy_and_rollback_cycle() {
         journal_dir: paths.journal(game_id),
         ladder: Ladder::default(),
         pak_chain: None,
+        // Wilds' proxy sits at the game root, where the fallback heuristic
+        // already recognises it, so this stays empty on purpose.
+        copy_only_paths: Vec::new(),
     };
 
     // ---- 5. Dry run changes nothing -------------------------------------

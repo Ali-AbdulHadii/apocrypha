@@ -45,7 +45,7 @@ fn archive(fragments: &[&str]) -> Option<PathBuf> {
 }
 
 /// Analyse one archive and return it with its destinations, sorted.
-fn analyse(path: &PathBuf) -> (ModBundle, Vec<String>) {
+fn analyse(path: &std::path::Path) -> (ModBundle, Vec<String>) {
     let bundle = apoc_modengine::analyze_archive_with(path, &cp77_rules())
         .expect("a real Cyberpunk archive analyses");
     let mut dests: Vec<String> = bundle

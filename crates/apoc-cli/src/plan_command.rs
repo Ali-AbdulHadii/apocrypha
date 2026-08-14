@@ -67,6 +67,7 @@ pub fn run(game_id: &str, archive: &Path, forced_only: bool) -> Result<(), Strin
         journal_dir: tmp.path().join("journal"),
         ladder: Ladder::default(),
         pak_chain: profile.pak_chain.clone(),
+        copy_only_paths: DeployContext::copy_only_from(&profile),
     };
     let dr = dry_run(&ctx, &plan).map_err(|e| e.to_string())?;
 

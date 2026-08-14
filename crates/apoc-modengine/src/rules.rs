@@ -67,16 +67,23 @@ impl GameRules {
         // A loader's proxy DLL is content the manager must be able to install,
         // because that is how the loader reaches the game at all. The archive
         // ships it as a bare file name; the profile says where it belongs.
+        //
+        // Every proxy, not only the first: a game may have more than one, and
+        // recognising one of two means an archive shipping the other imports as
+        // zero files with nothing to explain why.
         let root_files = profile
             .loader
             .as_ref()
-            .and_then(|l| l.proxy_dll.clone())
-            .map(|dest| {
-                let name = dest.rsplit('/').next().unwrap_or(&dest).to_string();
-                (name, dest)
+            .map(|l| {
+                l.proxy_dlls()
+                    .into_iter()
+                    .map(|dest| {
+                        let name = dest.rsplit('/').next().unwrap_or(dest).to_string();
+                        (name, dest.to_string())
+                    })
+                    .collect()
             })
-            .into_iter()
-            .collect();
+            .unwrap_or_default();
 
         GameRules {
             payload_roots: if payload_roots.is_empty() {
@@ -217,6 +224,7 @@ mod tests {
                 name: "REFramework".into(),
                 kind: LoaderKind::DllProxy,
                 proxy_dll: Some("dinput8.dll".into()),
+                also_provides: vec![],
                 data_dirs: vec![],
                 proton: ProtonLoaderSpec::default(),
             }),
