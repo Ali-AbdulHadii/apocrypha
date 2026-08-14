@@ -45,10 +45,20 @@ canonical_case = [
   "tools",
 ]
 
-# Cyberpunk mods carry no installer metadata of their own: an archive is either
-# loose payload roots or a loader release. There is no Fluffy equivalent here,
-# and FOMOD is a Bethesda format, so neither is listed.
-formats = ["loose-roots", "loader"]
+# Cyberpunk mods usually carry no installer metadata of their own: an archive is
+# either loose payload roots or a loader release, and there is no Fluffy
+# equivalent here.
+#
+# FOMOD is listed anyway. It began as a Bethesda format, but it is a generic
+# XML installer and Cyberpunk authors do ship it — most often for a mod with
+# body-type or texture-resolution variants, which is the same problem it was
+# written to solve. Detection is by the presence of `fomod/ModuleConfig.xml`,
+# not by game, so listing it here costs nothing when a mod does not have one and
+# is the difference between a wizard and a wrong guess when it does.
+#
+# None of the five real archives this profile was checked against is a FOMOD, so
+# this arm is not exercised by them. It is covered by the format's own tests.
+formats = ["loose-roots", "loader", "fomod"]
 
 [detection]
 steam_app_id = 1091500

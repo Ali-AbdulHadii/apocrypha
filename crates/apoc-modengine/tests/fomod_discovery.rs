@@ -22,7 +22,7 @@ fn fomod_rules() -> GameRules {
     }
 }
 
-/// A profile that does not, as both shipped profiles do not.
+/// A profile that does not.
 fn no_fomod_rules() -> GameRules {
     GameRules {
         formats: vec!["fluffy-aio".into()],
@@ -223,4 +223,35 @@ fn a_manifest_inside_a_release_folder_is_still_found() {
             ("My Mod v1.0/core.esp", b"E"),
         ]
     ));
+}
+
+#[test]
+fn cyberpunk_accepts_a_fomod_because_its_authors_ship_them() {
+    // `formats` is a gate, not documentation: a non-empty list that omitted
+    // `fomod` refused one outright. Cyberpunk's did, and Cyberpunk mods with
+    // body-type or texture-resolution variants are shipped as FOMODs — the same
+    // problem the format was written for.
+    //
+    // Read from the shipped profile rather than restated here, so removing the
+    // entry fails in this test.
+    use apoc_gamedef::{GameDatabaseSource, LocalBuiltin};
+    let profile = LocalBuiltin::new().get("cyberpunk-2077").unwrap();
+    let rules = GameRules::from_profile(&profile);
+
+    assert!(rules.supports_format("fomod"));
+    assert!(detected_as_fomod(
+        &rules,
+        &[
+            ("fomod/ModuleConfig.xml", INSTALLING_CONFIG),
+            ("archive/pc/mod/Body.archive", b"DATA"),
+        ]
+    ));
+
+    // The formats it already had are untouched.
+    assert!(rules.supports_format("loose-roots"));
+    assert!(rules.supports_format("loader"));
+    assert!(
+        !rules.supports_format("fluffy-aio"),
+        "the list is still a gate, not a free pass"
+    );
 }
