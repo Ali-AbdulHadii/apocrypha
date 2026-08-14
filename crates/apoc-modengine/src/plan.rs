@@ -382,6 +382,8 @@ mod tests {
             screenshot: None,
             screenshot_archive_path: None,
             select_mode: mode,
+            recommended: false,
+            blocked_reason: None,
             deployable: !paths.is_empty(),
             payload: paths
                 .iter()
@@ -390,6 +392,7 @@ mod tests {
                     game_rel_path: p.to_string(),
                     root: DeployRoot::Natives,
                     size: 10,
+                    priority: 0,
                 })
                 .collect(),
             raw_modinfo: BTreeMap::new(),
@@ -404,9 +407,11 @@ mod tests {
             category: None,
             installer_model: apoc_domain::InstallerModel::FluffyAio,
             archive_sha256: None,
+            fomod: None,
             groups: vec![OptionGroup {
                 index: Some(1),
                 label: "G".into(),
+                cardinality: None,
                 options,
             }],
         }

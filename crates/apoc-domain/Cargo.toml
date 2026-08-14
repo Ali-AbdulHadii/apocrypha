@@ -8,3 +8,8 @@ description = "Pure domain types for Apocrypha (zero I/O): games, mods, options,
 
 [dependencies]
 serde = { workspace = true }
+
+[dev-dependencies]
+# Only for the tests that prove a bundle stored by an older build still loads.
+# The crate itself stays free of any serialisation format.
+serde_json = { workspace = true }
