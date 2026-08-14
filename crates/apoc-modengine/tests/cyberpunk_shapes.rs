@@ -373,6 +373,56 @@ fn the_full_red4ext_release_keeps_its_own_layout() {
     );
 }
 
+#[test]
+fn a_bare_cet_proxy_imports_just_like_a_bare_red4ext_one() {
+    // `[loader]` held one `proxy_dll`, so `winmm.dll` was recognised and
+    // `version.dll` was not, though both are ordinary Nexus shapes and the
+    // profile's `wine_dll_overrides` has always named both.
+    let b = analyze(&[("version.dll", b"MZ")]);
+    assert_eq!(all_dests(&b), vec!["bin/x64/version.dll"]);
+
+    let b = analyze(&[("winmm.dll", b"MZ")]);
+    assert_eq!(all_dests(&b), vec!["bin/x64/winmm.dll"]);
+}
+
+#[test]
+fn a_cet_mod_packed_from_inside_the_plugins_folder_imports() {
+    // A common way to zip a CET lua mod, and one that matched no payload root:
+    // it imported as zero files. It cannot use the `plugins` rewrap, which
+    // resolves to RED4ext.
+    let b = analyze(&[
+        ("cyber_engine_tweaks/mods/MyMod/init.lua", b"return {}"),
+        ("cyber_engine_tweaks/mods/MyMod/config.json", b"{}"),
+    ]);
+    let mut dests = all_dests(&b);
+    dests.sort();
+    assert_eq!(
+        dests,
+        vec![
+            "bin/x64/plugins/cyber_engine_tweaks/mods/MyMod/config.json",
+            "bin/x64/plugins/cyber_engine_tweaks/mods/MyMod/init.lua",
+        ]
+    );
+}
+
+#[test]
+fn a_bare_mods_folder_is_read_as_redmod_rather_than_guessed_at() {
+    // Ambiguous between REDmod and a CET lua mod, and nothing in the archive
+    // distinguishes them. `mods` is a declared deploy target, so a bare `mods/`
+    // takes the REDmod reading; guessing the other way would put files where
+    // the game never looks while reporting success.
+    let b = analyze(&[
+        ("mods/MyMod/info.json", b"{\"name\":\"MyMod\"}"),
+        ("mods/MyMod/archives/mod.archive", b"DATA"),
+    ]);
+    let mut dests = all_dests(&b);
+    dests.sort();
+    assert_eq!(
+        dests,
+        vec!["mods/MyMod/archives/mod.archive", "mods/MyMod/info.json"]
+    );
+}
+
 /// A known-wrong output, pinned so it is visible rather than discovered.
 ///
 /// `canonical_case` entries are bare segments and match anywhere in a path, so
