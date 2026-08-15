@@ -16,6 +16,7 @@ const CYBERPUNK_2077: &str = include_str!("../profiles/cyberpunk_2077.toml");
 const SKYRIM_SPECIAL_EDITION: &str = include_str!("../profiles/skyrim_special_edition.toml");
 const DRAGONS_DOGMA_2: &str = include_str!("../profiles/dragons_dogma_2.toml");
 const RESIDENT_EVIL_4_2023: &str = include_str!("../profiles/resident_evil_4_2023.toml");
+const MONSTER_HUNTER_RISE: &str = include_str!("../profiles/monster_hunter_rise.toml");
 
 #[derive(Debug, Error)]
 pub enum GameDefError {
@@ -59,6 +60,7 @@ impl LocalBuiltin {
             SKYRIM_SPECIAL_EDITION,
             DRAGONS_DOGMA_2,
             RESIDENT_EVIL_4_2023,
+            MONSTER_HUNTER_RISE,
         ]
     }
 }
@@ -380,6 +382,42 @@ mod tests {
             matches!(src.get("resident-evil-4"), Err(GameDefError::NotFound(_))),
             "the unqualified id must stay free for the 2005 game"
         );
+    }
+
+    #[test]
+    fn monster_hunter_rise_profile_is_correct() {
+        let src = LocalBuiltin::new();
+        let g = src.get("monster-hunter-rise").expect("rise present");
+
+        assert_eq!(g.name, "Monster Hunter Rise");
+        assert_eq!(g.engine, Engine::ReEngine);
+        assert_eq!(g.detection.steam_app_id, 1446780);
+        assert_eq!(g.nexus_domain.as_deref(), Some("monsterhunterrise"));
+
+        assert_eq!(g.target_for("natives"), Some("natives"));
+        assert_eq!(g.target_for("reframework"), Some("reframework"));
+
+        let chain = g.pak_chain.as_ref().expect("standalone paks are supported");
+        assert_eq!(chain.filename(1), "re_chunk_000.pak.patch_001.pak");
+
+        let loader = g.loader.as_ref().expect("REFramework loader defined");
+        assert_eq!(loader.kind, LoaderKind::DllProxy);
+        assert_eq!(loader.proxy_dll.as_deref(), Some("dinput8.dll"));
+    }
+
+    #[test]
+    fn the_two_monster_hunter_games_are_not_confused_for_each_other() {
+        // They share a series, a publisher and an engine, and differ in the
+        // two fields that route everything: the app id decides which install
+        // is found, and the Nexus domain decides where a download comes from.
+        // Getting either crossed would look like the app working perfectly on
+        // the wrong game.
+        let src = LocalBuiltin::new();
+        let rise = src.get("monster-hunter-rise").unwrap();
+        let wilds = src.get("monster-hunter-wilds").unwrap();
+
+        assert_ne!(rise.detection.steam_app_id, wilds.detection.steam_app_id);
+        assert_ne!(rise.nexus_domain, wilds.nexus_domain);
     }
 
     #[test]
