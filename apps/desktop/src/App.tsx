@@ -1123,9 +1123,13 @@ export default function App() {
             previewSource={previewSource}
             carry={wizardCarry}
             replaces={wizardReplaces}
-            // Only an archive can be re-evaluated: editing an installed mod's
-            // options works from what was staged, and the conditions that
-            // produced it were settled at install time.
+            // Only an archive can be re-evaluated live, because re-evaluating
+            // needs the archive. Editing an installed mod works from what was
+            // staged, and its conditions are applied on the Rust side instead:
+            // `list_mods` narrows the groups it hands over with the stored
+            // answers, and `set_mod_selection` narrows again before writing, so
+            // a selection is never wider than the conditions allow whichever
+            // way it arrives.
             source={
               pendingArchive && activeGameId
                 ? { gameId: activeGameId, archivePath: pendingArchive }
