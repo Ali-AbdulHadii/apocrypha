@@ -6,7 +6,7 @@ This document covers the dev setup, the checks your change has to pass, where th
 
 ## Development setup
 
-Rust (stable, 1.77 or newer):
+Rust (stable, 1.93 or newer):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
