@@ -216,9 +216,113 @@ impl GameDatabaseSource for ApocryphaGameDb {
 /// on a later start, when nothing has been fetched yet and there may be no
 /// network at all.
 pub fn parse_document(json: &str) -> Result<GameProfile, String> {
-    serde_json::from_str::<WireProfile>(json)
+    let profile = serde_json::from_str::<WireProfile>(json)
         .map(WireProfile::into_profile)
-        .map_err(|e| format!("a published game profile could not be read: {e}"))
+        .map_err(|e| format!("a published game profile could not be read: {e}"))?;
+    validate(&profile)?;
+    Ok(profile)
+}
+
+/// A path component a profile may name.
+///
+/// Profile paths are relative and go downwards: into the game directory, into
+/// the app's own data directory, into a staging tree. `..`, a root, a drive
+/// letter and a NUL are the four ways to say otherwise, and a backslash is the
+/// fifth once the engine compiles for Windows.
+fn descends(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains('\0')
+        && !path.contains(':')
+        && !path
+            .split('/')
+            .any(|seg| seg == ".." || seg == "." || seg.is_empty())
+}
+
+/// An id a profile may claim.
+///
+/// The id is not only a name. It is a directory under the app's data root, a
+/// key in the local database and a segment in a URL, so it has to be spellable
+/// as all three. The bundled profiles are already slugs; this says so.
+fn id_is_a_slug(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Refuse a published profile that would write somewhere it should not.
+///
+/// A profile decides where files land in somebody's game directory and under
+/// their data root. While every profile was compiled into the binary that was a
+/// review question. Published, it is a document arriving over a network, and
+/// the honest treatment of a document is to check it before believing it.
+///
+/// Refused by name, and whole: [`ApocryphaGameDb::fetch`] discards the profile
+/// and keeps the bundled one, which is the same answer it gives for a timeout
+/// or a document that will not parse. A half-applied profile — the deploy
+/// targets from the service, the loader from the binary — is a configuration
+/// nobody wrote and nobody tested.
+fn validate(profile: &GameProfile) -> Result<(), String> {
+    let id = &profile.id;
+    if !id_is_a_slug(id) {
+        return Err(format!(
+            "a published game profile claims the id {id:?}, which is not a slug"
+        ));
+    }
+
+    let mut paths: Vec<(&str, &str)> = Vec::new();
+    for t in &profile.deploy_targets {
+        paths.push(("a deploy target source", &t.source));
+        paths.push(("a deploy target", &t.target));
+    }
+    for r in &profile.rewrap {
+        paths.push(("a rewrap folder", &r.folder));
+        paths.push(("a rewrap prefix", &r.prefix));
+    }
+    for c in &profile.canonical_case {
+        paths.push(("a canonical-case path", c));
+    }
+    if let Some(f) = &profile.fomod {
+        paths.push(("the FOMOD destination prefix", &f.dest_prefix));
+    }
+    if let Some(l) = &profile.loader {
+        if let Some(dll) = &l.proxy_dll {
+            paths.push(("the loader's proxy DLL", dll));
+        }
+        for dll in &l.also_provides {
+            paths.push(("a loader proxy DLL", dll));
+        }
+        for dir in &l.data_dirs {
+            paths.push(("a loader data directory", dir));
+        }
+    }
+    if let Some(chain) = &profile.pak_chain {
+        // A filename rather than a path, and it is built from by formatting, so
+        // it must not contain a separator either.
+        paths.push(("the pak chain pattern", &chain.pattern));
+    }
+
+    for (what, path) in paths {
+        if !descends(path) {
+            return Err(format!(
+                "the published profile for {id} names {what} that leaves the directory it is written into: {path:?}"
+            ));
+        }
+    }
+
+    if let Some(chain) = &profile.pak_chain {
+        if chain.pattern.contains('/') {
+            return Err(format!(
+                "the published profile for {id} gives a pak chain pattern that is a path, not a filename: {:?}",
+                chain.pattern
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// A failure in the terms of the person waiting on it.
@@ -582,5 +686,74 @@ mod tests {
             ureq::Response::new(418, "Teapot", "").unwrap(),
         ));
         assert!(refused.contains("418"), "{refused}");
+    }
+
+    /// The check that matters most: a published profile is the same document a
+    /// bundled one is, so a rule the bundled set cannot satisfy would silently
+    /// send everybody back to the built-in profiles for ever.
+    #[test]
+    fn every_bundled_profile_satisfies_the_rules_asked_of_a_published_one() {
+        let bundled = LocalBuiltin::new().all().unwrap();
+        assert!(!bundled.is_empty(), "there are profiles to check");
+        for profile in bundled {
+            assert_eq!(
+                validate(&profile),
+                Ok(()),
+                "the bundled profile for {} would be refused if it were published",
+                profile.id
+            );
+        }
+    }
+
+    /// A profile decides where files are written. Published, it is a document
+    /// from somewhere else, and these are the ways one could ask for a write
+    /// outside the directory it is entitled to.
+    #[test]
+    fn a_profile_that_would_write_outside_its_directories_is_refused() {
+        let escapes = [
+            (r#""id": "monster-hunter-wilds""#, r#""id": "../../etc""#),
+            (
+                r#""target": "natives""#,
+                r#""target": "../../../.config/autostart""#,
+            ),
+            (r#""target": "natives""#, r#""target": "/etc/systemd/user""#),
+            (
+                r#""target": "natives""#,
+                r#""target": "..\\..\\Windows\\System32""#,
+            ),
+        ];
+
+        for (from, to) in escapes {
+            let document = WILDS.replace(from, to);
+            assert!(
+                document != WILDS,
+                "the fixture no longer contains {from}, so this proves nothing"
+            );
+            let refused = parse_document(&document)
+                .expect_err(&format!("{to} should be refused"))
+                .to_string();
+            assert!(
+                refused.contains("id") || refused.contains("leaves the directory"),
+                "the refusal should say what was wrong: {refused}"
+            );
+        }
+    }
+
+    /// Refused whole. The bundled profile stays in force, exactly as it does
+    /// for a timeout, rather than the two being merged into a configuration
+    /// nobody wrote.
+    #[test]
+    fn a_refused_profile_leaves_the_bundled_one_untouched() {
+        let document = WILDS.replace(r#""target": "natives""#, r#""target": "../elsewhere""#);
+        assert!(parse_document(&document).is_err());
+
+        let bundled = LocalBuiltin::new().get("monster-hunter-wilds").unwrap();
+        assert!(
+            bundled
+                .deploy_targets
+                .iter()
+                .all(|t| !t.target.contains("..")),
+            "the bundled profile is what remains in force"
+        );
     }
 }
