@@ -3,7 +3,7 @@
 
 # Apocrypha
 
-A native Linux desktop mod manager for games, built Linux-first rather than ported to it. Ships profiles for **Monster Hunter Wilds**, **Cyberpunk 2077**, **Skyrim Special Edition** and **Dragon's Dogma 2**.
+A native Linux desktop mod manager for games, built Linux-first rather than ported to it. Ships profiles for **Monster Hunter Wilds**, **Cyberpunk 2077**, **Skyrim Special Edition**, **Dragon's Dogma 2** and **Resident Evil 4**.
 
 Linux game modding is badly served. The established managers are Windows programs: Vortex needs a Wine prefix and a lot of goodwill to behave, Fluffy Mod Manager is a Windows GUI that people run through Proton and then fight over paths, and Mod Organizer 2 cannot be fixed by porting effort at all. MO2's whole design rests on USVFS, a user-space virtual filesystem built from Windows DLL injection and API hooking. There is no Linux equivalent to hook, so the feature that makes MO2 good is the feature that cannot cross over. That leaves Linux players doing the thing everyone eventually does: copying files into the game directory by hand, keeping a text file of what they changed, and hoping they can undo it later.
 
@@ -13,7 +13,7 @@ MIT licence. Linux (x86_64), Steam and Proton.
 
 ## Status
 
-**Early development.** Version 0.2, Phase 3. Four game profiles ship today, and the deployment engine has been exercised end to end against real segmented installers but not yet against a wide spread of community mods. Expect rough edges, expect the UI to change, and keep a backup of anything you cannot re-download. The safety machinery (vault, journal, hash-guarded rollback) is the part that has had the most attention, because it is the part that can ruin your day if it is wrong.
+**Early development.** Version 0.2, Phase 3. Five game profiles ship today, and the deployment engine has been exercised end to end against real segmented installers but not yet against a wide spread of community mods. Expect rough edges, expect the UI to change, and keep a backup of anything you cannot re-download. The safety machinery (vault, journal, hash-guarded rollback) is the part that has had the most attention, because it is the part that can ruin your day if it is wrong.
 
 Phase 2 added the things a library needs once it stops being small: applying is interruptible and reports real progress, the game folder can be checked against the change log and repaired, load order has its own screen with per-file overrides, and the mod list windows itself so a few hundred mods stay smooth.
 
@@ -229,6 +229,7 @@ $XDG_DATA_HOME/apocrypha/          (default ~/.local/share/apocrypha)
 | Monster Hunter Wilds | `monster-hunter-wilds` | RE Engine | Primary target |
 | Cyberpunk 2077 | `cyberpunk-2077` | REDengine | Archive, REDmod, redscript, TweakXL, RED4ext and CET layouts |
 | Dragon's Dogma 2 | `dragons-dogma-2` | RE Engine | REFramework, Fluffy layouts and standalone paks |
+| Resident Evil 4 (2023) | `resident-evil-4-2023` | RE Engine | REFramework, Fluffy layouts and standalone paks |
 
 ### Adding a game
 
