@@ -452,6 +452,14 @@ fn new_staging_key(mod_id: &str, sha: Option<&str>) -> String {
 /// being answered wrongly.
 fn game_dir_of(state: &AppState, game_id: &str) -> Option<PathBuf> {
     let store = state.store.lock().ok()?;
+    game_dir_in(&store, game_id)
+}
+
+/// As [`game_dir_of`], for a caller that already holds the store lock.
+///
+/// The mutex is not reentrant, so a command that has locked the store and then
+/// calls `game_dir_of` deadlocks rather than failing.
+fn game_dir_in(store: &apoc_storage::Store, game_id: &str) -> Option<PathBuf> {
     store
         .get_game(game_id)
         .ok()
@@ -830,6 +838,9 @@ pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModVi
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     let mods = store.list_mods(&game_id).map_err(err)?;
     let applied = store.applied_mod_ids(&game_id).map_err(err)?;
+    // Read once, from the lock this function already holds: `game_dir_of` takes
+    // it again and the mutex is not reentrant.
+    let game_dir = game_dir_in(&store, &game_id);
 
     let mut out = Vec::new();
     for m in mods {
@@ -838,6 +849,12 @@ pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModVi
             .as_ref()
             .map(|s| s.selection.clone())
             .unwrap_or_else(|| apoc_modengine::default_selection(&m.bundle));
+        // Narrowed with the stored answers, exactly as the wizard narrows with
+        // the pending ones. Editing an installed FOMOD showed every option the
+        // manifest declares, flat -- including ones behind steps those answers
+        // never reach -- and ticking one installed it.
+        let (groups, _resolved, _warnings) =
+            narrow_to_conditions(&m.bundle, game_dir.as_deref(), &sel)?;
         out.push(ModView {
             id: m.id.clone(),
             name: m.name.clone(),
@@ -849,7 +866,7 @@ pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModVi
             priority: st.as_ref().map(|s| s.priority).unwrap_or(0),
             applied: applied.contains(&m.id),
             added_at: m.imported_at,
-            groups: groups_view(&m.bundle),
+            groups,
             selection: selection_vec(&sel),
             total_files: m.bundle.deployable_options().map(|o| o.payload.len()).sum(),
             total_bytes: m.bundle.deployable_options().map(|o| o.total_size()).sum(),
@@ -872,6 +889,57 @@ pub fn set_mod_enabled(
     store.set_enabled(profile_id, &mod_id, enabled).map_err(err)
 }
 
+/// What a requested selection actually becomes once the conditions and the
+/// group cardinalities have had their say.
+///
+/// Kept separate from the command so it can be tested without a store, and so
+/// the rule it encodes is stated once: **what the narrowed view permits is what
+/// may be stored.** The dialog filters too, but a view is never the
+/// authorization boundary -- a request can arrive with any ids in it.
+///
+/// Both halves read from `narrowed`, not from the manifest. An option behind a
+/// step the answers do not reach is absent from it, and one the conditions
+/// forbid comes back as `info`, which is the same answer the manifest already
+/// gives for an option that was never selectable.
+fn settled_selection(
+    bundle: &ModBundle,
+    narrowed: &[GroupView],
+    requested: &[String],
+) -> Selection {
+    let permitted: std::collections::HashSet<&str> = narrowed
+        .iter()
+        .flat_map(|g| g.options.iter())
+        .filter(|o| o.select_mode != "info")
+        .map(|o| o.id.as_str())
+        .collect();
+
+    // Re-apply exclusivity so the stored selection is always internally valid.
+    let mut sel = Selection::new();
+    for id in requested {
+        if !permitted.contains(id.as_str()) {
+            continue;
+        }
+        let Some(opt) = bundle.options().find(|o| &o.id == id) else {
+            continue;
+        };
+        match opt.select_mode {
+            apoc_domain::SelectMode::Info => {}
+            apoc_domain::SelectMode::Exclusive => {
+                apoc_modengine::choose_exclusive(bundle, &mut sel, id)
+            }
+            _ => sel.insert(id.clone()),
+        }
+    }
+    // A step the answers do not reach can still declare a forced option, and
+    // forcing it would install files from a branch the user never took.
+    for o in narrowed.iter().flat_map(|g| g.options.iter()) {
+        if o.select_mode == "forced" && o.deployable {
+            sel.insert(o.id.clone());
+        }
+    }
+    sel
+}
+
 /// Persist a new wizard selection for a mod (radio semantics applied server-side).
 #[tauri::command]
 pub fn set_mod_selection(
@@ -887,25 +955,14 @@ pub fn set_mod_selection(
         .map_err(err)?
         .ok_or_else(|| format!("unknown mod {mod_id}"))?;
 
-    // Re-apply exclusivity so the stored selection is always internally valid.
-    let mut sel = apoc_domain::Selection::new();
-    for id in &selection {
-        let Some(opt) = m.bundle.options().find(|o| &o.id == id) else {
-            continue;
-        };
-        match opt.select_mode {
-            apoc_domain::SelectMode::Info => {}
-            apoc_domain::SelectMode::Exclusive => {
-                apoc_modengine::choose_exclusive(&m.bundle, &mut sel, id)
-            }
-            _ => sel.insert(id.clone()),
-        }
-    }
-    for o in m.bundle.options() {
-        if o.select_mode == apoc_domain::SelectMode::Forced && o.deployable {
-            sel.insert(o.id.clone());
-        }
-    }
+    // Narrowed against the incoming selection rather than the stored one,
+    // because the incoming answers are what decide which steps this selection
+    // reaches.
+    let incoming = selection_from(&selection);
+    let game_dir = game_dir_in(&store, &game_id);
+    let (narrowed, _resolved, _warnings) =
+        narrow_to_conditions(&m.bundle, game_dir.as_deref(), &incoming)?;
+    let sel = settled_selection(&m.bundle, &narrowed, &selection);
 
     let existing = store.get_mod_state(profile_id, &mod_id).map_err(err)?;
     store
@@ -1623,6 +1680,184 @@ pub fn steam_diagnostics() -> CmdResult<serde_json::Value> {
         "libraries": libs,
         "steamRunning": apoc_deploy::loader::steam_is_running(),
     }))
+}
+
+/// What may be stored, once the conditions have been applied.
+///
+/// These drive [`settled_selection`] with a narrowed view built by hand, which
+/// is the boundary the fix lives on: `narrow_to_conditions` decides what the
+/// view contains, and this decides what a request may do with it.
+#[cfg(test)]
+mod settled_selection_tests {
+    use super::*;
+    use apoc_domain::{InstallerModel, ModOption, OptionGroup, SelectMode};
+
+    fn opt(id: &str, mode: SelectMode, radio_set: Option<&str>) -> ModOption {
+        ModOption {
+            id: id.to_string(),
+            folder_name: id.to_string(),
+            group_index: None,
+            slot_token: None,
+            radio_set: radio_set.map(str::to_string),
+            name: id.to_string(),
+            description: None,
+            category: None,
+            author: None,
+            screenshot: None,
+            screenshot_archive_path: None,
+            select_mode: mode,
+            recommended: false,
+            blocked_reason: None,
+            deployable: mode != SelectMode::Info,
+            payload: Vec::new(),
+            raw_modinfo: Default::default(),
+        }
+    }
+
+    fn bundle(options: Vec<ModOption>) -> ModBundle {
+        ModBundle {
+            name: "Test".into(),
+            version: None,
+            author: None,
+            category: None,
+            installer_model: InstallerModel::Fomod,
+            archive_sha256: None,
+            fomod: None,
+            groups: vec![OptionGroup {
+                index: None,
+                label: "Group".into(),
+                cardinality: None,
+                options,
+            }],
+        }
+    }
+
+    /// One narrowed group holding `(id, select_mode)` pairs.
+    fn view(options: &[(&str, &str)]) -> Vec<GroupView> {
+        vec![GroupView {
+            index: None,
+            label: "Group".into(),
+            radio_sets: Vec::new(),
+            cardinality: None,
+            options: options
+                .iter()
+                .map(|(id, mode)| OptionView {
+                    id: (*id).to_string(),
+                    name: (*id).to_string(),
+                    description: None,
+                    select_mode: (*mode).to_string(),
+                    radio_set: None,
+                    deployable: *mode != "info",
+                    file_count: 0,
+                    size_bytes: 0,
+                    screenshot: None,
+                    has_preview: false,
+                    category: None,
+                    recommended: false,
+                    blocked_reason: None,
+                })
+                .collect(),
+        }]
+    }
+
+    fn ids(sel: &Selection) -> Vec<String> {
+        let mut out = selection_vec(sel);
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn an_option_the_narrowed_view_does_not_contain_cannot_be_stored() {
+        // The step it lives behind is not reached, so the wizard never showed
+        // it. The request can still name it, and this is what refuses.
+        let b = bundle(vec![
+            opt("reachable", SelectMode::Stackable, None),
+            opt("behind-a-step-not-taken", SelectMode::Stackable, None),
+        ]);
+        let narrowed = view(&[("reachable", "stackable")]);
+
+        let sel = settled_selection(
+            &b,
+            &narrowed,
+            &[
+                "reachable".to_string(),
+                "behind-a-step-not-taken".to_string(),
+            ],
+        );
+        assert_eq!(ids(&sel), ["reachable"]);
+    }
+
+    #[test]
+    fn an_option_the_conditions_rule_out_cannot_be_stored() {
+        // Present in the view, but narrowed to `info` because another answer
+        // forbids it.
+        let b = bundle(vec![
+            opt("kept", SelectMode::Stackable, None),
+            opt("ruled-out", SelectMode::Stackable, None),
+        ]);
+        let narrowed = view(&[("kept", "stackable"), ("ruled-out", "info")]);
+
+        let sel = settled_selection(
+            &b,
+            &narrowed,
+            &["kept".to_string(), "ruled-out".to_string()],
+        );
+        assert_eq!(ids(&sel), ["kept"]);
+    }
+
+    #[test]
+    fn a_forced_option_out_of_reach_is_not_forced_in() {
+        // The manifest forces it; the branch it sits on was never taken. Adding
+        // it would install files from a step the user did not visit.
+        let b = bundle(vec![
+            opt("here", SelectMode::Stackable, None),
+            opt("forced-elsewhere", SelectMode::Forced, None),
+        ]);
+        let narrowed = view(&[("here", "stackable")]);
+
+        let sel = settled_selection(&b, &narrowed, &["here".to_string()]);
+        assert_eq!(ids(&sel), ["here"]);
+    }
+
+    #[test]
+    fn a_forced_option_in_reach_is_added_without_being_asked_for() {
+        let b = bundle(vec![
+            opt("here", SelectMode::Stackable, None),
+            opt("core", SelectMode::Forced, None),
+        ]);
+        let narrowed = view(&[("here", "stackable"), ("core", "forced")]);
+
+        let sel = settled_selection(&b, &narrowed, &["here".to_string()]);
+        assert_eq!(ids(&sel), ["core", "here"]);
+    }
+
+    #[test]
+    fn exclusivity_still_applies_to_what_survives() {
+        // The narrowing is a filter in front of the existing rules, not a
+        // replacement for them.
+        let b = bundle(vec![
+            opt("slim", SelectMode::Exclusive, Some("shape")),
+            opt("curvy", SelectMode::Exclusive, Some("shape")),
+        ]);
+        let narrowed = view(&[("slim", "exclusive"), ("curvy", "exclusive")]);
+
+        let sel = settled_selection(&b, &narrowed, &["slim".to_string(), "curvy".to_string()]);
+        assert_eq!(ids(&sel), ["curvy"], "the last one named wins the set");
+    }
+
+    #[test]
+    fn a_bundle_that_is_not_a_conditional_installer_is_unaffected() {
+        // `narrow_to_conditions` hands back every group for these, so the view
+        // permits everything and the old behaviour stands.
+        let b = bundle(vec![
+            opt("a", SelectMode::Stackable, None),
+            opt("b", SelectMode::Stackable, None),
+        ]);
+        let narrowed = narrow_to_conditions(&b, None, &Selection::new()).unwrap().0;
+
+        let sel = settled_selection(&b, &narrowed, &["a".to_string(), "b".to_string()]);
+        assert_eq!(ids(&sel), ["a", "b"]);
+    }
 }
 
 #[cfg(test)]
