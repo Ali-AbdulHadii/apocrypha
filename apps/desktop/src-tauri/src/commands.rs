@@ -57,7 +57,7 @@ pub(crate) fn profile_of(state: &AppState, game_id: &str) -> CmdResult<i64> {
 /// Make sure the game exists as a row, without claiming to know where it is
 /// installed.
 ///
-/// Writes only the identity â€” id and name, both from the bundled profile â€” and
+/// Writes only the identity — id and name, both from the bundled profile — and
 /// leaves the paths null for detection to fill in. Overwriting a detected path
 /// with a null here would undo the user's own Choose folder.
 pub(crate) fn ensure_game_row(store: &apoc_storage::Store, game_id: &str) -> CmdResult<()> {
@@ -295,7 +295,7 @@ pub fn set_game_path(
 ///
 /// Takes a resolved mod id rather than finding one itself. It used to scan for a
 /// matching bundle name, which meant this command and the replacement resolver
-/// each had their own idea of what "the same mod" was â€” and two identity notions
+/// each had their own idea of what "the same mod" was — and two identity notions
 /// in one code path is how they drift apart.
 fn previous_selection(
     state: &AppState,
@@ -322,7 +322,7 @@ pub enum ReplaceReason {
     UpdateLink,
     /// Same Nexus mod page. Two files on one page are two versions of one mod.
     NexusMod,
-    /// Same bundle name, and nothing better. A guess â€” see [`resolve_replacement`].
+    /// Same bundle name, and nothing better. A guess — see [`resolve_replacement`].
     Name,
 }
 
@@ -355,7 +355,7 @@ impl ReplaceCandidate {
 /// unrelated mods into one, so it is offered to the user instead.
 ///
 /// An author renaming their mod is not matched by name and reads as a new mod.
-/// Guessing at renames â€” by position, by fuzzy name â€” would silently replace
+/// Guessing at renames — by position, by fuzzy name — would silently replace
 /// something the user did not mean, which is the worse failure.
 fn resolve_replacement(
     existing: &[ModRecord],
@@ -428,7 +428,7 @@ fn mint_mod_id(state: &AppState, sha: Option<&str>) -> CmdResult<String> {
     };
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     // Only reachable when a hash-derived id is already taken by a mod the caller
-    // did not ask to replace â€” a re-import that resolved to no candidate.
+    // did not ask to replace — a re-import that resolved to no candidate.
     while store.get_mod(&id).map_err(err)?.is_some() {
         id = format!("mod-{}", unique_suffix());
     }
@@ -503,8 +503,8 @@ fn narrow_to_conditions(
     let mut groups = groups_view(bundle);
     for group in &mut groups {
         group.options.retain(|o| {
-            // Synthetic options â€” required files, and the extras a combination
-            // pulls in â€” belong to no step and are never chosen by hand.
+            // Synthetic options — required files, and the extras a combination
+            // pulls in — belong to no step and are never chosen by hand.
             o.id.starts_with('@') || visible.contains_key(o.id.as_str())
         });
         for option in &mut group.options {
@@ -680,7 +680,7 @@ pub fn analyze_archive(
 /// Describe a carry outcome in the terms the person who made the choices used.
 ///
 /// `carried` deliberately lists only options someone actually picked, not the
-/// forced entries `default_selection` adds back â€” telling a user their mod
+/// forced entries `default_selection` adds back — telling a user their mod
 /// "kept" a base-files entry they never chose reads as noise, and hides the two
 /// real choices in a list of nine.
 fn carry_view(
@@ -694,8 +694,8 @@ fn carry_view(
         .map(|o| o.name.clone())
         .collect();
 
-    // A dropped id may still name an option in the new bundle â€” one demoted to a
-    // notice or a header â€” in which case its name is more use than its id.
+    // A dropped id may still name an option in the new bundle — one demoted to a
+    // notice or a header — in which case its name is more use than its id.
     let dropped = carried
         .dropped
         .iter()
@@ -739,7 +739,7 @@ pub fn import_mod(
         Some(id) => {
             let store = state.store.lock().map_err(|_| "state poisoned")?;
             // A caller asking to replace a row that is gone must not quietly get
-            // a new mod instead â€” that is exactly the duplicate this exists to
+            // a new mod instead — that is exactly the duplicate this exists to
             // prevent, and it would be invisible.
             let existing = store.get_mod(id).map_err(err)?.ok_or_else(|| {
                 "The mod this update replaces is no longer installed.".to_string()
@@ -1321,7 +1321,7 @@ pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String
     // there is nothing left for this command to register.
     //
     // It reports success rather than refusing, because from where the user is
-    // standing the loader *is* set up â€” refusing would send them looking for a
+    // standing the loader *is* set up — refusing would send them looking for a
     // Proton prefix that cannot exist on their machine.
     #[cfg(windows)]
     {
@@ -1934,7 +1934,7 @@ mod carry_view_tests {
     #[test]
     fn a_dropped_option_that_is_gone_is_reported_by_its_folder_name() {
         // Nothing in the new bundle can name it, so the id it had is all there
-        // is to say â€” and it is what the person will recognise on disk.
+        // is to say — and it is what the person will recognise on disk.
         let b = bundle(vec![opt("core", "Base files", SelectMode::Forced)]);
         let carried = apoc_modengine::carry_selection(&b, &selection(&["core", "addon-gone"]));
         let view = carry_view(&b, &carried);
