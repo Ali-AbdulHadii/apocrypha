@@ -1,0 +1,95 @@
+﻿# Dragon's Dogma 2: declarative game definition.
+#
+# The first game added to test the claim rather than to stretch it. Wilds
+# defined this schema, Cyberpunk broke it on purpose by being a different
+# engine, and Skyrim broke it again by shipping a different installer model.
+# Dragon's Dogma 2 is RE Engine with REFramework, which is exactly what the
+# schema was written for, so if adding it costs anything beyond this file the
+# abstraction does not work.
+#
+# It cost this file. Everything below except four fields is identical to Wilds,
+# and the four are the game's identity, not its behaviour.
+
+id = "dragons-dogma-2"
+name = "Dragon's Dogma 2"
+engine = "re-engine"
+load_order = "priority"
+conflict_scope = "per-relative-path"
+case_sensitive = true
+nexus_domain = "dragonsdogma2"
+
+# RE Engine resolves loose files under `natives/STM` with that exact casing.
+# Windows-authored archives ship every variant, and Linux is case-sensitive, so
+# these components are forced to canonical casing at import time.
+canonical_case = ["STM"]
+
+# Format detectors this game accepts, in priority order.
+#
+# `fomod` is deliberately absent, matching Wilds. A FOMOD announces itself in a
+# manifest rather than being inferred from an archive's shape, so listing it
+# would cost nothing when a mod does not have one — but the RE Engine community
+# packages with Fluffy, and claiming a format this game's mods do not use would
+# make the list describe the schema instead of the game. Add it when a real
+# Dragon's Dogma 2 mod ships one.
+formats = ["fluffy-aio", "fluffy-single", "loose-natives", "reframework-only", "pak"]
+
+# No `executable` key. The field exists and every earlier profile sets it, but
+# nothing reads it: Steam discovery takes the install directory from the app
+# manifest and never looks for a binary. Rather than assert a filename that
+# could not be verified from a source, this says nothing, which is what the
+# schema means by `Option`.
+[detection]
+steam_app_id = 2054970
+
+# Payload roots inside a normalized mod -> destination relative to the game dir.
+[[deploy_targets]]
+source = "natives"
+target = "natives"
+
+[[deploy_targets]]
+source = "reframework"
+target = "reframework"
+
+# Standalone `.pak` mods must join the engine's patch chain to be seen by the
+# game. This is the one field where these RE Engine titles genuinely differ
+# from Wilds: Wilds interposes a `sub_000` archive and patches above that,
+# while Dragon's Dogma 2 patches the base chunk directly. A mod named into the
+# wrong chain installs without error and is never loaded, which is the worst
+# way for this to be wrong.
+[pak_chain]
+pattern = "re_chunk_000.pak.patch_{n}.pak"
+digits = 3
+start_index = 1
+
+[loader]
+name = "REFramework"
+kind = "dll-proxy"
+proxy_dll = "dinput8.dll"
+data_dirs = ["reframework/data"]
+
+[loader.proton]
+wine_dll_overrides = "dinput8=n,b"
+steam_launch_options = 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
+requires_prefix_write = true
+
+# Archives packed from the inside out: a bare `autorun/` really means
+# `reframework/autorun/`. Without these a valid mod imports as zero files.
+[[rewrap]]
+folder = "autorun"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "plugins"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "fonts"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "images"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "STM"
+prefix = "natives"
