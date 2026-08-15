@@ -182,6 +182,19 @@ fn resolve_pak_names(ctx: &DeployContext, plan: &DeploymentPlan) -> Vec<PlannedF
 }
 
 /// Reject destinations that escape the game directory.
+///
+/// Two escapes, and they need different answers. A path that spells its way out
+/// -- `..`, a root, a Windows prefix -- is refused by reading it, and never
+/// touches the disk. A path whose every component is an ordinary name can still
+/// leave, if a directory along the way is a symlink pointing elsewhere, and no
+/// amount of reading the string will say so. That one is answered by resolving
+/// the directory chain and asking where it actually landed.
+///
+/// The **chain**, not the destination itself. A deployed file is frequently a
+/// symlink into staging -- that is a rung of the ladder, and staging is outside
+/// the game directory by design -- so resolving the leaf would refuse every
+/// redeployment over a symlinked file. No directory inside the game folder is
+/// ever created by this crate, so a symlinked one is not ours.
 fn safe_dest(game_dir: &Path, rel: &str) -> Result<PathBuf> {
     let candidate = Path::new(rel);
     if candidate.is_absolute() {
@@ -195,10 +208,46 @@ fn safe_dest(game_dir: &Path, rel: &str) -> Result<PathBuf> {
             _ => return Err(DeployError::UnsafeDestination(rel.to_string())),
         }
     }
-    if !out.starts_with(game_dir) {
+
+    // `out` was built by pushing onto `game_dir`, so comparing the two as text
+    // could only ever say yes. The question worth asking is where the path
+    // resolves to, which needs the filesystem.
+    let Ok(root) = game_dir.canonicalize() else {
+        // Nothing to escape through: a game directory that does not resolve has
+        // no symlinked children either, and the deploy fails on its own terms.
+        return Ok(out);
+    };
+    let parent = out.parent().unwrap_or(out.as_path());
+    let resolved = deepest_existing(parent)
+        .canonicalize()
+        .map_err(|_| DeployError::UnsafeDestination(rel.to_string()))?;
+    if !resolved.starts_with(&root) {
         return Err(DeployError::UnsafeDestination(rel.to_string()));
     }
     Ok(out)
+}
+
+/// The longest ancestor of `path` that exists, `path` included.
+///
+/// A destination names directories that deployment has yet to create, and those
+/// cannot be resolved. Every component below the deepest existing one is an
+/// ordinary name — `safe_dest` refused anything else — so a path that has not
+/// been created yet cannot lead anywhere but down.
+///
+/// `symlink_metadata` rather than `exists`, so a dangling symlink counts as
+/// present. It resolves to nothing, `canonicalize` fails, and the caller refuses
+/// the destination rather than treating the link as a directory yet to be made.
+fn deepest_existing(path: &Path) -> &Path {
+    let mut at = path;
+    loop {
+        if at.symlink_metadata().is_ok() {
+            return at;
+        }
+        match at.parent() {
+            Some(up) => at = up,
+            None => return at,
+        }
+    }
 }
 
 /// Compute what applying `plan` would change. Makes no modifications.
@@ -1007,6 +1056,72 @@ mod tests {
                 ("natives/new.pak", "opt/deep/new.pak"),
             ],
             "the source is recoverable from the journal alone"
+        );
+    }
+
+    #[test]
+    fn paths_that_spell_their_way_out_are_refused() {
+        let f = fixture();
+        for rel in ["../outside.pak", "natives/../../outside.pak", "/etc/passwd"] {
+            assert!(
+                matches!(
+                    safe_dest(&f.ctx.game_dir, rel),
+                    Err(DeployError::UnsafeDestination(_))
+                ),
+                "{rel} should be refused by reading it"
+            );
+        }
+    }
+
+    /// The escape no amount of reading the path can catch: every component is
+    /// an ordinary name, and one of them is a symlink to somewhere else.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_directory_cannot_carry_a_write_out_of_the_game_folder() {
+        let f = fixture();
+        let outside = f._dir.path().join("elsewhere");
+        fs::create_dir_all(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, f.ctx.game_dir.join("natives")).unwrap();
+
+        assert!(
+            matches!(
+                safe_dest(&f.ctx.game_dir, "natives/mod.pak"),
+                Err(DeployError::UnsafeDestination(_))
+            ),
+            "a write through a symlinked directory leaves the game folder"
+        );
+    }
+
+    /// The case the check must not break: a rung of the ladder puts a symlink
+    /// at the destination itself, pointing into staging, which is outside the
+    /// game directory by design. Redeploying over it has to keep working.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_file_at_the_destination_is_still_a_destination() {
+        let f = fixture();
+        fs::create_dir_all(f.ctx.game_dir.join("natives")).unwrap();
+        stage(&f.ctx, "opt/mod.pak", b"MOD");
+        std::os::unix::fs::symlink(
+            f.ctx.staging_dir.join("opt/mod.pak"),
+            f.ctx.game_dir.join("natives/mod.pak"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            safe_dest(&f.ctx.game_dir, "natives/mod.pak").unwrap(),
+            f.ctx.game_dir.join("natives/mod.pak"),
+            "the leaf is a deployed file, not a way out"
+        );
+    }
+
+    /// Directories a deployment has yet to create cannot be resolved, and must
+    /// not be treated as suspicious for it.
+    #[test]
+    fn destinations_below_directories_that_do_not_exist_yet_are_allowed() {
+        let f = fixture();
+        assert_eq!(
+            safe_dest(&f.ctx.game_dir, "natives/stm/deep/new.pak").unwrap(),
+            f.ctx.game_dir.join("natives/stm/deep/new.pak"),
         );
     }
 
