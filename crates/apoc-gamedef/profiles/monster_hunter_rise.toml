@@ -1,0 +1,89 @@
+# Monster Hunter Rise: declarative game definition.
+#
+# The sixth game, and the third RE Engine title added without touching an
+# engine crate. Every field below except identity is what Wilds and the two
+# titles before it say, which the profile tests assert rather than leave to be
+# noticed.
+#
+# Worth recording because it is the one that could have gone differently: Rise
+# is an older RE Engine game than Wilds, so if the schema were quietly shaped
+# around the newest title this is where that would show. It did not. The only
+# thing it disagrees with Wilds about is the patch chain, and it agrees with
+# Dragon's Dogma 2 and Resident Evil 4 there — Wilds is the outlier, not Rise.
+
+id = "monster-hunter-rise"
+name = "Monster Hunter Rise"
+engine = "re-engine"
+load_order = "priority"
+conflict_scope = "per-relative-path"
+case_sensitive = true
+nexus_domain = "monsterhunterrise"
+
+# RE Engine resolves loose files under `natives/STM` with that exact casing.
+# Windows-authored archives ship every variant, and Linux is case-sensitive, so
+# these components are forced to canonical casing at import time.
+canonical_case = ["STM"]
+
+# Format detectors this game accepts, in priority order. `fomod` is absent for
+# the same reason it is absent from the other RE Engine profiles: this
+# ecosystem packages with Fluffy, and Rise leans harder on `reframework/autorun`
+# Lua than any of them, which is a shape already covered.
+formats = ["fluffy-aio", "fluffy-single", "loose-natives", "reframework-only", "pak"]
+
+# No `executable` key. Nothing reads it — Steam discovery takes the install
+# directory from the app manifest and never looks for a binary — and the name
+# could not be verified from a source, so this says nothing rather than
+# asserting a guess.
+[detection]
+steam_app_id = 1446780
+
+# Payload roots inside a normalized mod -> destination relative to the game dir.
+[[deploy_targets]]
+source = "natives"
+target = "natives"
+
+[[deploy_targets]]
+source = "reframework"
+target = "reframework"
+
+# Standalone `.pak` mods must join the engine's patch chain to be seen by the
+# game. Rise patches the base chunk directly, as every RE Engine title here
+# does except Wilds, which interposes a `sub_000` archive first.
+[pak_chain]
+pattern = "re_chunk_000.pak.patch_{n}.pak"
+digits = 3
+start_index = 1
+
+[loader]
+name = "REFramework"
+kind = "dll-proxy"
+proxy_dll = "dinput8.dll"
+data_dirs = ["reframework/data"]
+
+[loader.proton]
+wine_dll_overrides = "dinput8=n,b"
+steam_launch_options = 'WINEDLLOVERRIDES="dinput8=n,b" %command%'
+requires_prefix_write = true
+
+# Archives packed from the inside out: a bare `autorun/` really means
+# `reframework/autorun/`. Rise mods are more often script-only than the other
+# titles here, so this is the rule that carries the most weight for it.
+[[rewrap]]
+folder = "autorun"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "plugins"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "fonts"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "images"
+prefix = "reframework"
+
+[[rewrap]]
+folder = "STM"
+prefix = "natives"
