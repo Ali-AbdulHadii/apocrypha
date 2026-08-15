@@ -15,6 +15,7 @@ const MONSTER_HUNTER_WILDS: &str = include_str!("../profiles/monster_hunter_wild
 const CYBERPUNK_2077: &str = include_str!("../profiles/cyberpunk_2077.toml");
 const SKYRIM_SPECIAL_EDITION: &str = include_str!("../profiles/skyrim_special_edition.toml");
 const DRAGONS_DOGMA_2: &str = include_str!("../profiles/dragons_dogma_2.toml");
+const RESIDENT_EVIL_4_2023: &str = include_str!("../profiles/resident_evil_4_2023.toml");
 
 #[derive(Debug, Error)]
 pub enum GameDefError {
@@ -78,6 +79,7 @@ impl LocalBuiltin {
             CYBERPUNK_2077,
             SKYRIM_SPECIAL_EDITION,
             DRAGONS_DOGMA_2,
+            RESIDENT_EVIL_4_2023,
         ]
     }
 }
@@ -358,30 +360,84 @@ mod tests {
     #[test]
     fn the_re_engine_profiles_agree_on_everything_except_identity() {
         // The claim Phase 3 makes is that a game on an engine already supported
-        // costs a document and nothing else. That is only true if two profiles
-        // on the same engine differ solely in who they are, so this asserts it
+        // costs a document and nothing else. That is only true if profiles on
+        // the same engine differ solely in who they are, so this asserts it
         // rather than leaving it to be believed. A new RE Engine game that has
         // to disagree here is a finding: either the schema is missing something
         // or the game is not the cheap case it looked like.
+        //
+        // Wilds is the reference because it is the profile the schema was
+        // written against, so a disagreement reads as "the newcomer needs
+        // something Wilds did not", which is the question worth asking.
         let all = LocalBuiltin::new().all().unwrap();
         let wilds = all.iter().find(|g| g.id == "monster-hunter-wilds").unwrap();
-        let dd2 = all.iter().find(|g| g.id == "dragons-dogma-2").unwrap();
+        let others: Vec<_> = all
+            .iter()
+            .filter(|g| g.engine == Engine::ReEngine && g.id != wilds.id)
+            .collect();
+        assert!(
+            !others.is_empty(),
+            "no RE Engine game to compare Wilds against"
+        );
 
-        assert_eq!(wilds.engine, dd2.engine);
-        assert_eq!(wilds.load_order, dd2.load_order);
-        assert_eq!(wilds.conflict_scope, dd2.conflict_scope);
-        assert_eq!(wilds.case_sensitive, dd2.case_sensitive);
-        assert_eq!(wilds.canonical_case, dd2.canonical_case);
-        assert_eq!(wilds.formats, dd2.formats);
-        assert_eq!(wilds.deploy_targets, dd2.deploy_targets);
-        assert_eq!(wilds.rewrap, dd2.rewrap);
-        assert_eq!(wilds.loader, dd2.loader);
+        for g in others {
+            let id = &g.id;
+            assert_eq!(g.load_order, wilds.load_order, "{id}: load order");
+            assert_eq!(g.conflict_scope, wilds.conflict_scope, "{id}: conflicts");
+            assert_eq!(g.case_sensitive, wilds.case_sensitive, "{id}: casing");
+            assert_eq!(g.canonical_case, wilds.canonical_case, "{id}: canonical");
+            assert_eq!(g.formats, wilds.formats, "{id}: formats");
+            assert_eq!(g.deploy_targets, wilds.deploy_targets, "{id}: targets");
+            assert_eq!(g.rewrap, wilds.rewrap, "{id}: rewrap");
+            assert_eq!(g.loader, wilds.loader, "{id}: loader");
 
-        // Identity, and the patch chain, are what a new game is allowed to
-        // change without that meaning anything.
-        assert_ne!(wilds.id, dd2.id);
-        assert_ne!(wilds.detection.steam_app_id, dd2.detection.steam_app_id);
-        assert_ne!(wilds.pak_chain, dd2.pak_chain);
+            // Identity is what a new game is allowed to change without that
+            // meaning anything, and it must change: two profiles sharing
+            // either would make detection and per-game storage ambiguous.
+            assert_ne!(g.id, wilds.id);
+            assert_ne!(g.detection.steam_app_id, wilds.detection.steam_app_id);
+
+            // The patch chain is the one behaviour a new RE Engine title is
+            // expected to differ on. Wilds interposes a `sub_000` archive;
+            // every title after it patches the base chunk directly.
+            assert_ne!(g.pak_chain, wilds.pak_chain, "{id}: pak chain");
+        }
+    }
+
+    #[test]
+    fn resident_evil_4_profile_is_correct() {
+        let src = LocalBuiltin::new();
+        let g = src.get("resident-evil-4-2023").expect("re4 present");
+
+        assert_eq!(g.name, "Resident Evil 4 (2023)");
+        assert_eq!(g.engine, Engine::ReEngine);
+        assert_eq!(g.detection.steam_app_id, 2050650);
+        assert_eq!(g.nexus_domain.as_deref(), Some("residentevil42023"));
+
+        assert_eq!(g.target_for("natives"), Some("natives"));
+        assert_eq!(g.target_for("reframework"), Some("reframework"));
+
+        let chain = g.pak_chain.as_ref().expect("standalone paks are supported");
+        assert_eq!(chain.filename(1), "re_chunk_000.pak.patch_001.pak");
+
+        let loader = g.loader.as_ref().expect("REFramework loader defined");
+        assert_eq!(loader.kind, LoaderKind::DllProxy);
+        assert_eq!(loader.proxy_dll.as_deref(), Some("dinput8.dll"));
+    }
+
+    #[test]
+    fn resident_evil_4_says_which_resident_evil_4_it_is() {
+        // The 2005 original is a separate Steam app with its own, incompatible
+        // modding ecosystem. The id ends up in saved profiles and in per-game
+        // storage paths, where an ambiguity is expensive to undo later, so it
+        // is resolved here instead of being left for the day someone adds the
+        // other one.
+        let src = LocalBuiltin::new();
+        assert!(src.get("resident-evil-4-2023").is_ok());
+        assert!(
+            matches!(src.get("resident-evil-4"), Err(GameDefError::NotFound(_))),
+            "the unqualified id must stay free for the 2005 game"
+        );
     }
 
     #[test]
