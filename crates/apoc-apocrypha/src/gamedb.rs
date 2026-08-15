@@ -51,19 +51,72 @@ pub enum Freshness {
     Offline { reason: String },
 }
 
-/// Profiles from the service, with the bundled set underneath.
+/// Where a profile document comes from.
+///
+/// The seam exists because the interesting behaviour of this module is what it
+/// does when the service misbehaves — offline, a 404, a 500, an index that is
+/// not the shape it claims, a profile document that will not parse — and every
+/// one of those was reachable only by having a real service on the other end
+/// behave badly on cue. Tests here must assume no network at all, so the five
+/// failure modes were untested precisely because they are the ones that matter.
+///
+/// Deliberately narrow: a URL in, a body or a sentence out. Retries, headers
+/// and status-code wording stay in [`HttpProfiles`], because a fake that had to
+/// reproduce them would be testing itself.
+pub trait ProfileTransport {
+    /// The body of a GET, or a sentence saying why there is not one.
+    ///
+    /// The error reaches somebody who wants to install a mod, so it is written
+    /// for them rather than naming a protocol.
+    fn get(&self, url: &str) -> Result<String, String>;
+}
+
+/// The real transport: `ureq`, with the retry the service's redeploys need.
 #[derive(Debug, Clone)]
-pub struct ApocryphaGameDb {
-    origin: ServiceOrigin,
+pub struct HttpProfiles {
     app_version: String,
 }
 
-impl ApocryphaGameDb {
+impl ProfileTransport for HttpProfiles {
+    // Reads, so the transport retry applies: the service redeploys on every
+    // push and a dropped connection is routine rather than exceptional.
+    #[allow(clippy::result_large_err)]
+    fn get(&self, url: &str) -> Result<String, String> {
+        send_retrying(|| {
+            agent()
+                .get(url)
+                // No Authorization header. Profiles are public, and a manager
+                // has to work for someone who has never signed in.
+                .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
+                .call()
+        })
+        .map_err(describe)?
+        .into_string()
+        .map_err(|_| "the service's answer could not be read".to_string())
+    }
+}
+
+/// Profiles from the service, with the bundled set underneath.
+#[derive(Debug, Clone)]
+pub struct ApocryphaGameDb<T = HttpProfiles> {
+    origin: ServiceOrigin,
+    transport: T,
+}
+
+impl ApocryphaGameDb<HttpProfiles> {
     pub fn new(origin: ServiceOrigin, app_version: impl Into<String>) -> Self {
+        let app_version = app_version.into();
         ApocryphaGameDb {
             origin,
-            app_version: app_version.into(),
+            transport: HttpProfiles { app_version },
         }
+    }
+}
+
+impl<T: ProfileTransport> ApocryphaGameDb<T> {
+    /// The same client, answered by something other than the network.
+    pub fn with_transport(origin: ServiceOrigin, transport: T) -> Self {
+        ApocryphaGameDb { origin, transport }
     }
 
     /// Fetch every published profile, reporting what happened.
@@ -137,9 +190,8 @@ impl ApocryphaGameDb {
 
     fn index(&self) -> Result<Vec<IndexEntry>, String> {
         let url = format!("{}/api/v1/games/profiles", self.origin.as_str());
-        let response = self.get(&url)?;
-        response
-            .into_json::<Vec<IndexEntry>>()
+        let body = self.transport.get(&url)?;
+        serde_json::from_str::<Vec<IndexEntry>>(&body)
             .map_err(|e| format!("the list of game profiles could not be read: {e}"))
     }
 
@@ -158,9 +210,7 @@ impl ApocryphaGameDb {
             self.origin.as_str(),
             encode(id)
         );
-        self.get(&url)?
-            .into_string()
-            .map_err(|e| format!("the profile for {id} could not be read: {e}"))
+        self.transport.get(&url)
     }
 
     /// Every published profile, as documents ready to be cached.
@@ -181,24 +231,9 @@ impl ApocryphaGameDb {
         }
         Ok(out)
     }
-
-    // Reads, so the transport retry applies: the service redeploys on every
-    // push and a dropped connection is routine rather than exceptional.
-    #[allow(clippy::result_large_err)]
-    fn get(&self, url: &str) -> Result<ureq::Response, String> {
-        send_retrying(|| {
-            agent()
-                .get(url)
-                // No Authorization header. Profiles are public, and a manager
-                // has to work for someone who has never signed in.
-                .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
-                .call()
-        })
-        .map_err(describe)
-    }
 }
 
-impl GameDatabaseSource for ApocryphaGameDb {
+impl<T: ProfileTransport> GameDatabaseSource for ApocryphaGameDb<T> {
     /// Profiles from the service where it answered, and the bundled ones
     /// everywhere else.
     ///
@@ -686,6 +721,146 @@ mod tests {
             ureq::Response::new(418, "Teapot", "").unwrap(),
         ));
         assert!(refused.contains("418"), "{refused}");
+    }
+
+    /// A URL fragment and the answer any URL containing it gets.
+    type Script = Vec<(&'static str, Result<String, String>)>;
+
+    /// Answers scripted per URL, so a test can make the service behave in a way
+    /// no real one would oblige on cue.
+    struct Scripted(Script);
+
+    impl ProfileTransport for Scripted {
+        fn get(&self, url: &str) -> Result<String, String> {
+            for (fragment, answer) in &self.0 {
+                if url.contains(fragment) {
+                    return answer.clone();
+                }
+            }
+            Err("the service could not be reached".to_string())
+        }
+    }
+
+    fn db(script: Script) -> ApocryphaGameDb<Scripted> {
+        ApocryphaGameDb::with_transport(Default::default(), Scripted(script))
+    }
+
+    fn index_of(id: &str, schema: u32) -> String {
+        format!(r#"[{{"id":"{id}","name":"A Game","schemaVersion":{schema},"revision":1}}]"#)
+    }
+
+    /// Every one of these ends the same way, and that is the point: the bundled
+    /// profiles are the floor. None of these five was reachable in a test before
+    /// there was somewhere other than the network to answer from.
+    #[test]
+    fn every_way_the_service_can_fail_falls_back_to_the_bundled_profiles() {
+        let bundled = LocalBuiltin::new().all().unwrap();
+
+        let cases: Vec<(&str, Script)> = vec![
+            (
+                "offline",
+                vec![("", Err("the service could not be reached".into()))],
+            ),
+            (
+                "no profiles published",
+                vec![(
+                    "",
+                    Err("the service has no game profiles to publish".into()),
+                )],
+            ),
+            (
+                "the service is unwell",
+                vec![(
+                    "",
+                    Err(
+                        "the service is having trouble; the built-in profiles are being used"
+                            .into(),
+                    ),
+                )],
+            ),
+            (
+                "an index that is not an index",
+                vec![("games/profiles", Ok("{\"oops\":true}".into()))],
+            ),
+            (
+                "a document that will not parse",
+                vec![
+                    ("games/profiles", Ok(index_of("monster-hunter-wilds", 1))),
+                    ("/profile", Ok("not json at all".into())),
+                ],
+            ),
+        ];
+
+        for (what, script) in cases {
+            let (profiles, freshness) = db(script).fetch();
+            assert_eq!(profiles, bundled, "{what}: the bundled profiles stand");
+            assert!(
+                matches!(freshness, Freshness::Offline { .. }),
+                "{what}: the fallback is reported rather than hidden, got {freshness:?}"
+            );
+        }
+    }
+
+    /// A contract this build does not read is refused rather than guessed at,
+    /// and says so in terms of the game it concerns.
+    #[test]
+    fn a_profile_declaring_a_newer_contract_is_named_not_silently_dropped() {
+        let (profiles, freshness) = db(vec![(
+            "games/profiles",
+            Ok(index_of("monster-hunter-wilds", SUPPORTED_SCHEMA + 1)),
+        )])
+        .fetch();
+
+        assert_eq!(profiles, LocalBuiltin::new().all().unwrap());
+        match freshness {
+            Freshness::Offline { reason } => {
+                assert!(reason.contains("monster-hunter-wilds"), "{reason}");
+                assert!(reason.contains("profile format"), "{reason}");
+            }
+            other => panic!("expected a named refusal, got {other:?}"),
+        }
+    }
+
+    /// The path that has to keep working: a published profile replaces its
+    /// bundled namesake, and nothing else moves.
+    #[test]
+    fn a_published_profile_replaces_only_its_own_bundled_entry() {
+        let published = WILDS.replace(r#""target": "natives""#, r#""target": "natives/stm""#);
+        let (profiles, freshness) = db(vec![
+            ("games/profiles", Ok(index_of("monster-hunter-wilds", 1))),
+            ("/profile", Ok(published)),
+        ])
+        .fetch();
+
+        assert!(matches!(freshness, Freshness::Online { fetched: 1 }));
+        let wilds = profiles
+            .iter()
+            .find(|g| g.id == "monster-hunter-wilds")
+            .expect("the published profile is in force");
+        assert!(wilds
+            .deploy_targets
+            .iter()
+            .any(|t| t.target == "natives/stm"));
+        assert_eq!(
+            profiles.len(),
+            LocalBuiltin::new().all().unwrap().len(),
+            "no other game moved"
+        );
+    }
+
+    /// A refusal at the wire boundary is a fetch failure like any other: the
+    /// bundled profile stays, whole.
+    #[test]
+    fn a_profile_that_would_escape_its_directories_falls_back_like_any_other_failure() {
+        let hostile = WILDS.replace(r#""target": "natives""#, r#""target": "../../autostart""#);
+        let (profiles, freshness) = db(vec![
+            ("games/profiles", Ok(index_of("monster-hunter-wilds", 1))),
+            ("/profile", Ok(hostile)),
+        ])
+        .fetch();
+
+        assert_eq!(profiles, LocalBuiltin::new().all().unwrap());
+        assert!(matches!(freshness, Freshness::Offline { .. }));
     }
 
     /// The check that matters most: a published profile is the same document a
