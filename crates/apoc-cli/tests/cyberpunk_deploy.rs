@@ -132,11 +132,7 @@ fn combined_plan(tmp: &Path, staging_root: &Path) -> apoc_domain::DeploymentPlan
             !plan.files.is_empty(),
             "{mod_id} produced no files: it would silently not install"
         );
-        parts.push(ModPlan {
-            mod_id: mod_id.to_string(),
-            priority: i as i64,
-            plan,
-        });
+        parts.push(ModPlan::same_namespace(mod_id, i as i64, plan));
     }
     apoc_modengine::combine_plans(parts, "4 mods")
 }

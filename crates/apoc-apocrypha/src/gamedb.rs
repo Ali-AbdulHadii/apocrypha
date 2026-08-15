@@ -332,6 +332,8 @@ struct WireLoader {
     #[serde(default)]
     proxy_dll: Option<String>,
     #[serde(default)]
+    also_provides: Vec<String>,
+    #[serde(default)]
     data_dirs: Vec<String>,
     #[serde(default)]
     proton: Option<WireProton>,
@@ -434,6 +436,7 @@ impl WireProfile {
                     _ => LoaderKind::None,
                 },
                 proxy_dll: l.proxy_dll,
+                also_provides: l.also_provides,
                 data_dirs: l.data_dirs,
                 proton: l
                     .proton
