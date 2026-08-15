@@ -24,6 +24,21 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Seconds, and it needs no toolchain at all, so it answers before anything
+  # else has finished installing.
+  encoding:
+    name: Encoding
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # An em dash saved by an editor that guessed cp1252 still compiles, still
+      # passes every test, and is visible only to a person reading the file --
+      # by which time it has usually been copied into the file next door.
+      - name: Text is UTF-8 and was read as UTF-8
+        run: python3 scripts/check-encoding.py .
+
   rust:
     name: Rust
     runs-on: ubuntu-24.04

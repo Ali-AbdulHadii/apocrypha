@@ -286,7 +286,7 @@ impl ModPlan {
     /// A plan whose staging directory is named after the mod itself.
     ///
     /// The shape every mod had before staging and identity were separated, and
-    /// still the right one for a caller that stages exactly once â€” tests, the
+    /// still the right one for a caller that stages exactly once — tests, the
     /// CLI, anything with no notion of a second version.
     pub fn same_namespace(mod_id: impl Into<String>, priority: i64, plan: DeploymentPlan) -> Self {
         let mod_id = mod_id.into();
@@ -520,11 +520,11 @@ mod tests {
             &["natives/a"],
         )]);
         b.groups[0].cardinality = Some(GroupKind::SelectExactlyOne);
-        b.groups[0].label = "Body Â· Shape".into();
+        b.groups[0].label = "Body · Shape".into();
 
         let issues = plan(&b, &Selection::new()).issues;
         assert!(
-            issues.iter().any(|i| i.message.contains("Body Â· Shape")),
+            issues.iter().any(|i| i.message.contains("Body · Shape")),
             "{issues:?}"
         );
 
@@ -699,8 +699,8 @@ mod tests {
     #[test]
     fn staged_paths_follow_the_staging_key_while_conflicts_follow_the_mod_id() {
         // The single place the split can silently regress. A mod that has been
-        // updated keeps its id â€” which is what overrides name and what the UI
-        // reports â€” while its bytes live under a new generation.
+        // updated keeps its id — which is what overrides name and what the UI
+        // reports — while its bytes live under a new generation.
         let updated = ModPlan {
             mod_id: "mod-a".into(),
             staging_key: "mod-a__v2".into(),
