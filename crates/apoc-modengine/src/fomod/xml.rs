@@ -21,6 +21,7 @@ use apoc_domain::fomod::{
 };
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
+use std::collections::HashSet;
 
 /// Nesting cap. `<dependencies>` may contain `<dependencies>` without limit in
 /// the schema, and a hostile document should meet a refusal rather than the end
@@ -268,6 +269,12 @@ fn read_group(
         plugins: Vec::new(),
     };
     let mut depth = depth;
+    // Two plugins in one group may carry the same name, and two long distinct
+    // names may share the first 48 characters the slug keeps. Either way the
+    // slug repeats, and an id is what a selection names, so a repeat would make
+    // choosing one option install every plugin that answers to the same id --
+    // in a SelectExactlyOne group, exactly where exclusivity matters most.
+    let mut taken: HashSet<String> = HashSet::new();
 
     loop {
         match read_event(reader)? {
@@ -275,7 +282,12 @@ fn read_group(
                 depth += 1;
                 guard_depth(depth)?;
                 if local_name(&e) == "plugin" {
-                    let plugin = read_plugin(reader, &e, depth, &group.id, warnings)?;
+                    let mut plugin = read_plugin(reader, &e, depth, warnings)?;
+                    plugin.id = format!(
+                        "{}/{}",
+                        group.id,
+                        unique_slug(&slug(&plugin.name), &mut taken)
+                    );
                     group.plugins.push(plugin);
                     depth -= 1;
                 }
@@ -293,7 +305,6 @@ fn read_plugin(
     reader: &mut Reader<&[u8]>,
     parent: &BytesStart<'_>,
     depth: usize,
-    group_id: &str,
     warnings: &mut Vec<String>,
 ) -> Result<Plugin> {
     let end = parent.to_end().into_owned();
@@ -361,9 +372,9 @@ fn read_plugin(
     if name.trim().is_empty() {
         name = "Unnamed option".to_string();
     }
-    // Derived from names rather than positions so that inserting a step into a
-    // later release does not renumber every answer a user has already given.
-    plugin.id = format!("{group_id}/{}", slug(&name));
+    // The id is composed by the caller, which is the only place that can see
+    // the other plugins in this group and so the only place that can tell
+    // whether a slug is already spoken for.
     plugin.name = name;
     Ok(plugin)
 }
@@ -813,7 +824,9 @@ fn guard_depth(depth: usize) -> Result<()> {
 ///
 /// Restricted deliberately: an option id becomes a staging directory name, and
 /// a charset this narrow cannot produce two distinct ids that sanitise to the
-/// same folder.
+/// same folder. That is an argument about sanitising, and it says nothing about
+/// two plugins sharing a name or a 48-character prefix, which is what
+/// [`unique_slug`] exists to settle.
 fn slug(name: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
@@ -832,6 +845,28 @@ fn slug(name: &str) -> String {
     } else {
         trimmed.chars().take(48).collect()
     }
+}
+
+/// The first free `slug`, `slug-2`, `slug-3`, ... within one group.
+///
+/// An ordinal rather than a hash so a duplicate stays readable, and appended
+/// rather than woven in so the common case -- no duplicate at all -- keeps the
+/// exact id it had before, and a saved selection still matches after upgrade.
+/// The suffix is the plugin's position among its namesakes, not among all
+/// plugins, so adding an unrelated option earlier in the group does not
+/// renumber it.
+fn unique_slug(slug: &str, taken: &mut HashSet<String>) -> String {
+    if taken.insert(slug.to_string()) {
+        return slug.to_string();
+    }
+    // Bounded by the plugins actually read, which the document size cap limits.
+    for n in 2.. {
+        let candidate = format!("{slug}-{n}");
+        if taken.insert(candidate.clone()) {
+            return candidate;
+        }
+    }
+    unreachable!("the loop returns on the first free candidate")
 }
 
 /// Bytes to text, tolerating the encodings these files actually ship in.
@@ -1082,6 +1117,79 @@ mod tests {
             m.conditional_installs[0].files[0].source,
             "patches/slim.esp"
         );
+    }
+
+    #[test]
+    fn two_plugins_with_one_name_still_get_two_ids() {
+        // An id is what a selection names. If both answer to the same one,
+        // choosing either deploys both, and in a SelectExactlyOne group that
+        // is the guarantee the group exists to make.
+        let m = parse(
+            r#"<config><moduleName>M</moduleName><installSteps><installStep name="S">
+               <group name="G" type="SelectExactlyOne">
+                 <plugin name="Slim"><files><file source="a.esp"/></files></plugin>
+                 <plugin name="Slim"><files><file source="b.esp"/></files></plugin>
+               </group></installStep></installSteps></config>"#,
+        );
+        let ids: Vec<&str> = m.install_steps[0].groups[0]
+            .plugins
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, ["step-0/group-0/slim", "step-0/group-0/slim-2"]);
+    }
+
+    #[test]
+    fn names_sharing_the_first_48_characters_still_get_two_ids() {
+        // The slug truncates, so distinct names can meet after it.
+        let prefix = "a".repeat(48);
+        let xml = format!(
+            r#"<config><moduleName>M</moduleName><installSteps><installStep name="S">
+               <group name="G" type="SelectExactlyOne">
+                 <plugin name="{prefix}one"><files><file source="a.esp"/></files></plugin>
+                 <plugin name="{prefix}two"><files><file source="b.esp"/></files></plugin>
+               </group></installStep></installSteps></config>"#
+        );
+        let m = parse(&xml);
+        let plugins = &m.install_steps[0].groups[0].plugins;
+        assert_ne!(plugins[0].id, plugins[1].id);
+    }
+
+    #[test]
+    fn a_plugin_with_no_namesake_keeps_the_id_it_always_had() {
+        // The suffix is only ever added to a repeat, so a saved selection made
+        // by an earlier build still matches.
+        let m = parse(
+            r#"<config><moduleName>M</moduleName><installSteps><installStep name="S">
+               <group name="G" type="SelectAny">
+                 <plugin name="Slim"><files><file source="a.esp"/></files></plugin>
+                 <plugin name="Curvy"><files><file source="b.esp"/></files></plugin>
+               </group></installStep></installSteps></config>"#,
+        );
+        let ids: Vec<&str> = m.install_steps[0].groups[0]
+            .plugins
+            .iter()
+            .map(|p| p.id.as_str())
+            .collect();
+        assert_eq!(ids, ["step-0/group-0/slim", "step-0/group-0/curvy"]);
+    }
+
+    #[test]
+    fn one_name_repeated_in_a_second_group_is_not_a_collision() {
+        // The group id already separates them, so numbering is per group.
+        let m = parse(
+            r#"<config><moduleName>M</moduleName><installSteps><installStep name="S">
+               <group name="A" type="SelectAny">
+                 <plugin name="Slim"><files><file source="a.esp"/></files></plugin>
+               </group>
+               <group name="B" type="SelectAny">
+                 <plugin name="Slim"><files><file source="b.esp"/></files></plugin>
+               </group>
+               </installStep></installSteps></config>"#,
+        );
+        let groups = &m.install_steps[0].groups;
+        assert_eq!(groups[0].plugins[0].id, "step-0/group-0/slim");
+        assert_eq!(groups[1].plugins[0].id, "step-0/group-1/slim");
     }
 
     #[test]

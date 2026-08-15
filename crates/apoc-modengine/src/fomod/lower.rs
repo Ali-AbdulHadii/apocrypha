@@ -43,14 +43,16 @@ pub(crate) fn lower(
     let mut warnings = module.warnings.clone();
     let mut groups: Vec<OptionGroup> = Vec::new();
 
+    // A plugin file can say it is installed whether or not its plugin is
+    // chosen. That is the same claim `<requiredInstallFiles>` makes, so it is
+    // answered in the same place rather than by a second mechanism, and the
+    // wizard shows it under the heading that already tells the truth about it.
+    let mut required: Vec<FileSpec> = module.required_install_files.clone();
+    required.extend(unconditional_plugin_files(module));
+
     // Files everybody gets, first, so they read as the base the rest layers on.
-    if !module.required_install_files.is_empty() {
-        let payload = resolve_files(
-            &module.required_install_files,
-            &sources,
-            rules,
-            &mut warnings,
-        )?;
+    if !required.is_empty() {
+        let payload = resolve_files(&required, &sources, rules, &mut warnings)?;
         groups.push(OptionGroup {
             index: Some(0),
             label: "Required files".to_string(),
@@ -152,6 +154,46 @@ pub(crate) fn lower(
     })
 }
 
+/// Whether a plugin's file is installed without regard to the plugin being
+/// chosen.
+///
+/// `alwaysInstall` says so outright. `installIfUsable` says so as long as the
+/// installer has not declared the plugin unusable -- and `usable` is read from
+/// the plugin's *default* type, which is the same reading `lower_plugin` uses to
+/// decide `blocked_reason` and `select_mode`. A pattern can move the type at
+/// evaluate time, so a fully faithful `installIfUsable` would have to be decided
+/// there; deciding it here matches what the rest of this file already believes
+/// about a plugin, and disagreeing with itself would be worse than being
+/// approximate in the same direction throughout.
+fn is_unconditional(spec: &FileSpec, usable: bool) -> bool {
+    spec.always_install || (spec.install_if_usable && usable)
+}
+
+fn is_usable(plugin: &Plugin) -> bool {
+    plugin.type_descriptor.default != PluginTypeName::NotUsable
+}
+
+/// Every plugin file across the whole installer that installs regardless of
+/// choice, in document order.
+fn unconditional_plugin_files(module: &FomodModule) -> Vec<FileSpec> {
+    let mut out = Vec::new();
+    for step in &module.install_steps {
+        for group in &step.groups {
+            for plugin in &group.plugins {
+                let usable = is_usable(plugin);
+                out.extend(
+                    plugin
+                        .files
+                        .iter()
+                        .filter(|s| is_unconditional(s, usable))
+                        .cloned(),
+                );
+            }
+        }
+    }
+    out
+}
+
 fn lower_group(
     group: &PluginGroup,
     sources: &SourceIndex<'_>,
@@ -172,9 +214,24 @@ fn lower_plugin(
     rules: &GameRules,
     warnings: &mut Vec<String>,
 ) -> Result<ModOption> {
-    let payload = resolve_files(&plugin.files, sources, rules, warnings)?;
-    let declared = !plugin.files.is_empty();
     let default_type = plugin.type_descriptor.default;
+    // The unconditional ones have been hoisted into the required option, so
+    // leaving them here too would put one destination in two options and turn
+    // the mod against itself in the conflict view.
+    let usable = is_usable(plugin);
+    let chosen_files: Vec<FileSpec> = plugin
+        .files
+        .iter()
+        .filter(|s| !is_unconditional(s, usable))
+        .cloned()
+        .collect();
+    let payload = resolve_files(&chosen_files, sources, rules, warnings)?;
+    // Measured after the split, because this only feeds the missing-from-archive
+    // check below and nothing that was hoisted can be missing from here. A
+    // plugin whose every file installs regardless has nothing left to choose,
+    // so it lands on `Info` -- shown, not selectable, files installed anyway,
+    // which is what the author asked for.
+    let declared = !chosen_files.is_empty();
 
     // An option whose every source is missing is shown, disabled, with the
     // reason. Offering it would install nothing and look like a failure of the
@@ -321,7 +378,11 @@ fn destination_for(spec: &FileSpec, rel_to_source: &str, rules: &GameRules) -> R
 /// either hostile or broken past the point where the rest of its files could be
 /// trusted, and quietly dropping one while installing the others is the worst
 /// available outcome.
-fn validated_dest(raw: &str) -> Result<String> {
+///
+/// Shared with [`super::eval::probe`], which applies the same rules to the paths
+/// a `fileDependency` names. Those are only ever read, but a path is a path and
+/// two sets of rules for one concept is how the second one ends up weaker.
+pub(super) fn validated_dest(raw: &str) -> Result<String> {
     let unsafe_path = || ModEngineError::UnsafePath(raw.to_string());
     let normalised = raw.replace('\\', "/");
 
