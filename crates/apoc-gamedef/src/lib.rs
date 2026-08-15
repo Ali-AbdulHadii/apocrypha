@@ -14,6 +14,7 @@ use thiserror::Error;
 const MONSTER_HUNTER_WILDS: &str = include_str!("../profiles/monster_hunter_wilds.toml");
 const CYBERPUNK_2077: &str = include_str!("../profiles/cyberpunk_2077.toml");
 const SKYRIM_SPECIAL_EDITION: &str = include_str!("../profiles/skyrim_special_edition.toml");
+const DRAGONS_DOGMA_2: &str = include_str!("../profiles/dragons_dogma_2.toml");
 
 #[derive(Debug, Error)]
 pub enum GameDefError {
@@ -72,7 +73,12 @@ impl LocalBuiltin {
     /// The raw bundled TOML documents. Kept separate so tests can assert every
     /// shipped profile parses.
     fn raw_profiles() -> &'static [&'static str] {
-        &[MONSTER_HUNTER_WILDS, CYBERPUNK_2077, SKYRIM_SPECIAL_EDITION]
+        &[
+            MONSTER_HUNTER_WILDS,
+            CYBERPUNK_2077,
+            SKYRIM_SPECIAL_EDITION,
+            DRAGONS_DOGMA_2,
+        ]
     }
 }
 
@@ -296,6 +302,86 @@ mod tests {
                 ("version".to_string(), "n,b".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn dragons_dogma_2_profile_is_correct() {
+        let src = LocalBuiltin::new();
+        let g = src
+            .get("dragons-dogma-2")
+            .expect("dragon's dogma 2 present");
+
+        assert_eq!(g.name, "Dragon's Dogma 2");
+        assert_eq!(g.engine, Engine::ReEngine);
+        assert_eq!(g.detection.steam_app_id, 2054970);
+        assert_eq!(g.nexus_domain.as_deref(), Some("dragonsdogma2"));
+        assert_eq!(g.load_order, LoadOrderPolicy::Priority);
+        assert!(
+            g.case_sensitive,
+            "RE Engine paths are case-sensitive on Linux"
+        );
+
+        assert_eq!(g.target_for("natives"), Some("natives"));
+        assert_eq!(g.target_for("reframework"), Some("reframework"));
+
+        // The one field that is not Wilds': Dragon's Dogma 2 patches the base
+        // chunk directly, where Wilds interposes a `sub_000` archive first. A
+        // pak named into the wrong chain deploys without error and is never
+        // loaded, so this asserts the name a user would see rather than the
+        // template that produces it.
+        let chain = g.pak_chain.as_ref().expect("standalone paks are supported");
+        assert_eq!(chain.filename(1), "re_chunk_000.pak.patch_001.pak");
+        assert_eq!(chain.index_of("re_chunk_000.pak.patch_007.pak"), Some(7));
+
+        let loader = g.loader.as_ref().expect("REFramework loader defined");
+        assert_eq!(loader.kind, LoaderKind::DllProxy);
+        assert_eq!(loader.proxy_dll.as_deref(), Some("dinput8.dll"));
+        assert!(loader.proton.requires_prefix_write);
+        assert_eq!(
+            loader.proton.wine_dll_overrides.as_deref(),
+            Some("dinput8=n,b")
+        );
+
+        // A bare `STM/` or `autorun/` at an archive root is how RE Engine mods
+        // are packed often enough that missing either imports the mod as zero
+        // files.
+        for (folder, prefix) in [("STM", "natives"), ("autorun", "reframework")] {
+            assert!(
+                g.rewrap
+                    .iter()
+                    .any(|r| r.folder == folder && r.prefix == prefix),
+                "{folder} is not rewrapped under {prefix}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_re_engine_profiles_agree_on_everything_except_identity() {
+        // The claim Phase 3 makes is that a game on an engine already supported
+        // costs a document and nothing else. That is only true if two profiles
+        // on the same engine differ solely in who they are, so this asserts it
+        // rather than leaving it to be believed. A new RE Engine game that has
+        // to disagree here is a finding: either the schema is missing something
+        // or the game is not the cheap case it looked like.
+        let all = LocalBuiltin::new().all().unwrap();
+        let wilds = all.iter().find(|g| g.id == "monster-hunter-wilds").unwrap();
+        let dd2 = all.iter().find(|g| g.id == "dragons-dogma-2").unwrap();
+
+        assert_eq!(wilds.engine, dd2.engine);
+        assert_eq!(wilds.load_order, dd2.load_order);
+        assert_eq!(wilds.conflict_scope, dd2.conflict_scope);
+        assert_eq!(wilds.case_sensitive, dd2.case_sensitive);
+        assert_eq!(wilds.canonical_case, dd2.canonical_case);
+        assert_eq!(wilds.formats, dd2.formats);
+        assert_eq!(wilds.deploy_targets, dd2.deploy_targets);
+        assert_eq!(wilds.rewrap, dd2.rewrap);
+        assert_eq!(wilds.loader, dd2.loader);
+
+        // Identity, and the patch chain, are what a new game is allowed to
+        // change without that meaning anything.
+        assert_ne!(wilds.id, dd2.id);
+        assert_ne!(wilds.detection.steam_app_id, dd2.detection.steam_app_id);
+        assert_ne!(wilds.pak_chain, dd2.pak_chain);
     }
 
     #[test]
