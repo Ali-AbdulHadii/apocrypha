@@ -309,15 +309,12 @@ pub fn read_index(archive_path: &Path) -> Result<ArchiveIndex> {
                         // An archive containing two FOMODs is a repack, and
                         // merging two installers would be inventing a third.
                         // The outermost one is the one the repacker meant.
-                        if config
-                            .as_ref()
-                            .map_or(true, |(p, _)| depth(path) < depth(p))
-                        {
+                        if config.as_ref().is_none_or(|(p, _)| depth(path) < depth(p)) {
                             config = Some((path.to_string(), buf));
                         }
                     }
                     Some(FomodDoc::Info) => {
-                        if info.as_ref().map_or(true, |(p, _)| depth(path) < depth(p)) {
+                        if info.as_ref().is_none_or(|(p, _)| depth(path) < depth(p)) {
                             info = Some((path.to_string(), buf));
                         }
                     }
