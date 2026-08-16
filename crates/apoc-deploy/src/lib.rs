@@ -8,10 +8,32 @@
 //!    [`journal`] as it happens, so an interrupted deploy is still reversible.
 //! 3. **Deletion is hash-guarded.** Rollback refuses to remove a file whose bytes
 //!    no longer match what we deployed (e.g. a Steam update replaced it).
+//!
+//! ## What they cover
+//!
+//! All three say *do the recoverable thing first, then the destructive one*, and
+//! the third adds that when the record and the disk disagree the engine reports
+//! rather than guesses. None of that is a statement about which directory a file
+//! is in. They are written in terms of "a game file" because for a long time the
+//! game directory was the only place this crate wrote.
+//!
+//! It is not any more. [`loader`] writes a Wine DLL override into the Proton
+//! prefix registry, and [`plugin_list`] writes a game's plugin list into the
+//! prefix as well. **Both are covered.** A file is in scope when this crate
+//! replaces something it did not create, in a directory it does not own — which
+//! is the situation the invariants were written for, and the prefix is more that
+//! situation rather than less: a plugin list is a file the user curates by hand,
+//! in another tool, on purpose.
+//!
+//! So read "game file" as "pre-existing file we replace". The one deliberate
+//! difference is [`loader`]'s registry values, which carry the previous value
+//! inline in the journal rather than vaulting it, because a registry value is
+//! not a file and a vault key would name nothing.
 
 pub mod journal;
 pub mod loader;
 pub mod place;
+pub mod plugin_list;
 pub mod vault;
 pub mod verify;
 
@@ -560,6 +582,27 @@ pub fn rollback(ctx: &DeployContext, journal: &Journal, user_reg: Option<&Path>)
                             }
                         }
                     }
+                }
+            }
+            JournalOp::PluginListWritten {
+                path,
+                original_vault_key,
+                sha256,
+            } => {
+                let file = Path::new(path);
+                match plugin_list::rollback_one(
+                    file,
+                    original_vault_key.as_deref(),
+                    sha256,
+                    &ctx.vault_dir,
+                ) {
+                    Ok(true) if original_vault_key.is_some() => report.restored.push(path.clone()),
+                    Ok(true) => report.removed.push(path.clone()),
+                    // The list no longer matches what we wrote, so somebody
+                    // curated it in between. Invariant 3, and the case it exists
+                    // for most clearly.
+                    Ok(false) => report.skipped_modified.push(path.clone()),
+                    Err(e) => report.errors.push(format!("{path}: {e}")),
                 }
             }
             JournalOp::RegistryOverride { name, previous, .. } => {

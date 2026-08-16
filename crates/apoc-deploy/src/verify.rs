@@ -75,6 +75,12 @@ fn file_path_of(op: &JournalOp) -> Option<&str> {
         // is nothing on disk here to compare, so it is skipped outright rather
         // than counted as a file we checked.
         JournalOp::RegistryOverride { .. } => None,
+        // A plugin list is a file, but not one of these. Every path here is
+        // game-relative and every repair re-places from staging; the list is
+        // outside the game directory and was composed rather than staged, so
+        // there is no source to put back. It is also the file most likely to
+        // have been legitimately edited since, which repair must not undo.
+        JournalOp::PluginListWritten { .. } => None,
     }
 }
 

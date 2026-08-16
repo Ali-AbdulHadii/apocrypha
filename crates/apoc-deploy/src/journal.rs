@@ -49,6 +49,23 @@ pub enum JournalOp {
         /// Vault key of the original DLL, when one already existed.
         original_vault_key: Option<String>,
     },
+    /// A game's plugin list was written, in the Proton prefix.
+    ///
+    /// Recorded with an absolute path rather than a game-relative one, because
+    /// this file is not in the game directory and nothing relative to it would
+    /// name the same place twice.
+    PluginListWritten {
+        /// Absolute path to the file written.
+        path: String,
+        /// Vault key of the list that was there before, when there was one.
+        ///
+        /// `None` means the game had never written a list, so rolling back
+        /// means removing ours rather than restoring anything.
+        original_vault_key: Option<String>,
+        /// Hash of what we wrote, so rollback can tell our list from the one
+        /// the user curated afterwards.
+        sha256: String,
+    },
     /// A Wine DLL override was written into the Proton prefix registry.
     RegistryOverride {
         /// The registry value name, e.g. `dinput8`.
