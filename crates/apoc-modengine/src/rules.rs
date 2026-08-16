@@ -43,6 +43,10 @@ pub struct GameRules {
     /// ordering them. Carried here rather than re-derived from the profile so
     /// the notice and the writer cannot disagree about which games are managed.
     pub manages_plugin_list: bool,
+    /// A folder whose contents mirror the game directory, e.g. `Root`.
+    pub root_folder: Option<String>,
+    /// Filename patterns accepted at the archive root, e.g. `*.dll`.
+    pub root_patterns: Vec<String>,
 }
 
 impl Default for GameRules {
@@ -58,6 +62,8 @@ impl Default for GameRules {
             fomod_dest_prefix: String::new(),
             plugin_extensions: Vec::new(),
             manages_plugin_list: false,
+            root_folder: None,
+            root_patterns: Vec::new(),
         }
     }
 }
@@ -114,6 +120,16 @@ impl GameRules {
                 .unwrap_or_default(),
             plugin_extensions: profile.plugin_extensions.clone(),
             manages_plugin_list: profile.manages_plugin_list(),
+            root_folder: profile
+                .root_files
+                .as_ref()
+                .and_then(|r| r.folder.clone())
+                .filter(|f| !f.trim().is_empty()),
+            root_patterns: profile
+                .root_files
+                .as_ref()
+                .map(|r| r.patterns.clone())
+                .unwrap_or_default(),
         }
     }
 
@@ -176,6 +192,29 @@ impl GameRules {
         self.root_file_dest(name).is_some()
     }
 
+    /// Where a path under the declared root folder deploys, relative to the
+    /// game directory.
+    ///
+    /// The folder is stripped and the remainder kept as-is, because the folder
+    /// *means* the game directory: `Root/dxgi.dll` is `dxgi.dll` and
+    /// `Root/Data/x.esp` is `Data/x.esp`. One rule, no exceptions, and in
+    /// particular no need to treat a `Data` inside it as a special case.
+    ///
+    /// `None` when this game declares no such folder, or the path is not under
+    /// it. A bare `Root` with nothing after it is nothing to deploy.
+    pub fn strip_root_folder<'a>(&self, path: &'a str) -> Option<&'a str> {
+        let folder = self.root_folder.as_deref()?;
+        let (head, rest) = path.split_once('/')?;
+        (head.eq_ignore_ascii_case(folder) && !rest.is_empty()).then_some(rest)
+    }
+
+    /// Whether a bare filename at the archive root belongs in the game folder.
+    ///
+    /// Asked only of files sitting directly at the root, never of a path.
+    pub fn matches_root_pattern(&self, name: &str) -> bool {
+        self.root_patterns.iter().any(|p| glob_matches(p, name))
+    }
+
     /// Where a recognized root file is deployed, relative to the game directory.
     pub fn root_file_dest(&self, name: &str) -> Option<&str> {
         self.root_files
@@ -191,6 +230,35 @@ impl GameRules {
                 .extension()
                 .is_some_and(|e| e.eq_ignore_ascii_case("pak"))
     }
+}
+
+/// Match a filename against a pattern carrying at most one `*`.
+///
+/// Deliberately not a glob library. Every pattern a profile needs here is
+/// `*.dll`, `*.exe` or an exact name, and one wildcard covers all of them;
+/// taking a dependency to support `**` and character classes would be paying
+/// for a generality no game profile has asked for.
+///
+/// Case-insensitive, because these patterns describe Windows filenames and a
+/// mod author's casing is not something to depend on.
+fn glob_matches(pattern: &str, name: &str) -> bool {
+    let pattern = pattern.trim();
+    if pattern.is_empty() {
+        return false;
+    }
+    let Some((prefix, suffix)) = pattern.split_once('*') else {
+        // No wildcard: an exact filename.
+        return pattern.eq_ignore_ascii_case(name);
+    };
+    // The name must be long enough to hold both ends without them overlapping.
+    // Without this, `*.dll` would accept a file named exactly `.dll` by reading
+    // the same four characters as prefix and suffix, and that file is not what
+    // the pattern means.
+    if name.len() <= prefix.len() + suffix.len() {
+        return false;
+    }
+    name[..prefix.len()].eq_ignore_ascii_case(prefix)
+        && name[name.len() - suffix.len()..].eq_ignore_ascii_case(suffix)
 }
 
 #[cfg(test)]
@@ -222,6 +290,7 @@ mod tests {
             fomod: None,
             plugin_extensions: vec![],
             plugin_list: None,
+            root_files: None,
             rewrap: vec![],
             canonical_case: vec!["STM".into()],
             pak_chain: Some(apoc_domain::PakChainSpec {
@@ -321,5 +390,92 @@ mod tests {
             !r.is_pak_file("x.pak"),
             "pak mods need a declared patch chain, never a blind default"
         );
+    }
+
+    /* --------------------------------------------------- root files --- */
+
+    fn creation_engine() -> GameRules {
+        GameRules {
+            root_folder: Some("Root".into()),
+            root_patterns: vec!["*.exe".into(), "*.dll".into(), "enblocal.ini".into()],
+            ..GameRules::default()
+        }
+    }
+
+    #[test]
+    fn a_wildcard_matches_a_name_the_game_version_changes() {
+        // The reason patterns exist at all: SKSE's library carries the game
+        // version, so no fixed list of names survives a game update.
+        let r = creation_engine();
+        assert!(r.matches_root_pattern("skse64_1_6_1170.dll"));
+        assert!(r.matches_root_pattern("skse64_1_6_640.dll"));
+        assert!(r.matches_root_pattern("skse64_loader.exe"));
+    }
+
+    #[test]
+    fn documentation_beside_the_mod_matches_nothing() {
+        // The whole argument for an allowlist: nobody maintains a list of
+        // things to exclude, because a readme simply is not an `.exe`.
+        let r = creation_engine();
+        assert!(!r.matches_root_pattern("skse64_readme.txt"));
+        assert!(!r.matches_root_pattern("skse64_whatsnew.txt"));
+        assert!(!r.matches_root_pattern("screenshot.png"));
+    }
+
+    #[test]
+    fn a_pattern_without_a_wildcard_is_an_exact_name() {
+        let r = creation_engine();
+        assert!(r.matches_root_pattern("enblocal.ini"));
+        assert!(
+            !r.matches_root_pattern("meta.ini"),
+            "an exact pattern must not behave like *.ini"
+        );
+    }
+
+    #[test]
+    fn matching_ignores_case_because_these_are_windows_names() {
+        let r = creation_engine();
+        assert!(r.matches_root_pattern("SKSE64_Loader.EXE"));
+        assert!(r.matches_root_pattern("ENBLocal.INI"));
+    }
+
+    #[test]
+    fn a_wildcard_needs_something_to_stand_for() {
+        // `*.dll` describes a name with a stem. A file called exactly `.dll`
+        // would otherwise match by reading the same four characters twice.
+        let r = creation_engine();
+        assert!(!r.matches_root_pattern(".dll"));
+        assert!(r.matches_root_pattern("a.dll"));
+    }
+
+    #[test]
+    fn the_root_folder_is_stripped_and_the_rest_kept() {
+        let r = creation_engine();
+        assert_eq!(r.strip_root_folder("Root/dxgi.dll"), Some("dxgi.dll"));
+        // The case Root Builder refuses the whole mod over. Here it needs no
+        // rule of its own: `Root` means the game folder, so this is `Data`.
+        assert_eq!(
+            r.strip_root_folder("Root/Data/x.esp"),
+            Some("Data/x.esp"),
+            "a Data inside the root folder is simply Data"
+        );
+        assert_eq!(r.strip_root_folder("root/lower.dll"), Some("lower.dll"));
+    }
+
+    #[test]
+    fn a_folder_that_is_not_the_root_folder_is_left_alone() {
+        let r = creation_engine();
+        assert_eq!(r.strip_root_folder("Data/x.esp"), None);
+        assert_eq!(r.strip_root_folder("dxgi.dll"), None);
+        assert_eq!(r.strip_root_folder("Root"), None, "nothing after it");
+        assert_eq!(r.strip_root_folder("Root/"), None, "still nothing after it");
+    }
+
+    #[test]
+    fn a_game_that_declares_none_of_this_accepts_none_of_it() {
+        // Five of the six games shipping today. Their behaviour must not move.
+        let r = GameRules::default();
+        assert!(!r.matches_root_pattern("anything.dll"));
+        assert_eq!(r.strip_root_folder("Root/x.dll"), None);
     }
 }

@@ -40,6 +40,7 @@ fn profile() -> GameProfile {
         canonical_case: vec!["Data".into()],
         loader: None,
         pak_chain: None,
+        root_files: None,
         plugin_list: Some(PluginListSpec {
             dir: "Skyrim Special Edition".into(),
             plugins_file: "plugins.txt".into(),

@@ -27,7 +27,7 @@
 //! "fetch that from wherever a settings file says" is not a feature.
 
 use crate::{agent, send_retrying, ServiceOrigin};
-use apoc_domain::{GameProfile, PluginActivation, PluginListSpec};
+use apoc_domain::{GameProfile, PluginActivation, PluginListSpec, RootFilesSpec};
 use apoc_gamedef::{GameDatabaseSource, GameDefError, LocalBuiltin};
 use serde::Deserialize;
 
@@ -355,6 +355,24 @@ fn validate(profile: &GameProfile) -> Result<(), String> {
         }
     }
 
+    if let Some(root) = &profile.root_files {
+        // The folder is stripped off an archive path and what remains is joined
+        // onto the game directory, so a folder that climbs is a document
+        // choosing to write outside the game. `safe_dest` refuses that at the
+        // moment of writing; refusing it here means the profile is rejected by
+        // name instead of every file it produces failing one at a time.
+        if let Some(folder) = &root.folder {
+            paths.push(("the root files folder", folder));
+        }
+        // Patterns are matched against a bare filename and never joined onto
+        // anything, so a separator in one cannot escape — it simply could never
+        // match. Refused anyway, because a pattern that cannot match is a
+        // profile that silently does nothing, and saying so is more useful.
+        for pattern in &root.patterns {
+            paths.push(("a root file pattern", pattern));
+        }
+    }
+
     for (what, path) in paths {
         if !descends(path) {
             return Err(format!(
@@ -458,6 +476,17 @@ struct WireProfile {
     fomod: Option<WireFomod>,
     #[serde(default)]
     plugin_list: Option<WirePluginList>,
+    #[serde(default)]
+    root_files: Option<WireRootFiles>,
+}
+
+/// Which of a mod's files belong beside the game executable, as published.
+#[derive(Debug, Deserialize)]
+struct WireRootFiles {
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    patterns: Vec<String>,
 }
 
 /// A game's plugin list, as the service publishes it.
@@ -603,6 +632,10 @@ impl WireProfile {
                     _ => PluginActivation::Asterisk,
                 },
                 implicit: p.implicit,
+            }),
+            root_files: self.root_files.map(|r| RootFilesSpec {
+                folder: r.folder,
+                patterns: r.patterns,
             }),
             rewrap: self
                 .rewrap

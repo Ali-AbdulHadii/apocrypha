@@ -221,6 +221,48 @@ pub struct RewrapRule {
     pub prefix: String,
 }
 
+/// Which of a mod's files belong beside the game executable.
+///
+/// Most mods install under a payload root — `Data` for Creation Engine,
+/// `natives` for RE Engine — and the deploy targets cover them. A whole class
+/// does not: script extenders, ENB, ReShade, DXVK and their kin replace or sit
+/// beside the game binary itself. Without this a Skyrim install of SKSE keeps
+/// the Papyrus scripts, discards the extender, and reports success.
+///
+/// Two shapes, because mods ship in two, and both are accepted with no
+/// repackaging:
+///
+/// * A **folder**, conventionally `Root`, whose contents mirror the game
+///   directory. Mod Organizer's Root Builder plugin established this and a
+///   large part of the Bethesda ecosystem is already packaged for it.
+/// * **Loose files at the archive root**, which is how SKSE itself ships: an
+///   `.exe`, two `.dll`s, and a `Data` folder beside them.
+///
+/// Nothing here is a list of mod names, and no filename is fixed: SKSE's
+/// library carries the game version in its name (`skse64_1_6_1170.dll`), so
+/// patterns are the only thing that can describe it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RootFilesSpec {
+    /// A folder at the archive root whose contents mirror the game directory.
+    ///
+    /// The folder is stripped and what remains is deployed relative to the game
+    /// directory, so `Root/dxgi.dll` installs as `dxgi.dll` and
+    /// `Root/Data/x.esp` as `Data/x.esp`. That one rule needs no exceptions —
+    /// `Root` *means* the game folder, so a `Data` inside it is simply `Data`.
+    #[serde(default)]
+    pub folder: Option<String>,
+    /// Filename patterns accepted at the archive root, for mods packaged
+    /// without such a folder.
+    ///
+    /// Matched against the bare filename, never a path, and supporting a single
+    /// `*`. A pattern list rather than a denylist is what keeps this quiet:
+    /// a readme, a `whatsnew`, a screenshot or a `src` tree matches nothing and
+    /// is left alone without anyone maintaining a list of things to exclude.
+    #[serde(default)]
+    pub patterns: Vec<String>,
+}
+
 /// Game-specific FOMOD behaviour.
 ///
 /// A FOMOD declares where each file goes, but it declares it in the terms its
@@ -362,6 +404,12 @@ pub struct GameProfile {
     /// them but the Creation Engine ones.
     #[serde(default)]
     pub plugin_list: Option<PluginListSpec>,
+    /// Which of a mod's files belong in the game folder itself.
+    ///
+    /// `None` for a game whose mods live entirely under a payload root, which
+    /// is every RE Engine title shipping today.
+    #[serde(default)]
+    pub root_files: Option<RootFilesSpec>,
 }
 
 impl GameProfile {

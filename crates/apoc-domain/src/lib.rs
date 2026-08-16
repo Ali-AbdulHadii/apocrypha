@@ -22,7 +22,7 @@ pub use fomod::{
 pub use game::{
     ConflictScope, DeployTarget, Engine, FomodSpec, GameProfile, LoadOrderPolicy, LoaderKind,
     LoaderSpec, PakChainSpec, PluginActivation, PluginListSpec, ProtonLoaderSpec, RewrapRule,
-    SteamDetection,
+    RootFilesSpec, SteamDetection,
 };
 pub use modpack::{
     DeployRoot, FilePayload, InstallerModel, ModBundle, ModOption, OptionGroup, SelectMode,
