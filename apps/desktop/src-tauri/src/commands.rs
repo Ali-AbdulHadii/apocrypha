@@ -57,7 +57,7 @@ pub(crate) fn profile_of(state: &AppState, game_id: &str) -> CmdResult<i64> {
 /// Make sure the game exists as a row, without claiming to know where it is
 /// installed.
 ///
-/// Writes only the identity â€” id and name, both from the bundled profile â€” and
+/// Writes only the identity — id and name, both from the bundled profile — and
 /// leaves the paths null for detection to fill in. Overwriting a detected path
 /// with a null here would undo the user's own Choose folder.
 pub(crate) fn ensure_game_row(store: &apoc_storage::Store, game_id: &str) -> CmdResult<()> {
@@ -109,7 +109,7 @@ fn rules_for(game_id: &str) -> apoc_modengine::GameRules {
 /// Used wherever the state is in hand. The bundled-only [`rules_for`] remains
 /// for the few callers that have no state to consult, where reading a published
 /// profile is not possible and the compiled-in one is the whole truth available.
-fn rules_for_state(state: &AppState, game_id: &str) -> apoc_modengine::GameRules {
+pub(crate) fn rules_for_state(state: &AppState, game_id: &str) -> apoc_modengine::GameRules {
     crate::gamedb::effective_profile(state, game_id)
         .map(|p| apoc_modengine::GameRules::from_profile(&p))
         .unwrap_or_else(|| rules_for(game_id))
@@ -295,7 +295,7 @@ pub fn set_game_path(
 ///
 /// Takes a resolved mod id rather than finding one itself. It used to scan for a
 /// matching bundle name, which meant this command and the replacement resolver
-/// each had their own idea of what "the same mod" was â€” and two identity notions
+/// each had their own idea of what "the same mod" was — and two identity notions
 /// in one code path is how they drift apart.
 fn previous_selection(
     state: &AppState,
@@ -322,7 +322,7 @@ pub enum ReplaceReason {
     UpdateLink,
     /// Same Nexus mod page. Two files on one page are two versions of one mod.
     NexusMod,
-    /// Same bundle name, and nothing better. A guess â€” see [`resolve_replacement`].
+    /// Same bundle name, and nothing better. A guess — see [`resolve_replacement`].
     Name,
 }
 
@@ -355,7 +355,7 @@ impl ReplaceCandidate {
 /// unrelated mods into one, so it is offered to the user instead.
 ///
 /// An author renaming their mod is not matched by name and reads as a new mod.
-/// Guessing at renames â€” by position, by fuzzy name â€” would silently replace
+/// Guessing at renames — by position, by fuzzy name — would silently replace
 /// something the user did not mean, which is the worse failure.
 fn resolve_replacement(
     existing: &[ModRecord],
@@ -428,7 +428,7 @@ fn mint_mod_id(state: &AppState, sha: Option<&str>) -> CmdResult<String> {
     };
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     // Only reachable when a hash-derived id is already taken by a mod the caller
-    // did not ask to replace â€” a re-import that resolved to no candidate.
+    // did not ask to replace — a re-import that resolved to no candidate.
     while store.get_mod(&id).map_err(err)?.is_some() {
         id = format!("mod-{}", unique_suffix());
     }
@@ -452,6 +452,14 @@ fn new_staging_key(mod_id: &str, sha: Option<&str>) -> String {
 /// being answered wrongly.
 fn game_dir_of(state: &AppState, game_id: &str) -> Option<PathBuf> {
     let store = state.store.lock().ok()?;
+    game_dir_in(&store, game_id)
+}
+
+/// As [`game_dir_of`], for a caller that already holds the store lock.
+///
+/// The mutex is not reentrant, so a command that has locked the store and then
+/// calls `game_dir_of` deadlocks rather than failing.
+fn game_dir_in(store: &apoc_storage::Store, game_id: &str) -> Option<PathBuf> {
     store
         .get_game(game_id)
         .ok()
@@ -495,8 +503,8 @@ fn narrow_to_conditions(
     let mut groups = groups_view(bundle);
     for group in &mut groups {
         group.options.retain(|o| {
-            // Synthetic options â€” required files, and the extras a combination
-            // pulls in â€” belong to no step and are never chosen by hand.
+            // Synthetic options — required files, and the extras a combination
+            // pulls in — belong to no step and are never chosen by hand.
             o.id.starts_with('@') || visible.contains_key(o.id.as_str())
         });
         for option in &mut group.options {
@@ -672,7 +680,7 @@ pub fn analyze_archive(
 /// Describe a carry outcome in the terms the person who made the choices used.
 ///
 /// `carried` deliberately lists only options someone actually picked, not the
-/// forced entries `default_selection` adds back â€” telling a user their mod
+/// forced entries `default_selection` adds back — telling a user their mod
 /// "kept" a base-files entry they never chose reads as noise, and hides the two
 /// real choices in a list of nine.
 fn carry_view(
@@ -686,8 +694,8 @@ fn carry_view(
         .map(|o| o.name.clone())
         .collect();
 
-    // A dropped id may still name an option in the new bundle â€” one demoted to a
-    // notice or a header â€” in which case its name is more use than its id.
+    // A dropped id may still name an option in the new bundle — one demoted to a
+    // notice or a header — in which case its name is more use than its id.
     let dropped = carried
         .dropped
         .iter()
@@ -731,7 +739,7 @@ pub fn import_mod(
         Some(id) => {
             let store = state.store.lock().map_err(|_| "state poisoned")?;
             // A caller asking to replace a row that is gone must not quietly get
-            // a new mod instead â€” that is exactly the duplicate this exists to
+            // a new mod instead — that is exactly the duplicate this exists to
             // prevent, and it would be invisible.
             let existing = store.get_mod(id).map_err(err)?.ok_or_else(|| {
                 "The mod this update replaces is no longer installed.".to_string()
@@ -830,6 +838,9 @@ pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModVi
     let store = state.store.lock().map_err(|_| "state poisoned")?;
     let mods = store.list_mods(&game_id).map_err(err)?;
     let applied = store.applied_mod_ids(&game_id).map_err(err)?;
+    // Read once, from the lock this function already holds: `game_dir_of` takes
+    // it again and the mutex is not reentrant.
+    let game_dir = game_dir_in(&store, &game_id);
 
     let mut out = Vec::new();
     for m in mods {
@@ -838,6 +849,12 @@ pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModVi
             .as_ref()
             .map(|s| s.selection.clone())
             .unwrap_or_else(|| apoc_modengine::default_selection(&m.bundle));
+        // Narrowed with the stored answers, exactly as the wizard narrows with
+        // the pending ones. Editing an installed FOMOD showed every option the
+        // manifest declares, flat -- including ones behind steps those answers
+        // never reach -- and ticking one installed it.
+        let (groups, _resolved, _warnings) =
+            narrow_to_conditions(&m.bundle, game_dir.as_deref(), &sel)?;
         out.push(ModView {
             id: m.id.clone(),
             name: m.name.clone(),
@@ -849,7 +866,7 @@ pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModVi
             priority: st.as_ref().map(|s| s.priority).unwrap_or(0),
             applied: applied.contains(&m.id),
             added_at: m.imported_at,
-            groups: groups_view(&m.bundle),
+            groups,
             selection: selection_vec(&sel),
             total_files: m.bundle.deployable_options().map(|o| o.payload.len()).sum(),
             total_bytes: m.bundle.deployable_options().map(|o| o.total_size()).sum(),
@@ -872,6 +889,79 @@ pub fn set_mod_enabled(
     store.set_enabled(profile_id, &mod_id, enabled).map_err(err)
 }
 
+/// Enable or disable many mods at once, all or nothing.
+///
+/// Not a loop over [`set_mod_enabled`] on the front end, for two reasons. The
+/// store writes the batch in one transaction, so a failure partway leaves the
+/// profile as it was rather than in a state nobody selected. And this is
+/// `async`, unlike its single-mod sibling: forty sequential commands would take
+/// the store mutex forty times on the main thread, which is the one thing a
+/// bulk action exists to avoid.
+#[tauri::command(async)]
+pub fn set_mods_enabled(
+    state: State<AppState>,
+    game_id: String,
+    mod_ids: Vec<String>,
+    enabled: bool,
+) -> CmdResult<usize> {
+    let profile_id = profile_of(&state, &game_id)?;
+    let store = state.store.lock().map_err(|_| "state poisoned")?;
+    store
+        .set_enabled_bulk(profile_id, &mod_ids, enabled)
+        .map_err(err)
+}
+
+/// What a requested selection actually becomes once the conditions and the
+/// group cardinalities have had their say.
+///
+/// Kept separate from the command so it can be tested without a store, and so
+/// the rule it encodes is stated once: **what the narrowed view permits is what
+/// may be stored.** The dialog filters too, but a view is never the
+/// authorization boundary -- a request can arrive with any ids in it.
+///
+/// Both halves read from `narrowed`, not from the manifest. An option behind a
+/// step the answers do not reach is absent from it, and one the conditions
+/// forbid comes back as `info`, which is the same answer the manifest already
+/// gives for an option that was never selectable.
+fn settled_selection(
+    bundle: &ModBundle,
+    narrowed: &[GroupView],
+    requested: &[String],
+) -> Selection {
+    let permitted: std::collections::HashSet<&str> = narrowed
+        .iter()
+        .flat_map(|g| g.options.iter())
+        .filter(|o| o.select_mode != "info")
+        .map(|o| o.id.as_str())
+        .collect();
+
+    // Re-apply exclusivity so the stored selection is always internally valid.
+    let mut sel = Selection::new();
+    for id in requested {
+        if !permitted.contains(id.as_str()) {
+            continue;
+        }
+        let Some(opt) = bundle.options().find(|o| &o.id == id) else {
+            continue;
+        };
+        match opt.select_mode {
+            apoc_domain::SelectMode::Info => {}
+            apoc_domain::SelectMode::Exclusive => {
+                apoc_modengine::choose_exclusive(bundle, &mut sel, id)
+            }
+            _ => sel.insert(id.clone()),
+        }
+    }
+    // A step the answers do not reach can still declare a forced option, and
+    // forcing it would install files from a branch the user never took.
+    for o in narrowed.iter().flat_map(|g| g.options.iter()) {
+        if o.select_mode == "forced" && o.deployable {
+            sel.insert(o.id.clone());
+        }
+    }
+    sel
+}
+
 /// Persist a new wizard selection for a mod (radio semantics applied server-side).
 #[tauri::command]
 pub fn set_mod_selection(
@@ -887,25 +977,14 @@ pub fn set_mod_selection(
         .map_err(err)?
         .ok_or_else(|| format!("unknown mod {mod_id}"))?;
 
-    // Re-apply exclusivity so the stored selection is always internally valid.
-    let mut sel = apoc_domain::Selection::new();
-    for id in &selection {
-        let Some(opt) = m.bundle.options().find(|o| &o.id == id) else {
-            continue;
-        };
-        match opt.select_mode {
-            apoc_domain::SelectMode::Info => {}
-            apoc_domain::SelectMode::Exclusive => {
-                apoc_modengine::choose_exclusive(&m.bundle, &mut sel, id)
-            }
-            _ => sel.insert(id.clone()),
-        }
-    }
-    for o in m.bundle.options() {
-        if o.select_mode == apoc_domain::SelectMode::Forced && o.deployable {
-            sel.insert(o.id.clone());
-        }
-    }
+    // Narrowed against the incoming selection rather than the stored one,
+    // because the incoming answers are what decide which steps this selection
+    // reaches.
+    let incoming = selection_from(&selection);
+    let game_dir = game_dir_in(&store, &game_id);
+    let (narrowed, _resolved, _warnings) =
+        narrow_to_conditions(&m.bundle, game_dir.as_deref(), &incoming)?;
+    let sel = settled_selection(&m.bundle, &narrowed, &selection);
 
     let existing = store.get_mod_state(profile_id, &mod_id).map_err(err)?;
     store
@@ -1264,7 +1343,7 @@ pub fn setup_loader(state: State<AppState>, game_id: String) -> CmdResult<String
     // there is nothing left for this command to register.
     //
     // It reports success rather than refusing, because from where the user is
-    // standing the loader *is* set up â€” refusing would send them looking for a
+    // standing the loader *is* set up — refusing would send them looking for a
     // Proton prefix that cannot exist on their machine.
     #[cfg(windows)]
     {
@@ -1625,6 +1704,184 @@ pub fn steam_diagnostics() -> CmdResult<serde_json::Value> {
     }))
 }
 
+/// What may be stored, once the conditions have been applied.
+///
+/// These drive [`settled_selection`] with a narrowed view built by hand, which
+/// is the boundary the fix lives on: `narrow_to_conditions` decides what the
+/// view contains, and this decides what a request may do with it.
+#[cfg(test)]
+mod settled_selection_tests {
+    use super::*;
+    use apoc_domain::{InstallerModel, ModOption, OptionGroup, SelectMode};
+
+    fn opt(id: &str, mode: SelectMode, radio_set: Option<&str>) -> ModOption {
+        ModOption {
+            id: id.to_string(),
+            folder_name: id.to_string(),
+            group_index: None,
+            slot_token: None,
+            radio_set: radio_set.map(str::to_string),
+            name: id.to_string(),
+            description: None,
+            category: None,
+            author: None,
+            screenshot: None,
+            screenshot_archive_path: None,
+            select_mode: mode,
+            recommended: false,
+            blocked_reason: None,
+            deployable: mode != SelectMode::Info,
+            payload: Vec::new(),
+            raw_modinfo: Default::default(),
+        }
+    }
+
+    fn bundle(options: Vec<ModOption>) -> ModBundle {
+        ModBundle {
+            name: "Test".into(),
+            version: None,
+            author: None,
+            category: None,
+            installer_model: InstallerModel::Fomod,
+            archive_sha256: None,
+            fomod: None,
+            groups: vec![OptionGroup {
+                index: None,
+                label: "Group".into(),
+                cardinality: None,
+                options,
+            }],
+        }
+    }
+
+    /// One narrowed group holding `(id, select_mode)` pairs.
+    fn view(options: &[(&str, &str)]) -> Vec<GroupView> {
+        vec![GroupView {
+            index: None,
+            label: "Group".into(),
+            radio_sets: Vec::new(),
+            cardinality: None,
+            options: options
+                .iter()
+                .map(|(id, mode)| OptionView {
+                    id: (*id).to_string(),
+                    name: (*id).to_string(),
+                    description: None,
+                    select_mode: (*mode).to_string(),
+                    radio_set: None,
+                    deployable: *mode != "info",
+                    file_count: 0,
+                    size_bytes: 0,
+                    screenshot: None,
+                    has_preview: false,
+                    category: None,
+                    recommended: false,
+                    blocked_reason: None,
+                })
+                .collect(),
+        }]
+    }
+
+    fn ids(sel: &Selection) -> Vec<String> {
+        let mut out = selection_vec(sel);
+        out.sort();
+        out
+    }
+
+    #[test]
+    fn an_option_the_narrowed_view_does_not_contain_cannot_be_stored() {
+        // The step it lives behind is not reached, so the wizard never showed
+        // it. The request can still name it, and this is what refuses.
+        let b = bundle(vec![
+            opt("reachable", SelectMode::Stackable, None),
+            opt("behind-a-step-not-taken", SelectMode::Stackable, None),
+        ]);
+        let narrowed = view(&[("reachable", "stackable")]);
+
+        let sel = settled_selection(
+            &b,
+            &narrowed,
+            &[
+                "reachable".to_string(),
+                "behind-a-step-not-taken".to_string(),
+            ],
+        );
+        assert_eq!(ids(&sel), ["reachable"]);
+    }
+
+    #[test]
+    fn an_option_the_conditions_rule_out_cannot_be_stored() {
+        // Present in the view, but narrowed to `info` because another answer
+        // forbids it.
+        let b = bundle(vec![
+            opt("kept", SelectMode::Stackable, None),
+            opt("ruled-out", SelectMode::Stackable, None),
+        ]);
+        let narrowed = view(&[("kept", "stackable"), ("ruled-out", "info")]);
+
+        let sel = settled_selection(
+            &b,
+            &narrowed,
+            &["kept".to_string(), "ruled-out".to_string()],
+        );
+        assert_eq!(ids(&sel), ["kept"]);
+    }
+
+    #[test]
+    fn a_forced_option_out_of_reach_is_not_forced_in() {
+        // The manifest forces it; the branch it sits on was never taken. Adding
+        // it would install files from a step the user did not visit.
+        let b = bundle(vec![
+            opt("here", SelectMode::Stackable, None),
+            opt("forced-elsewhere", SelectMode::Forced, None),
+        ]);
+        let narrowed = view(&[("here", "stackable")]);
+
+        let sel = settled_selection(&b, &narrowed, &["here".to_string()]);
+        assert_eq!(ids(&sel), ["here"]);
+    }
+
+    #[test]
+    fn a_forced_option_in_reach_is_added_without_being_asked_for() {
+        let b = bundle(vec![
+            opt("here", SelectMode::Stackable, None),
+            opt("core", SelectMode::Forced, None),
+        ]);
+        let narrowed = view(&[("here", "stackable"), ("core", "forced")]);
+
+        let sel = settled_selection(&b, &narrowed, &["here".to_string()]);
+        assert_eq!(ids(&sel), ["core", "here"]);
+    }
+
+    #[test]
+    fn exclusivity_still_applies_to_what_survives() {
+        // The narrowing is a filter in front of the existing rules, not a
+        // replacement for them.
+        let b = bundle(vec![
+            opt("slim", SelectMode::Exclusive, Some("shape")),
+            opt("curvy", SelectMode::Exclusive, Some("shape")),
+        ]);
+        let narrowed = view(&[("slim", "exclusive"), ("curvy", "exclusive")]);
+
+        let sel = settled_selection(&b, &narrowed, &["slim".to_string(), "curvy".to_string()]);
+        assert_eq!(ids(&sel), ["curvy"], "the last one named wins the set");
+    }
+
+    #[test]
+    fn a_bundle_that_is_not_a_conditional_installer_is_unaffected() {
+        // `narrow_to_conditions` hands back every group for these, so the view
+        // permits everything and the old behaviour stands.
+        let b = bundle(vec![
+            opt("a", SelectMode::Stackable, None),
+            opt("b", SelectMode::Stackable, None),
+        ]);
+        let narrowed = narrow_to_conditions(&b, None, &Selection::new()).unwrap().0;
+
+        let sel = settled_selection(&b, &narrowed, &["a".to_string(), "b".to_string()]);
+        assert_eq!(ids(&sel), ["a", "b"]);
+    }
+}
+
 #[cfg(test)]
 mod carry_view_tests {
     use super::*;
@@ -1699,7 +1956,7 @@ mod carry_view_tests {
     #[test]
     fn a_dropped_option_that_is_gone_is_reported_by_its_folder_name() {
         // Nothing in the new bundle can name it, so the id it had is all there
-        // is to say â€” and it is what the person will recognise on disk.
+        // is to say — and it is what the person will recognise on disk.
         let b = bundle(vec![opt("core", "Base files", SelectMode::Forced)]);
         let carried = apoc_modengine::carry_selection(&b, &selection(&["core", "addon-gone"]));
         let view = carry_view(&b, &carried);

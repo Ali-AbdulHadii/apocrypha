@@ -27,7 +27,7 @@
 //! "fetch that from wherever a settings file says" is not a feature.
 
 use crate::{agent, send_retrying, ServiceOrigin};
-use apoc_domain::GameProfile;
+use apoc_domain::{GameProfile, PluginActivation, PluginListSpec};
 use apoc_gamedef::{GameDatabaseSource, GameDefError, LocalBuiltin};
 use serde::Deserialize;
 
@@ -51,19 +51,72 @@ pub enum Freshness {
     Offline { reason: String },
 }
 
-/// Profiles from the service, with the bundled set underneath.
+/// Where a profile document comes from.
+///
+/// The seam exists because the interesting behaviour of this module is what it
+/// does when the service misbehaves — offline, a 404, a 500, an index that is
+/// not the shape it claims, a profile document that will not parse — and every
+/// one of those was reachable only by having a real service on the other end
+/// behave badly on cue. Tests here must assume no network at all, so the five
+/// failure modes were untested precisely because they are the ones that matter.
+///
+/// Deliberately narrow: a URL in, a body or a sentence out. Retries, headers
+/// and status-code wording stay in [`HttpProfiles`], because a fake that had to
+/// reproduce them would be testing itself.
+pub trait ProfileTransport {
+    /// The body of a GET, or a sentence saying why there is not one.
+    ///
+    /// The error reaches somebody who wants to install a mod, so it is written
+    /// for them rather than naming a protocol.
+    fn get(&self, url: &str) -> Result<String, String>;
+}
+
+/// The real transport: `ureq`, with the retry the service's redeploys need.
 #[derive(Debug, Clone)]
-pub struct ApocryphaGameDb {
-    origin: ServiceOrigin,
+pub struct HttpProfiles {
     app_version: String,
 }
 
-impl ApocryphaGameDb {
+impl ProfileTransport for HttpProfiles {
+    // Reads, so the transport retry applies: the service redeploys on every
+    // push and a dropped connection is routine rather than exceptional.
+    #[allow(clippy::result_large_err)]
+    fn get(&self, url: &str) -> Result<String, String> {
+        send_retrying(|| {
+            agent()
+                .get(url)
+                // No Authorization header. Profiles are public, and a manager
+                // has to work for someone who has never signed in.
+                .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
+                .call()
+        })
+        .map_err(describe)?
+        .into_string()
+        .map_err(|_| "the service's answer could not be read".to_string())
+    }
+}
+
+/// Profiles from the service, with the bundled set underneath.
+#[derive(Debug, Clone)]
+pub struct ApocryphaGameDb<T = HttpProfiles> {
+    origin: ServiceOrigin,
+    transport: T,
+}
+
+impl ApocryphaGameDb<HttpProfiles> {
     pub fn new(origin: ServiceOrigin, app_version: impl Into<String>) -> Self {
+        let app_version = app_version.into();
         ApocryphaGameDb {
             origin,
-            app_version: app_version.into(),
+            transport: HttpProfiles { app_version },
         }
+    }
+}
+
+impl<T: ProfileTransport> ApocryphaGameDb<T> {
+    /// The same client, answered by something other than the network.
+    pub fn with_transport(origin: ServiceOrigin, transport: T) -> Self {
+        ApocryphaGameDb { origin, transport }
     }
 
     /// Fetch every published profile, reporting what happened.
@@ -137,9 +190,8 @@ impl ApocryphaGameDb {
 
     fn index(&self) -> Result<Vec<IndexEntry>, String> {
         let url = format!("{}/api/v1/games/profiles", self.origin.as_str());
-        let response = self.get(&url)?;
-        response
-            .into_json::<Vec<IndexEntry>>()
+        let body = self.transport.get(&url)?;
+        serde_json::from_str::<Vec<IndexEntry>>(&body)
             .map_err(|e| format!("the list of game profiles could not be read: {e}"))
     }
 
@@ -158,9 +210,7 @@ impl ApocryphaGameDb {
             self.origin.as_str(),
             encode(id)
         );
-        self.get(&url)?
-            .into_string()
-            .map_err(|e| format!("the profile for {id} could not be read: {e}"))
+        self.transport.get(&url)
     }
 
     /// Every published profile, as documents ready to be cached.
@@ -181,24 +231,9 @@ impl ApocryphaGameDb {
         }
         Ok(out)
     }
-
-    // Reads, so the transport retry applies: the service redeploys on every
-    // push and a dropped connection is routine rather than exceptional.
-    #[allow(clippy::result_large_err)]
-    fn get(&self, url: &str) -> Result<ureq::Response, String> {
-        send_retrying(|| {
-            agent()
-                .get(url)
-                // No Authorization header. Profiles are public, and a manager
-                // has to work for someone who has never signed in.
-                .set("User-Agent", &format!("Apocrypha/{}", self.app_version))
-                .call()
-        })
-        .map_err(describe)
-    }
 }
 
-impl GameDatabaseSource for ApocryphaGameDb {
+impl<T: ProfileTransport> GameDatabaseSource for ApocryphaGameDb<T> {
     /// Profiles from the service where it answered, and the bundled ones
     /// everywhere else.
     ///
@@ -216,9 +251,128 @@ impl GameDatabaseSource for ApocryphaGameDb {
 /// on a later start, when nothing has been fetched yet and there may be no
 /// network at all.
 pub fn parse_document(json: &str) -> Result<GameProfile, String> {
-    serde_json::from_str::<WireProfile>(json)
+    let profile = serde_json::from_str::<WireProfile>(json)
         .map(WireProfile::into_profile)
-        .map_err(|e| format!("a published game profile could not be read: {e}"))
+        .map_err(|e| format!("a published game profile could not be read: {e}"))?;
+    validate(&profile)?;
+    Ok(profile)
+}
+
+/// A path component a profile may name.
+///
+/// Profile paths are relative and go downwards: into the game directory, into
+/// the app's own data directory, into a staging tree. `..`, a root, a drive
+/// letter and a NUL are the four ways to say otherwise, and a backslash is the
+/// fifth once the engine compiles for Windows.
+fn descends(path: &str) -> bool {
+    !path.is_empty()
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains('\0')
+        && !path.contains(':')
+        && !path
+            .split('/')
+            .any(|seg| seg == ".." || seg == "." || seg.is_empty())
+}
+
+/// An id a profile may claim.
+///
+/// The id is not only a name. It is a directory under the app's data root, a
+/// key in the local database and a segment in a URL, so it has to be spellable
+/// as all three. The bundled profiles are already slugs; this says so.
+fn id_is_a_slug(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+}
+
+/// Refuse a published profile that would write somewhere it should not.
+///
+/// A profile decides where files land in somebody's game directory and under
+/// their data root. While every profile was compiled into the binary that was a
+/// review question. Published, it is a document arriving over a network, and
+/// the honest treatment of a document is to check it before believing it.
+///
+/// Refused by name, and whole: [`ApocryphaGameDb::fetch`] discards the profile
+/// and keeps the bundled one, which is the same answer it gives for a timeout
+/// or a document that will not parse. A half-applied profile — the deploy
+/// targets from the service, the loader from the binary — is a configuration
+/// nobody wrote and nobody tested.
+fn validate(profile: &GameProfile) -> Result<(), String> {
+    let id = &profile.id;
+    if !id_is_a_slug(id) {
+        return Err(format!(
+            "a published game profile claims the id {id:?}, which is not a slug"
+        ));
+    }
+
+    let mut paths: Vec<(&str, &str)> = Vec::new();
+    for t in &profile.deploy_targets {
+        paths.push(("a deploy target source", &t.source));
+        paths.push(("a deploy target", &t.target));
+    }
+    for r in &profile.rewrap {
+        paths.push(("a rewrap folder", &r.folder));
+        paths.push(("a rewrap prefix", &r.prefix));
+    }
+    for c in &profile.canonical_case {
+        paths.push(("a canonical-case path", c));
+    }
+    if let Some(f) = &profile.fomod {
+        paths.push(("the FOMOD destination prefix", &f.dest_prefix));
+    }
+    if let Some(l) = &profile.loader {
+        if let Some(dll) = &l.proxy_dll {
+            paths.push(("the loader's proxy DLL", dll));
+        }
+        for dll in &l.also_provides {
+            paths.push(("a loader proxy DLL", dll));
+        }
+        for dir in &l.data_dirs {
+            paths.push(("a loader data directory", dir));
+        }
+    }
+    if let Some(chain) = &profile.pak_chain {
+        // A filename rather than a path, and it is built from by formatting, so
+        // it must not contain a separator either.
+        paths.push(("the pak chain pattern", &chain.pattern));
+    }
+    if let Some(list) = &profile.plugin_list {
+        // Each of these is joined onto a location inside the user's Proton
+        // prefix, so each is a chance for a document to choose where a write
+        // lands. `descends` refuses the separators outright, which is stricter
+        // than these need to be and exactly as strict as they should be: every
+        // one is a single directory or file name.
+        paths.push(("the plugin list directory", &list.dir));
+        paths.push(("the plugin list file", &list.plugins_file));
+        if let Some(name) = &list.load_order_file {
+            paths.push(("the load order file", name));
+        }
+        for name in &list.implicit {
+            paths.push(("an implicitly loaded plugin", name));
+        }
+    }
+
+    for (what, path) in paths {
+        if !descends(path) {
+            return Err(format!(
+                "the published profile for {id} names {what} that leaves the directory it is written into: {path:?}"
+            ));
+        }
+    }
+
+    if let Some(chain) = &profile.pak_chain {
+        if chain.pattern.contains('/') {
+            return Err(format!(
+                "the published profile for {id} gives a pak chain pattern that is a path, not a filename: {:?}",
+                chain.pattern
+            ));
+        }
+    }
+
+    Ok(())
 }
 
 /// A failure in the terms of the person waiting on it.
@@ -302,6 +456,23 @@ struct WireProfile {
     pak_chain: Option<WirePakChain>,
     #[serde(default)]
     fomod: Option<WireFomod>,
+    #[serde(default)]
+    plugin_list: Option<WirePluginList>,
+}
+
+/// A game's plugin list, as the service publishes it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WirePluginList {
+    dir: String,
+    #[serde(default)]
+    plugins_file: Option<String>,
+    #[serde(default)]
+    load_order_file: Option<String>,
+    #[serde(default)]
+    activation: Option<String>,
+    #[serde(default)]
+    implicit: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -420,6 +591,19 @@ impl WireProfile {
                 dest_prefix: f.dest_prefix,
             }),
             plugin_extensions: self.plugin_extensions,
+            plugin_list: self.plugin_list.map(|p| PluginListSpec {
+                dir: p.dir,
+                plugins_file: p.plugins_file.unwrap_or_else(|| "plugins.txt".to_string()),
+                load_order_file: p.load_order_file,
+                // An unknown spelling reads as the modern convention rather
+                // than as an error: the field is about how a file is written,
+                // and `presence` is the one a newer profile would not pick.
+                activation: match p.activation.as_deref() {
+                    Some("presence") => PluginActivation::Presence,
+                    _ => PluginActivation::Asterisk,
+                },
+                implicit: p.implicit,
+            }),
             rewrap: self
                 .rewrap
                 .into_iter()
@@ -582,5 +766,241 @@ mod tests {
             ureq::Response::new(418, "Teapot", "").unwrap(),
         ));
         assert!(refused.contains("418"), "{refused}");
+    }
+
+    /// A URL fragment and the answer any URL containing it gets.
+    type Script = Vec<(&'static str, Result<String, String>)>;
+
+    /// Answers scripted per URL, so a test can make the service behave in a way
+    /// no real one would oblige on cue.
+    struct Scripted(Script);
+
+    impl ProfileTransport for Scripted {
+        fn get(&self, url: &str) -> Result<String, String> {
+            for (fragment, answer) in &self.0 {
+                if url.contains(fragment) {
+                    return answer.clone();
+                }
+            }
+            Err("the service could not be reached".to_string())
+        }
+    }
+
+    fn db(script: Script) -> ApocryphaGameDb<Scripted> {
+        ApocryphaGameDb::with_transport(Default::default(), Scripted(script))
+    }
+
+    fn index_of(id: &str, schema: u32) -> String {
+        format!(r#"[{{"id":"{id}","name":"A Game","schemaVersion":{schema},"revision":1}}]"#)
+    }
+
+    /// Every one of these ends the same way, and that is the point: the bundled
+    /// profiles are the floor. None of these five was reachable in a test before
+    /// there was somewhere other than the network to answer from.
+    #[test]
+    fn every_way_the_service_can_fail_falls_back_to_the_bundled_profiles() {
+        let bundled = LocalBuiltin::new().all().unwrap();
+
+        let cases: Vec<(&str, Script)> = vec![
+            (
+                "offline",
+                vec![("", Err("the service could not be reached".into()))],
+            ),
+            (
+                "no profiles published",
+                vec![(
+                    "",
+                    Err("the service has no game profiles to publish".into()),
+                )],
+            ),
+            (
+                "the service is unwell",
+                vec![(
+                    "",
+                    Err(
+                        "the service is having trouble; the built-in profiles are being used"
+                            .into(),
+                    ),
+                )],
+            ),
+            (
+                "an index that is not an index",
+                vec![("games/profiles", Ok("{\"oops\":true}".into()))],
+            ),
+            (
+                "a document that will not parse",
+                vec![
+                    ("games/profiles", Ok(index_of("monster-hunter-wilds", 1))),
+                    ("/profile", Ok("not json at all".into())),
+                ],
+            ),
+        ];
+
+        for (what, script) in cases {
+            let (profiles, freshness) = db(script).fetch();
+            assert_eq!(profiles, bundled, "{what}: the bundled profiles stand");
+            assert!(
+                matches!(freshness, Freshness::Offline { .. }),
+                "{what}: the fallback is reported rather than hidden, got {freshness:?}"
+            );
+        }
+    }
+
+    /// A contract this build does not read is refused rather than guessed at,
+    /// and says so in terms of the game it concerns.
+    #[test]
+    fn a_profile_declaring_a_newer_contract_is_named_not_silently_dropped() {
+        let (profiles, freshness) = db(vec![(
+            "games/profiles",
+            Ok(index_of("monster-hunter-wilds", SUPPORTED_SCHEMA + 1)),
+        )])
+        .fetch();
+
+        assert_eq!(profiles, LocalBuiltin::new().all().unwrap());
+        match freshness {
+            Freshness::Offline { reason } => {
+                assert!(reason.contains("monster-hunter-wilds"), "{reason}");
+                assert!(reason.contains("profile format"), "{reason}");
+            }
+            other => panic!("expected a named refusal, got {other:?}"),
+        }
+    }
+
+    /// The path that has to keep working: a published profile replaces its
+    /// bundled namesake, and nothing else moves.
+    #[test]
+    fn a_published_profile_replaces_only_its_own_bundled_entry() {
+        let published = WILDS.replace(r#""target": "natives""#, r#""target": "natives/stm""#);
+        let (profiles, freshness) = db(vec![
+            ("games/profiles", Ok(index_of("monster-hunter-wilds", 1))),
+            ("/profile", Ok(published)),
+        ])
+        .fetch();
+
+        assert!(matches!(freshness, Freshness::Online { fetched: 1 }));
+        let wilds = profiles
+            .iter()
+            .find(|g| g.id == "monster-hunter-wilds")
+            .expect("the published profile is in force");
+        assert!(wilds
+            .deploy_targets
+            .iter()
+            .any(|t| t.target == "natives/stm"));
+        assert_eq!(
+            profiles.len(),
+            LocalBuiltin::new().all().unwrap().len(),
+            "no other game moved"
+        );
+    }
+
+    /// A refusal at the wire boundary is a fetch failure like any other: the
+    /// bundled profile stays, whole.
+    #[test]
+    fn a_profile_that_would_escape_its_directories_falls_back_like_any_other_failure() {
+        let hostile = WILDS.replace(r#""target": "natives""#, r#""target": "../../autostart""#);
+        let (profiles, freshness) = db(vec![
+            ("games/profiles", Ok(index_of("monster-hunter-wilds", 1))),
+            ("/profile", Ok(hostile)),
+        ])
+        .fetch();
+
+        assert_eq!(profiles, LocalBuiltin::new().all().unwrap());
+        assert!(matches!(freshness, Freshness::Offline { .. }));
+    }
+
+    /// The check that matters most: a published profile is the same document a
+    /// bundled one is, so a rule the bundled set cannot satisfy would silently
+    /// send everybody back to the built-in profiles for ever.
+    #[test]
+    fn every_bundled_profile_satisfies_the_rules_asked_of_a_published_one() {
+        let bundled = LocalBuiltin::new().all().unwrap();
+        assert!(!bundled.is_empty(), "there are profiles to check");
+        for profile in bundled {
+            assert_eq!(
+                validate(&profile),
+                Ok(()),
+                "the bundled profile for {} would be refused if it were published",
+                profile.id
+            );
+        }
+    }
+
+    /// A profile decides where files are written. Published, it is a document
+    /// from somewhere else, and these are the ways one could ask for a write
+    /// outside the directory it is entitled to.
+    #[test]
+    fn a_profile_that_would_write_outside_its_directories_is_refused() {
+        let escapes = [
+            (r#""id": "monster-hunter-wilds""#, r#""id": "../../etc""#),
+            (
+                r#""target": "natives""#,
+                r#""target": "../../../.config/autostart""#,
+            ),
+            (r#""target": "natives""#, r#""target": "/etc/systemd/user""#),
+            (
+                r#""target": "natives""#,
+                r#""target": "..\\..\\Windows\\System32""#,
+            ),
+        ];
+
+        for (from, to) in escapes {
+            let document = WILDS.replace(from, to);
+            assert!(
+                document != WILDS,
+                "the fixture no longer contains {from}, so this proves nothing"
+            );
+            let refused = parse_document(&document)
+                .expect_err(&format!("{to} should be refused"))
+                .to_string();
+            assert!(
+                refused.contains("id") || refused.contains("leaves the directory"),
+                "the refusal should say what was wrong: {refused}"
+            );
+        }
+    }
+
+    /// A plugin list names a directory inside the user's Proton prefix and the
+    /// files written into it, so a published profile picking those strings is
+    /// picking where a write lands.
+    #[test]
+    fn a_published_plugin_list_cannot_choose_where_it_writes() {
+        let escapes = [
+            r#""dir": "../../../../../../home/someone""#,
+            r#""dir": "/etc""#,
+            r#""pluginsFile": "../../autostart/x.desktop""#,
+            r#""loadOrderFile": "/etc/passwd""#,
+        ];
+
+        for escape in escapes {
+            let document = WILDS.replace(
+                r#""schemaVersion": 1,"#,
+                &format!(r#""schemaVersion": 1, "pluginList": {{ "dir": "Fine", {escape} }},"#),
+            );
+            let refused = parse_document(&document)
+                .expect_err(&format!("{escape} should be refused"))
+                .to_string();
+            assert!(
+                refused.contains("leaves the directory") || refused.contains("could not be read"),
+                "the refusal should say what was wrong: {refused}"
+            );
+        }
+    }
+
+    /// Refused whole. The bundled profile stays in force, exactly as it does
+    /// for a timeout, rather than the two being merged into a configuration
+    /// nobody wrote.
+    #[test]
+    fn a_refused_profile_leaves_the_bundled_one_untouched() {
+        let document = WILDS.replace(r#""target": "natives""#, r#""target": "../elsewhere""#);
+        assert!(parse_document(&document).is_err());
+
+        let bundled = LocalBuiltin::new().get("monster-hunter-wilds").unwrap();
+        assert!(
+            bundled
+                .deploy_targets
+                .iter()
+                .all(|t| !t.target.contains("..")),
+            "the bundled profile is what remains in force"
+        );
     }
 }

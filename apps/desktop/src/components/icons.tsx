@@ -106,6 +106,8 @@ export const Icon = {
     </>,
   ),
   check: make(<path d="m5 13 4 4L19 7" />),
+  /** The "some, but not all" half of a select-all checkbox. */
+  minus: make(<path d="M5 12h14" />),
   search: make(
     <>
       <circle cx="11" cy="11" r="7" />

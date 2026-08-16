@@ -89,7 +89,7 @@ AppImage, use the button in Settings under Downloads to register it yourself.
 
 ### Prerequisites
 
-Rust (stable toolchain, 1.77 or newer):
+Rust (stable toolchain, 1.93 or newer):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y

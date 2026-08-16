@@ -48,6 +48,57 @@ export function Switch({
   );
 }
 
+/* -------------------------------------------------------------- checkbox -- */
+
+/**
+ * Selection, as distinct from state.
+ *
+ * A [`Switch`] says what a mod *is*; this says whether the next action applies
+ * to it. They sit on the same row and must not be mistakeable for one another,
+ * which is why this is a square box with a tick rather than a smaller switch.
+ *
+ * `indeterminate` is the "some of this group" answer a select-all box needs.
+ * It is `aria-checked="mixed"` rather than a third visual state invented here,
+ * because assistive technology already has a word for it.
+ *
+ * `onChange` takes the event's modifier keys, since a mod list wants shift-click
+ * to extend a range and the alternative is every caller wiring up its own
+ * listener to find that out.
+ */
+export function Checkbox({
+  checked,
+  indeterminate,
+  onChange,
+  label,
+  disabled,
+}: {
+  checked: boolean;
+  indeterminate?: boolean;
+  onChange: (v: boolean, ev: { shiftKey: boolean }) => void;
+  label: string;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      role="checkbox"
+      aria-checked={indeterminate ? "mixed" : checked}
+      aria-label={label}
+      title={label}
+      disabled={disabled}
+      className="checkbox"
+      data-on={checked || !!indeterminate}
+      onClick={(e) => onChange(!checked, { shiftKey: e.shiftKey })}
+    >
+      {indeterminate ? (
+        <Icon.minus size={12} strokeWidth={3} />
+      ) : checked ? (
+        <Icon.check size={12} strokeWidth={3} />
+      ) : null}
+    </button>
+  );
+}
+
 /* ------------------------------------------------------ segmented control -- */
 
 export function Segmented<T extends string>({

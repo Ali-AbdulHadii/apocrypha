@@ -34,9 +34,15 @@ pub struct GameRules {
     pub formats: Vec<String>,
     /// Prefixed to every destination a FOMOD declares for this game.
     pub fomod_dest_prefix: String,
-    /// Extensions whose files carry load order this application does not
-    /// manage. Empty for engines with no such concept.
+    /// Extensions whose files carry load order. Empty for engines with no such
+    /// concept.
     pub plugin_extensions: Vec<String>,
+    /// Whether this application writes the game's plugin list.
+    ///
+    /// Decides whether a mod shipping plugins gets a notice saying nobody is
+    /// ordering them. Carried here rather than re-derived from the profile so
+    /// the notice and the writer cannot disagree about which games are managed.
+    pub manages_plugin_list: bool,
 }
 
 impl Default for GameRules {
@@ -51,6 +57,7 @@ impl Default for GameRules {
             formats: Vec::new(),
             fomod_dest_prefix: String::new(),
             plugin_extensions: Vec::new(),
+            manages_plugin_list: false,
         }
     }
 }
@@ -106,6 +113,7 @@ impl GameRules {
                 .map(|f| f.dest_prefix.clone())
                 .unwrap_or_default(),
             plugin_extensions: profile.plugin_extensions.clone(),
+            manages_plugin_list: profile.manages_plugin_list(),
         }
     }
 
@@ -213,6 +221,7 @@ mod tests {
             formats: vec![],
             fomod: None,
             plugin_extensions: vec![],
+            plugin_list: None,
             rewrap: vec![],
             canonical_case: vec!["STM".into()],
             pak_chain: Some(apoc_domain::PakChainSpec {

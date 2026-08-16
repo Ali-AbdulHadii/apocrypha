@@ -279,6 +279,13 @@
   line-height: var(--leading);
 }
 
+/* A hint the reader has to act on, rather than one they can skim past: a
+   plugin that loads before something it depends on will not work, and the
+   tertiary text colour is the one used for things that do not matter. */
+.card-hint.warn {
+  color: var(--warning);
+}
+
 /* -------------------------------------------------------------- buttons --- */
 .btn {
   display: inline-flex;
@@ -579,6 +586,76 @@
   min-width: 24px;
   text-align: right;
   flex-shrink: 0;
+}
+
+/* ------------------------------------------------------------- checkbox --- */
+/* Square where the switch is a pill, so selection and state never read as the
+   same control on a row that carries both. */
+.checkbox {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: var(--radius-xs);
+  background: var(--bg-active);
+  border: 1px solid var(--border-strong);
+  color: transparent;
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+.checkbox:hover:not(:disabled) {
+  border-color: var(--accent-border);
+}
+
+.checkbox[data-on="true"] {
+  background: var(--accent-gradient);
+  border-color: transparent;
+  color: var(--bg-surface);
+}
+
+/* A selected row is tinted rather than outlined: the row already uses its
+   border for hover and for the drag state. */
+.mod-row[data-selected="true"] {
+  background: var(--bg-hover);
+  border-color: var(--accent-border);
+}
+
+/* ---------------------------------------------------------- filter bars --- */
+.filter-bar,
+.bulk-bar {
+  gap: var(--sp-3);
+  flex-wrap: wrap;
+}
+
+.bulk-bar {
+  padding: var(--sp-3) var(--sp-4);
+  background: var(--bg-raised);
+  border: 1px solid var(--accent-border);
+  border-radius: var(--radius-sm);
+}
+
+.saved-filter {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+
+.saved-filter[data-active="true"] {
+  border-color: var(--accent-border);
+  background: var(--bg-hover);
+}
+
+.input.sm {
+  height: 28px;
+  padding: 0 var(--sp-3);
+  font-size: var(--text-sm);
+  max-width: 200px;
 }
 
 /* --------------------------------------------------------------- switch --- */

@@ -146,6 +146,7 @@ pub fn run() {
             commands::import_mod,
             commands::list_mods,
             commands::set_mod_enabled,
+            commands::set_mods_enabled,
             commands::set_mod_selection,
             commands::preview_deploy,
             commands::rollback_last,
