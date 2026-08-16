@@ -24,7 +24,7 @@ Known gaps today:
 | Archive formats | ZIP, 7z and RAR. Encrypted and multi-volume archives are not handled. |
 | Plugin sorting | The plugin list is managed and editable, but Apocrypha has no opinion about what a good order is. There is no LOOT-style automatic sort: it tells you when a plugin loads before something it depends on and offers the move that fixes it, and the arranging is yours. |
 | Loader binary | Apocrypha configures REFramework for Proton but does not redistribute `dinput8.dll`. You supply it. SKSE installs correctly but nothing reports whether it is set up, because the profile schema has no launcher concept yet — only "no loader" and "DLL proxy". |
-| Platform | Linux only. No Windows or macOS build. |
+| Platform | Linux is the supported target and the only one that ships a build. The engine compiles for Windows, finds Steam games there, and registers `nxm://` in the registry, but nothing else has been tested and there is no installer. macOS is untouched. |
 
 ## Features
 
@@ -47,6 +47,7 @@ What works today:
 - **A mod list that stays smooth.** The list windows itself past sixty rows, measuring row height from a live row so it keeps working when you change the spacing or text size.
 - **Honest disk usage.** Settings shows the measured size of the mod library, the backups, the change log and the downloads folder, with a way into each. Managers quietly consume tens of gigabytes and rarely say so.
 - **REFramework loader setup for Proton.** Writes the `dinput8=n,b` DLL override into the prefix's `user.reg` atomically, captures the previous value for rollback, and refuses to touch the prefix while Steam is running.
+- **Download links from the website.** Apocrypha can take over the `nxm://` scheme so the Mod Manager Download button sends files straight here — through a desktop entry on Linux, through the per-user registry on Windows. If another manager already holds it, you are told which one and asked before it changes hands, and turning it off gives the scheme back rather than leaving your downloads handled by nothing.
 - **Downloads.** Nexus `nxm://` links download in the background with live progress, and wait on a Downloads screen until you choose to install them. The folder is configurable, and anything already in it is listed and installable, so archives saved from a browser or brought from another manager work the same way. Rows show which files are already in your library.
 - **Light and dark themes.** Every colour, size and radius is a CSS custom property, so the Appearance panel can retheme the whole app at runtime.
 
