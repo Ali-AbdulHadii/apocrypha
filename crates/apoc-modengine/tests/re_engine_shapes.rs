@@ -231,6 +231,7 @@ fn a_game_that_declares_none_of_this_installs_none_of_it() {
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),
         plugin_extensions: Vec::new(),
+        manages_plugin_list: false,
     };
 
     let loader = analyze(&[("dinput8.dll", b"MZ")], &bare);

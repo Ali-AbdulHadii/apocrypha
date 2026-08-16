@@ -759,6 +759,33 @@ export default function App() {
     [activeGameId, refreshMods, fail],
   );
 
+  /**
+   * The same move for a selection. One optimistic update and one `setDirty`,
+   * because the deploy is dirty or it is not — saying so forty times would make
+   * the banner flicker and would still mean exactly one thing.
+   *
+   * The store refuses a batch outright rather than half-applying it, so the
+   * failure path is the single-mod one unchanged: report, then re-read the
+   * truth from the store.
+   */
+  const toggleMods = useCallback(
+    async (ids: string[], enabled: boolean) => {
+      if (!activeGameId || ids.length === 0) return;
+      const target = new Set(ids);
+      setMods((prev) =>
+        prev.map((m) => (target.has(m.id) ? { ...m, enabled } : m)),
+      );
+      setDirty(true);
+      try {
+        await api.setModsEnabled(activeGameId, ids, enabled);
+      } catch (e) {
+        fail(e);
+        await refreshMods(activeGameId);
+      }
+    },
+    [activeGameId, refreshMods, fail],
+  );
+
   const reorderMods = useCallback(
     async (orderedIds: string[]) => {
       if (!activeGameId) return;
@@ -1008,6 +1035,8 @@ export default function App() {
                     appliedIds={appliedIds}
                     dirty={dirty}
                     onToggle={toggleMod}
+                    onToggleMany={toggleMods}
+                    gameId={activeGameId}
                     onConfigure={(m) => {
                       setPendingArchive(null);
                       setWizardCarry(null);
@@ -1123,9 +1152,13 @@ export default function App() {
             previewSource={previewSource}
             carry={wizardCarry}
             replaces={wizardReplaces}
-            // Only an archive can be re-evaluated: editing an installed mod's
-            // options works from what was staged, and the conditions that
-            // produced it were settled at install time.
+            // Only an archive can be re-evaluated live, because re-evaluating
+            // needs the archive. Editing an installed mod works from what was
+            // staged, and its conditions are applied on the Rust side instead:
+            // `list_mods` narrows the groups it hands over with the stored
+            // answers, and `set_mod_selection` narrows again before writing, so
+            // a selection is never wider than the conditions allow whichever
+            // way it arrives.
             source={
               pendingArchive && activeGameId
                 ? { gameId: activeGameId, archivePath: pendingArchive }

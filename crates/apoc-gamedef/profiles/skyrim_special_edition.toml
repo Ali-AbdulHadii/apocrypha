@@ -5,22 +5,22 @@
 # the entire game-specific footprint: no engine crate contains a branch on
 # whether it is Skyrim.
 #
-# One thing this profile deliberately does NOT claim: that Apocrypha manages
-# Skyrim's plugin order. It does not. See `plugin_extensions` below.
+# This profile is the first to claim `load_order = "explicit"`, which is a
+# promise that Apocrypha writes the game's plugin list. `[plugin_list]` below is
+# what makes the promise keepable; a profile carrying one without the other is
+# refused when it is parsed.
 
 id = "skyrim-special-edition"
 name = "The Elder Scrolls V: Skyrim Special Edition"
 engine = "creation"
 nexus_domain = "skyrimspecialedition"
 
-# What the engine actually does with this game's files: order them by the
-# priority a user sets, and let a later mod overwrite an earlier one.
-#
-# `explicit` describes Creation Engine's *plugin* list, which is a different
-# thing and is not implemented anywhere. Declaring it here would be a claim
-# about behaviour that does not exist, so this says what is true instead, and
-# `plugin_extensions` says what is missing.
-load_order = "priority"
+# Creation Engine reads a named list of plugin files whose position is
+# meaningful, which is a different thing from the integer-per-mod ordering every
+# other game here uses. Loose files under `Data` still overwrite one another by
+# mod priority; that has not changed. What `explicit` adds is that the plugins
+# among them are also ordered by name, in a list the game reads.
+load_order = "explicit"
 conflict_scope = "per-relative-path"
 
 # Windows-authored archives ship every casing, and Linux is case-sensitive. The
@@ -47,10 +47,8 @@ canonical_case = [
 # `Data`. There is no Fluffy equivalent here.
 formats = ["fomod", "loose-roots"]
 
-# Extensions that carry load order rather than content. Apocrypha deploys these
-# files but does not enable or order them, so declaring them is what makes it
-# say so out loud instead of leaving someone to conclude the mod did not
-# install. When plugin management ships, this is what it will read.
+# Extensions that carry load order rather than content. This is what the plugin
+# scanner reads to decide which deployed files belong in the list at all.
 plugin_extensions = ["esp", "esm", "esl"]
 
 # There is no `[loader]` section, and that is deliberate. SKSE is a separate
@@ -113,3 +111,36 @@ prefix = "Data"
 # nobody writes it out.
 [fomod]
 dest_prefix = "Data"
+
+# Where the game reads its plugin order.
+#
+# The file lives in the Proton prefix, not the game directory:
+# `compatdata/489830/pfx/drive_c/users/steamuser/AppData/Local/<dir>/`. Only the
+# directory name is game-specific, so only the directory name is here.
+[plugin_list]
+dir = "Skyrim Special Edition"
+plugins_file = "plugins.txt"
+
+# Skyrim Special Edition reads order and activation from `plugins.txt` alone.
+# `loadorder.txt` is a Skyrim Classic file that several external tools still
+# read, so it is written alongside rather than left to disagree.
+load_order_file = "loadorder.txt"
+
+# `*MyMod.esp` is enabled; a bare `MyMod.esp` is a plugin the game knows about
+# and does not load. Skyrim Classic used presence alone.
+activation = "asterisk"
+
+# Loaded by the engine whether or not the list names them. Every mod on this
+# game names at least one as a master, so an order that did not know they exist
+# would report every mod installed as depending on something missing.
+#
+# The Creation Club content is not here. It loads implicitly too, but only for
+# somebody who owns it, and claiming a master exists when it does not is the
+# error that matters: it turns a real broken dependency into a silent one.
+implicit = [
+  "Skyrim.esm",
+  "Update.esm",
+  "Dawnguard.esm",
+  "HearthFires.esm",
+  "Dragonborn.esm",
+]

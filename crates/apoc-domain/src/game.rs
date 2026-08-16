@@ -240,6 +240,62 @@ pub struct FomodSpec {
     pub dest_prefix: String,
 }
 
+/// How a game spells "this plugin is switched on" in its list file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum PluginActivation {
+    /// A leading `*` means enabled, and an unmarked line is a plugin the game
+    /// knows about and does not load. Skyrim Special Edition and later.
+    #[default]
+    Asterisk,
+    /// Being in the file at all means enabled. The older convention, where a
+    /// disabled plugin is simply absent and `loadorder.txt` carries the rest.
+    Presence,
+}
+
+/// Where a game keeps its plugin list, and what it loads without being told.
+///
+/// The whole of what makes plugin management game-specific, which is why it is
+/// a profile section rather than a branch: the directory under the prefix, the
+/// file names, the activation convention, and the plugins the engine loads
+/// whether the list mentions them or not.
+///
+/// A profile with `load_order = "explicit"` and no `[plugin_list]` is refused
+/// at parse time. The claim and the means to honour it arrive together or the
+/// game announces management it cannot perform.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PluginListSpec {
+    /// Directory under the prefix's `AppData/Local` holding the list, e.g.
+    /// `Skyrim Special Edition`. A name, never a path: it is joined onto a
+    /// location this application derives, and a profile that could put a `..`
+    /// in it would be choosing where to write.
+    pub dir: String,
+    /// The file carrying order and activation. Almost always `plugins.txt`.
+    #[serde(default = "default_plugins_file")]
+    pub plugins_file: String,
+    /// The file carrying order alone, for games and tools that still read one.
+    ///
+    /// Written alongside `plugins_file` when present, because a user's other
+    /// tools read it and a list that disagrees with itself is worse than one
+    /// this application never touched.
+    #[serde(default)]
+    pub load_order_file: Option<String>,
+    #[serde(default)]
+    pub activation: PluginActivation,
+    /// Plugins the engine loads whether or not the list names them: the base
+    /// game and its official add-ons.
+    ///
+    /// Declared because every mod names one of them as a master, so an order
+    /// that does not know they exist reports every mod as broken.
+    #[serde(default)]
+    pub implicit: Vec<String>,
+}
+
+fn default_plugins_file() -> String {
+    "plugins.txt".to_string()
+}
+
 /// A complete, declarative game definition. This is the plugin unit.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GameProfile {
@@ -300,9 +356,25 @@ pub struct GameProfile {
     /// How standalone `.pak` mods join the engine's patch chain, if supported.
     #[serde(default)]
     pub pak_chain: Option<PakChainSpec>,
+    /// Where this game's plugin list lives, for `load_order = "explicit"`.
+    ///
+    /// `None` for every game whose order is an integer per mod, which is all of
+    /// them but the Creation Engine ones.
+    #[serde(default)]
+    pub plugin_list: Option<PluginListSpec>,
 }
 
 impl GameProfile {
+    /// Whether this game's order is a named list of files rather than a number
+    /// per mod, and the profile carries what is needed to write it.
+    ///
+    /// Both halves are required. A profile claiming `explicit` without a
+    /// `[plugin_list]` is refused when it is parsed, so this is a question with
+    /// one answer rather than two half-answers.
+    pub fn manages_plugin_list(&self) -> bool {
+        self.load_order == LoadOrderPolicy::Explicit && self.plugin_list.is_some()
+    }
+
     /// Resolve the game-relative destination for a source top-level dir, if this
     /// profile deploys it. E.g. `"natives"` -> `Some("natives")`.
     pub fn target_for(&self, source_root: &str) -> Option<&str> {

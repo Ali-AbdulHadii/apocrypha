@@ -123,10 +123,24 @@ pub fn probe(module: &FomodModule, game_dir: Option<&std::path::Path>) -> Probes
     }
 
     for path in wanted {
+        // The same rules a declared destination has to pass, because the value
+        // is just as much the archive author's. `dir.join` on a raw one would
+        // follow `../../..` straight out of the game directory, and an absolute
+        // path would discard `dir` entirely.
+        //
+        // Nothing is written here, so the stake is smaller than a destination's
+        // -- but `is_file` still answers a question. A condition gated on a
+        // path outside the game directory would make a step appear exactly when
+        // that path exists, and the wizard would show the answer. Refusing to
+        // look leaves the condition undecidable, which `truth` already handles
+        // and `evaluate` already reports.
+        let Ok(safe) = super::lower::validated_dest(&path) else {
+            continue;
+        };
         // A game directory is case-insensitive on Windows and not on Linux, and
         // the manifest's casing is the author's. Only an exact hit is recorded;
         // anything else stays unknown rather than guessed.
-        let candidate = dir.join(&path);
+        let candidate = dir.join(&safe);
         if candidate.is_file() {
             probes.file_states.insert(path, FileState::Active);
         }
@@ -865,6 +879,54 @@ mod tests {
             "an absent file stays unknown: calling it missing would satisfy \
              every must-not-be-present check ever written"
         );
+    }
+
+    #[test]
+    fn probing_refuses_to_look_outside_the_game_directory() {
+        // A read is still an answer. Gating a step on a path outside the game
+        // directory makes the wizard into an existence oracle for it, so the
+        // path is never joined and the condition stays undecidable.
+        let dir = tempfile::tempdir().unwrap();
+        let inside = dir.path().join("game");
+        std::fs::create_dir(&inside).unwrap();
+        std::fs::write(dir.path().join("secret.txt"), b"x").unwrap();
+
+        let mut m = module(vec![]);
+        m.module_dependencies = Some(CompositeDependency::And(vec![
+            CompositeDependency::File {
+                path: "../secret.txt".into(),
+                state: FileState::Active,
+            },
+            CompositeDependency::File {
+                path: "..\\secret.txt".into(),
+                state: FileState::Active,
+            },
+        ]));
+
+        let probes = probe(&m, Some(&inside));
+        assert!(
+            probes.file_states.is_empty(),
+            "nothing outside the game directory should have been looked at: {:?}",
+            probes.file_states
+        );
+    }
+
+    #[test]
+    fn an_absolute_file_dependency_is_not_probed() {
+        // `dir.join` on an absolute path discards `dir` altogether.
+        let dir = tempfile::tempdir().unwrap();
+        let mut m = module(vec![]);
+        // Absolute on both platforms, so the test means the same thing on each.
+        let absolute = if cfg!(windows) {
+            "C:\\Windows\\win.ini"
+        } else {
+            "/etc/passwd"
+        };
+        m.module_dependencies = Some(CompositeDependency::File {
+            path: absolute.into(),
+            state: FileState::Active,
+        });
+        assert!(probe(&m, Some(dir.path())).file_states.is_empty());
     }
 
     #[test]

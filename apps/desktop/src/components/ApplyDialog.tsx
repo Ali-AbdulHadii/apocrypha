@@ -160,6 +160,23 @@ export function ApplyDialog({
                 {state.result.filesDeployed} files copied into the game folder,
                 totalling {formatBytes(state.result.bytes)}.
               </div>
+              {/* For a Creation Engine game the files landing is only half of
+                  it: a plugin the game's list does not name is installed and
+                  ignored. Saying what reached the list is what replaced the
+                  notice that used to send people to another tool. */}
+              {state.result.pluginList &&
+                state.result.pluginList.added.length > 0 && (
+                  <div className="card-hint">
+                    {state.result.pluginList.added.length === 1
+                      ? `${state.result.pluginList.added[0]} was added to the game's plugin list and switched on.`
+                      : `${state.result.pluginList.added.length} plugins were added to the game's plugin list and switched on.`}
+                  </div>
+                )}
+              {state.result.pluginList?.problems.map((problem) => (
+                <div className="card-hint warn" key={problem}>
+                  {problem}
+                </div>
+              ))}
               <div className="card-hint">
                 Use Undo on the bottom bar to remove them again at any time.
               </div>

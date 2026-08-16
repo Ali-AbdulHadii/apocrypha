@@ -312,6 +312,146 @@ fn an_option_the_installer_forbids_is_shown_with_its_reason_rather_than_hidden()
 }
 
 #[test]
+fn a_file_marked_always_install_is_installed_without_its_plugin_being_chosen() {
+    let manifest = br#"<config><moduleName>M</moduleName><installSteps><installStep name="S">
+        <group name="G" type="SelectAtMostOne">
+          <plugin name="Extras">
+            <files>
+              <file source="readme.txt" alwaysInstall="true"/>
+              <file source="extras.esp"/>
+            </files>
+          </plugin>
+        </group></installStep></installSteps></config>"#;
+
+    let (bundle, _p, _t) = analyze(
+        &plain_rules(),
+        &[
+            ("fomod/ModuleConfig.xml", manifest),
+            ("readme.txt", b"R"),
+            ("extras.esp", b"E"),
+        ],
+    );
+
+    // It moves to the group that says what is true of it, and it leaves the
+    // plugin, because one destination owned by two options is a mod in conflict
+    // with itself.
+    let required = bundle
+        .options()
+        .find(|o| o.id == "@required")
+        .expect("a required option exists for it");
+    assert_eq!(
+        required
+            .payload
+            .iter()
+            .map(|f| f.game_rel_path.as_str())
+            .collect::<Vec<_>>(),
+        ["readme.txt"]
+    );
+
+    let plugin = bundle
+        .options()
+        .find(|o| o.name == "Extras")
+        .expect("the plugin is still offered");
+    assert_eq!(
+        plugin
+            .payload
+            .iter()
+            .map(|f| f.game_rel_path.as_str())
+            .collect::<Vec<_>>(),
+        ["extras.esp"]
+    );
+}
+
+#[test]
+fn install_if_usable_follows_whether_the_installer_calls_the_plugin_usable() {
+    let manifest = br#"<config><moduleName>M</moduleName><installSteps><installStep name="S">
+        <group name="G" type="SelectAny">
+          <plugin name="Usable">
+            <files><file source="good.esp" installIfUsable="true"/></files>
+            <typeDescriptor><type name="Optional"/></typeDescriptor>
+          </plugin>
+          <plugin name="Forbidden">
+            <files><file source="bad.esp" installIfUsable="true"/></files>
+            <typeDescriptor><type name="NotUsable"/></typeDescriptor>
+          </plugin>
+        </group></installStep></installSteps></config>"#;
+
+    let (bundle, _p, _t) = analyze(
+        &plain_rules(),
+        &[
+            ("fomod/ModuleConfig.xml", manifest),
+            ("good.esp", b"G"),
+            ("bad.esp", b"B"),
+        ],
+    );
+
+    // The usable one's file was hoisted, so it installs without being ticked.
+    let required = bundle
+        .options()
+        .find(|o| o.id == "@required")
+        .expect("hoisted into the required option");
+    assert_eq!(
+        required
+            .payload
+            .iter()
+            .map(|f| f.game_rel_path.as_str())
+            .collect::<Vec<_>>(),
+        ["good.esp"]
+    );
+
+    // The forbidden one's was not, so it stays where an unusable plugin's files
+    // stay: on an option that is shown and never deployed.
+    let forbidden = bundle
+        .options()
+        .find(|o| o.name == "Forbidden")
+        .expect("still shown");
+    assert!(!forbidden.deployable);
+    let deployed: Vec<&str> = bundle
+        .deployable_options()
+        .flat_map(|o| o.payload.iter())
+        .map(|f| f.game_rel_path.as_str())
+        .collect();
+    assert!(
+        !deployed.contains(&"bad.esp"),
+        "a plugin the installer calls unusable installs nothing, whatever its \
+         files claim: {deployed:?}"
+    );
+}
+
+#[test]
+fn a_plugin_whose_every_file_installs_anyway_is_shown_rather_than_dropped() {
+    // Nothing is left to choose, so it is not selectable -- but the author
+    // wrote it, and its description is the only place the user learns what the
+    // files that just arrived are for.
+    let manifest = br#"<config><moduleName>M</moduleName><installSteps><installStep name="S">
+        <group name="G" type="SelectAny">
+          <plugin name="Documentation">
+            <description>Read me first.</description>
+            <files><file source="readme.txt" alwaysInstall="true"/></files>
+          </plugin>
+        </group></installStep></installSteps></config>"#;
+
+    let (bundle, _p, _t) = analyze(
+        &plain_rules(),
+        &[("fomod/ModuleConfig.xml", manifest), ("readme.txt", b"R")],
+    );
+
+    let option = bundle
+        .options()
+        .find(|o| o.name == "Documentation")
+        .expect("still shown");
+    assert_eq!(option.select_mode, SelectMode::Info);
+    assert!(
+        option.blocked_reason.is_none(),
+        "nothing is wrong with it, so it is not reported as a problem"
+    );
+    assert!(
+        dests(&bundle).contains(&"readme.txt".to_string()),
+        "and the file still installs"
+    );
+}
+
+#[test]
 fn a_required_option_is_forced_whatever_its_group_allows() {
     let manifest = br#"<config><moduleName>M</moduleName><installSteps><installStep name="S">
         <group name="G" type="SelectAny">
@@ -377,6 +517,7 @@ fn a_mod_that_ships_plugins_says_their_order_is_not_managed() {
     // the manager having lost the mod.
     let rules = GameRules {
         plugin_extensions: vec!["esp".into(), "esl".into(), "esm".into()],
+        manages_plugin_list: false,
         ..bethesda_rules()
     };
     let manifest = br#"<config><moduleName>M</moduleName>
@@ -398,6 +539,34 @@ fn a_mod_that_ships_plugins_says_their_order_is_not_managed() {
         .expect("a mod shipping a plugin says so");
     assert!(notice.contains("Ordinator.esp"), "{notice}");
     assert!(notice.contains("does not manage"), "{notice}");
+}
+
+#[test]
+fn a_game_whose_list_is_written_is_not_told_to_go_and_write_it() {
+    // The notice sends someone to another tool to finish the job. Once the job
+    // is done here, repeating it sends them to fix something that is not
+    // broken -- so the same field that turns the writer on turns this off, and
+    // the two cannot disagree about which games are managed.
+    let rules = GameRules {
+        plugin_extensions: vec!["esp".into(), "esl".into(), "esm".into()],
+        manages_plugin_list: true,
+        ..bethesda_rules()
+    };
+    let manifest = br#"<config><moduleName>M</moduleName>
+        <requiredInstallFiles><file source="Ordinator.esp"/></requiredInstallFiles></config>"#;
+
+    let (bundle, _p, _t) = analyze(
+        &rules,
+        &[
+            ("fomod/ModuleConfig.xml", manifest),
+            ("Ordinator.esp", b"P"),
+        ],
+    );
+
+    assert!(
+        apoc_modengine::unmanaged_plugin_notice(&bundle, &rules).is_none(),
+        "the plugins are ordered here now"
+    );
 }
 
 #[test]
