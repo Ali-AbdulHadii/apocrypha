@@ -70,6 +70,18 @@ export const Icon = {
       <path d="m15 17 3 3 3-3" />
     </>,
   ),
+  /* Plugins: a list whose first rows are bracketed together, because the
+     master block is the thing that makes this order different from the one
+     next door in the rail. */
+  plugins: make(
+    <>
+      <path d="M4 5h3v6H4z" />
+      <path d="M10 6h10" />
+      <path d="M10 10h10" />
+      <path d="M4 15h16" />
+      <path d="M4 19h16" />
+    </>,
+  ),
   conflicts: make(
     <>
       <path d="M12 4 3 19h18L12 4Z" />

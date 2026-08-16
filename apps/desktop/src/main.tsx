@@ -10,6 +10,9 @@ import "./styles/app.css";
 // Screen-specific sheets, loaded after app.css so they can build on its classes
 // without having to out-specify them.
 import "./styles/order.css";
+// After order.css: the Plugins screen reuses its classes and only adds what a
+// plugin list has that a mod order does not.
+import "./styles/plugins.css";
 import "./styles/settings.css";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
