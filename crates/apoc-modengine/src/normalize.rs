@@ -124,8 +124,22 @@ fn detect(index: &ArchiveIndex, rules: &GameRules) -> InstallerModel {
             let has_declared_root = index.entries.iter().any(|e| {
                 let root = first_component(&e.path);
                 e.path.contains('/')
-                    && (rules.is_payload_root(root) || rules.rewrap_prefix(root).is_some())
+                    && (rules.is_payload_root(root)
+                        || rules.rewrap_prefix(root).is_some()
+                        // A folder mirroring the game directory is payload too,
+                        // or a mod that is only that folder classifies as
+                        // unknown and installs nothing.
+                        || rules.strip_root_folder(&e.path).is_some())
             });
+
+            // Files belonging beside the game executable, e.g. SKSE's loader
+            // and its versioned library. Counted so an archive that is *only*
+            // those — a bare ENB drop, a script extender with no `Data` — is
+            // still recognised rather than reported as unclassifiable.
+            let has_root_files = index
+                .entries
+                .iter()
+                .any(|e| !e.path.contains('/') && rules.matches_root_pattern(&e.path));
             // A bare loader DLL at the archive root, e.g. REFramework's release zip.
             let has_loader = index
                 .entries
@@ -136,7 +150,7 @@ fn detect(index: &ArchiveIndex, rules: &GameRules) -> InstallerModel {
                 InstallerModel::FlatNatives
             } else if has_ref {
                 InstallerModel::ReframeworkOnly
-            } else if has_declared_root {
+            } else if has_declared_root || has_root_files {
                 InstallerModel::LooseRoots
             } else if has_loader {
                 InstallerModel::Loader
@@ -176,6 +190,35 @@ fn payload_for(index: &ArchiveIndex, folder: &str, rules: &GameRules) -> Vec<Fil
                 });
                 continue;
             }
+        }
+
+        // A folder mirroring the game directory, which is how Root Builder
+        // taught the Bethesda ecosystem to package this. The folder is stripped
+        // and the rest kept, so `Root/Data/x.esp` lands at `Data/x.esp` — that
+        // is not a special case, it is what "mirrors the game directory" means.
+        if let Some(inner) = rules.strip_root_folder(rest) {
+            out.push(FilePayload {
+                archive_path: e.archive_path.clone(),
+                game_rel_path: rules.canonicalize(inner),
+                root: DeployRoot::GameRoot,
+                size: e.size,
+                priority: 0,
+            });
+            continue;
+        }
+
+        // A loose file at the archive root, which is how SKSE and most of its
+        // kind actually ship. Only what the profile's patterns accept: a readme
+        // or a screenshot beside them matches nothing and is left where it is.
+        if !rest.contains('/') && rules.matches_root_pattern(rest) {
+            out.push(FilePayload {
+                archive_path: e.archive_path.clone(),
+                game_rel_path: rest.to_string(),
+                root: DeployRoot::GameRoot,
+                size: e.size,
+                priority: 0,
+            });
+            continue;
         }
 
         // A standalone `.pak` is the whole mod; it is renamed into the engine's
@@ -405,8 +448,48 @@ fn normalize_fluffy_aio(
         installer_model: InstallerModel::FluffyAio,
         archive_sha256: sha,
         fomod: None,
+        // A segmented installer's files live under its option folders; anything
+        // at the archive root is the installer's own furniture.
+        unclaimed_root_files: Vec::new(),
         groups: assemble_groups(options),
     }
+}
+
+/// Extensions that mean "read me", not "install me".
+///
+/// Only ever consulted to decide whether to *mention* a file, never to decide
+/// whether to deploy one, so being slightly wrong here costs a sentence rather
+/// than a broken install. That is the whole reason deployment uses an allowlist
+/// of patterns and this uses a denylist: they are answering questions with very
+/// different stakes.
+const DOCUMENTATION: [&str; 8] = ["txt", "md", "pdf", "rtf", "jpg", "jpeg", "png", "webp"];
+
+/// Files at the archive root that nothing claimed and that are not obviously
+/// documentation.
+///
+/// Silent for a game with no `[root_files]`: the profile has not said that root
+/// files mean anything here, so listing them would be noise on every mod for
+/// five of the six games shipping today.
+fn unclaimed_root_files(index: &ArchiveIndex, rules: &GameRules) -> Vec<String> {
+    if rules.root_folder.is_none() && rules.root_patterns.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<String> = index
+        .entries
+        .iter()
+        .map(|e| e.path.as_str())
+        .filter(|p| !p.contains('/'))
+        .filter(|p| !rules.matches_root_pattern(p) && !rules.is_root_file(p))
+        .filter(|p| {
+            !std::path::Path::new(p)
+                .extension()
+                .is_some_and(|e| DOCUMENTATION.iter().any(|d| e.eq_ignore_ascii_case(d)))
+        })
+        .map(str::to_string)
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Build a `ModBundle` for a single-option archive (loose dump or single Fluffy mod).
@@ -482,13 +565,77 @@ fn normalize_single(
         installer_model: model,
         archive_sha256: sha,
         fomod: None,
+        unclaimed_root_files: unclaimed_root_files(index, rules),
         groups: vec![OptionGroup {
             index: None,
             label: "Main".to_string(),
             cardinality: None,
-            options: vec![option],
+            options: split_root_files(option),
         }],
     }
+}
+
+/// The name shown for the option carrying files that go beside the executable.
+const ROOT_OPTION_NAME: &str = "Game folder files";
+
+/// Lift the files destined for the game folder into an option of their own.
+///
+/// They install either way — the option is [`SelectMode::Stackable`] and is in
+/// the default selection, so a mod like SKSE needs no decision from anybody.
+/// What it buys is that the files are *visible*: replacing something beside the
+/// game executable is the one part of an install worth being able to see before
+/// it happens, and to decline without declining the whole mod.
+///
+/// Returns the option unchanged when there are none, which is every mod on
+/// every game whose profile declares no `[root_files]`.
+fn split_root_files(option: ModOption) -> Vec<ModOption> {
+    if !option
+        .payload
+        .iter()
+        .any(|f| f.root == DeployRoot::GameRoot)
+    {
+        return vec![option];
+    }
+
+    let (root, rest): (Vec<_>, Vec<_>) = option
+        .payload
+        .iter()
+        .cloned()
+        .partition(|f| f.root == DeployRoot::GameRoot);
+
+    // A mod that is *only* root files — a bare ENB drop, a script extender with
+    // no scripts — stays one option. Splitting it would leave an empty "Main"
+    // beside it, which reads as something having gone missing.
+    if rest.is_empty() {
+        return vec![option];
+    }
+
+    let root_option = ModOption {
+        id: "root-files".to_string(),
+        name: ROOT_OPTION_NAME.to_string(),
+        description: Some(
+            "Files that go in the game folder itself, beside the game's own \
+             executable, rather than under Data."
+                .to_string(),
+        ),
+        // Stackable rather than forced: this is the advanced escape hatch, and
+        // an option nobody can decline is not one.
+        select_mode: SelectMode::Stackable,
+        recommended: true,
+        deployable: true,
+        payload: root,
+        screenshot: None,
+        screenshot_archive_path: None,
+        raw_modinfo: Default::default(),
+        ..option.clone()
+    };
+
+    let main = ModOption {
+        payload: rest,
+        ..option
+    };
+
+    vec![main, root_option]
 }
 
 /// Normalize a fully-read archive index into a canonical bundle.

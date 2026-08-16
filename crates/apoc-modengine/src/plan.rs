@@ -455,6 +455,7 @@ mod tests {
             installer_model: apoc_domain::InstallerModel::FluffyAio,
             archive_sha256: None,
             fomod: None,
+            unclaimed_root_files: Vec::new(),
             groups: vec![OptionGroup {
                 index: Some(1),
                 label: "G".into(),

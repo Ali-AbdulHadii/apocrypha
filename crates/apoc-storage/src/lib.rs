@@ -1040,6 +1040,7 @@ mod tests {
             installer_model: InstallerModel::FluffyAio,
             archive_sha256: None,
             fomod: None,
+            unclaimed_root_files: Vec::new(),
             groups: vec![],
         }
     }
