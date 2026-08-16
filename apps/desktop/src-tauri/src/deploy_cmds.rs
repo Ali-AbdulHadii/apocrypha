@@ -162,7 +162,12 @@ fn run_deploy(
                 clean: rollback.is_clean(),
             }),
         },
-        Ok(Applied::Complete(journal)) => {
+        Ok(Applied::Complete(mut journal)) => {
+            // The files are down; now the list that points at them. After the
+            // apply and against the same journal, so a plugin list written for
+            // files that are not there is not a state this can reach.
+            let plugin_list = fold_in_plugin_list(state, game_id, &ctx, &mut journal, &plan);
+
             if let Err(e) = record(state, game_id, &journal, &deployed_ids) {
                 return failed(e);
             }
@@ -173,11 +178,73 @@ fn run_deploy(
                     files_deployed: plan.file_count(),
                     bytes: plan.total_size(),
                     method: dry.method.as_str().to_string(),
+                    plugin_list,
                 }),
                 error: None,
                 rollback: None,
             }
         }
+    }
+}
+
+/// Write the game's plugin list, for a game that has one.
+///
+/// Returns `None` when this game is not ordered that way, or when the prefix
+/// does not exist yet — a game that has never been launched under Proton has
+/// nowhere for the list to go, and the plugins are still installed, so this is
+/// not a deployment failure.
+///
+/// A failure here is reported and does not fail the deploy either. The files
+/// are placed and reversible by the time this runs; refusing the whole
+/// deployment because a list could not be written would undo work that
+/// succeeded in order to report something the user can fix in another tool.
+fn fold_in_plugin_list(
+    state: &AppState,
+    game_id: &str,
+    ctx: &apoc_deploy::DeployContext,
+    journal: &mut apoc_deploy::journal::Journal,
+    plan: &apoc_domain::DeploymentPlan,
+) -> Option<PluginListResultView> {
+    let profile = crate::commands::effective_profile(state, game_id).ok()?;
+    let spec = profile.plugin_list.as_ref()?;
+    if !profile.manages_plugin_list() {
+        return None;
+    }
+
+    let prefix = {
+        let store = state.store.lock().ok()?;
+        store.get_game(game_id).ok()??.proton_prefix?
+    };
+    let target = apoc_deploy::plugin_list::PluginListTarget::resolve(Path::new(&prefix), spec)?;
+
+    let paths: Vec<String> = plan.files.iter().map(|f| f.game_rel_path.clone()).collect();
+    let rules = crate::commands::rules_for_state(state, game_id);
+    let entries = apoc_modengine::plugins::deployed_entries(&ctx.game_dir, &paths, &rules);
+
+    match apoc_deploy::provision_plugin_list(ctx, journal, &target, entries) {
+        Ok(outcome) => Some(PluginListResultView {
+            added: outcome.added,
+            problems: outcome
+                .violations
+                .iter()
+                .map(|v| match v.reason {
+                    apoc_domain::plugins::MasterProblem::Missing => format!(
+                        "{} needs {}, which is not installed or is switched off.",
+                        v.plugin, v.master
+                    ),
+                    apoc_domain::plugins::MasterProblem::LoadsTooLate => format!(
+                        "{} loads before {}, which it depends on. Move {} above it.",
+                        v.plugin, v.master, v.master
+                    ),
+                })
+                .collect(),
+            written: outcome.written,
+        }),
+        Err(e) => Some(PluginListResultView {
+            added: Vec::new(),
+            problems: vec![format!("The plugin list could not be written: {e}")],
+            written: false,
+        }),
     }
 }
 
