@@ -1,8 +1,15 @@
 /**
- * Confirmation for actions that destroy something.
+ * Confirmation for actions whose consequences reach outside this screen.
  *
  * Used sparingly. A confirmation on a reversible action is noise, so this is
- * reserved for things that delete files with no undo.
+ * reserved for two kinds of thing: deleting files with no undo, and
+ * reconfiguring something that is not Apocrypha.
+ *
+ * The second was added for taking the `nxm://` scheme, which is reversible —
+ * turning it off hands the scheme back — and still deserves asking, because
+ * the program it is taken from is one the user installed on purpose and will
+ * not be told. Reversible is not the same as unremarkable once another
+ * application is involved.
  */
 
 import { motion } from "framer-motion";

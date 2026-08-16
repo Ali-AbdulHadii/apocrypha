@@ -35,6 +35,7 @@ import {
 } from "../lib/api";
 import { ACCENT_PRESETS, type useAppearance } from "../lib/appearance";
 import { useTheme, type ThemeMode } from "../lib/theme";
+import type { Confirm } from "./ConfirmDialog";
 import { Icon } from "./icons";
 import { Chip, Segmented, Switch, pageMotion } from "./ui";
 import { SupportAddress, supportMailto } from "../lib/support";
@@ -46,6 +47,8 @@ export interface SettingsScreenProps {
   appearance: ReturnType<typeof useAppearance>;
   onError: (e: unknown) => void;
   onInfo: (msg: string, kind?: "ok" | "bad" | "info") => void;
+  /** Raise the shared confirmation dialog. Owned by App, which renders it. */
+  onConfirm: (c: Confirm) => void;
 }
 
 type SectionId = "appearance" | "downloads" | "library" | "advanced";
@@ -56,6 +59,29 @@ const SECTIONS: { id: SectionId; label: string }[] = [
   { id: "library", label: "Library" },
   { id: "advanced", label: "Advanced" },
 ];
+
+/**
+ * A `nxm://` handler, as a name a person recognises.
+ *
+ * The backend reports whatever the system holds, and the two systems hold very
+ * different things: a desktop entry id on Linux, a full command line on
+ * Windows. Neither belongs in a sentence as-is — nobody needs to read
+ * `"C:\Program Files\Black Tree Gaming Ltd\Vortex\Vortex.exe" -d "%1"` to learn
+ * that Vortex has it.
+ */
+export function handlerName(handler: string): string {
+  const command = handler.trim();
+  // Windows: a quoted executable, then arguments that are not ours to show.
+  const exe = command.startsWith('"')
+    ? command.slice(1).split('"')[0]
+    : command.split(/\s/)[0];
+
+  const file = exe.split(/[\\/]/).pop() ?? exe;
+  // Linux: `something.desktop`. Windows: `Vortex.exe`. Either way the name is
+  // the file without what it is.
+  const stripped = file.replace(/\.(desktop|exe)$/i, "");
+  return stripped || command;
+}
 
 /** How the deploy method preference reads to someone who is not a programmer. */
 const PLACEMENT: Record<string, string> = {
@@ -75,6 +101,7 @@ export function SettingsScreen({
   appearance,
   onError,
   onInfo,
+  onConfirm,
 }: SettingsScreenProps) {
   const [section, setSection] = useState<SectionId>("appearance");
   const [status, setStatus] = useState<NexusStatusView | null>(null);
@@ -172,6 +199,7 @@ export function SettingsScreen({
               onStatus={setStatus}
               onError={onError}
               onInfo={onInfo}
+              onConfirm={onConfirm}
             />
           ) : section === "library" ? (
             <LibrarySection
@@ -449,6 +477,7 @@ function DownloadsSection({
   onStatus,
   onError,
   onInfo,
+  onConfirm,
 }: {
   settings: SettingsView;
   onSettings: (s: SettingsView) => void;
@@ -456,6 +485,7 @@ function DownloadsSection({
   onStatus: (s: NexusStatusView) => void;
   onError: (e: unknown) => void;
   onInfo: (msg: string, kind?: "ok" | "bad" | "info") => void;
+  onConfirm: (c: Confirm) => void;
 }) {
   const [key, setKey] = useState("");
   const [busy, setBusy] = useState(false);
@@ -566,7 +596,9 @@ function DownloadsSection({
                       <span className="dot" /> Apocrypha opens them
                     </Chip>
                   ) : status.currentHandler ? (
-                    <Chip kind="warn">{status.currentHandler} opens them</Chip>
+                    <Chip kind="warn">
+                      {handlerName(status.currentHandler)} opens them
+                    </Chip>
                   ) : (
                     <Chip kind="warn">Not set up</Chip>
                   )}
@@ -576,11 +608,20 @@ function DownloadsSection({
                       className="btn sm"
                       disabled={busy}
                       onClick={async () => {
-                        const next = await run(
-                          () => api.unregisterNxmHandler(),
-                          "Apocrypha no longer opens those links",
+                        // No message passed to `run`: what to say depends on
+                        // where the scheme ended up, which only the status that
+                        // comes back can answer.
+                        const next = await run(() =>
+                          api.unregisterNxmHandler(),
                         );
-                        if (next) onStatus(next);
+                        if (!next) return;
+                        onStatus(next);
+                        onInfo(
+                          next.currentHandler
+                            ? `${handlerName(next.currentHandler)} opens those links again`
+                            : "Apocrypha no longer opens those links",
+                          "ok",
+                        );
                       }}
                     >
                       Turn off
@@ -590,12 +631,52 @@ function DownloadsSection({
                       type="button"
                       className="btn sm primary"
                       disabled={busy}
-                      onClick={async () => {
-                        const next = await run(
-                          () => api.registerNxmHandler(),
-                          "Apocrypha will now open Nexus Mods download links",
-                        );
-                        if (next) onStatus(next);
+                      onClick={() => {
+                        const register = async () => {
+                          const next = await run(() =>
+                            api.registerNxmHandler(),
+                          );
+                          if (!next) return;
+                          onStatus(next);
+                          // The reported result, not the absence of an error.
+                          // A desktop environment can accept the request and
+                          // keep its own default, and saying "done" then is how
+                          // this row came to claim a handler it had not taken.
+                          if (next.handlerIsDefault) {
+                            onInfo(
+                              "Apocrypha now opens Nexus Mods download links",
+                              "ok",
+                            );
+                          } else if (next.currentHandler) {
+                            onInfo(
+                              `${handlerName(next.currentHandler)} still opens those links. Your desktop kept its own default.`,
+                              "bad",
+                            );
+                          } else {
+                            onInfo(
+                              "Nothing opens those links yet. The system did not accept the change.",
+                              "bad",
+                            );
+                          }
+                        };
+
+                        // Taking the scheme reconfigures another installed
+                        // program, so it is asked about by name. Nothing to ask
+                        // when nothing holds it.
+                        if (status.currentHandler) {
+                          const who = handlerName(status.currentHandler);
+                          onConfirm({
+                            title: "Take over download links?",
+                            body:
+                              `${who} currently opens Nexus Mods download links. ` +
+                              `Apocrypha will open them instead, and turning this ` +
+                              `off later hands them back to ${who}.`,
+                            confirmLabel: "Take over",
+                            onConfirm: () => void register(),
+                          });
+                        } else {
+                          void register();
+                        }
                       }}
                     >
                       Set up
@@ -1120,14 +1201,14 @@ function AdvancedSection({
       <Group title="Link handling">
         <Row
           stacked
-          label="Desktop entry"
+          label="Where the registration lives"
           desc={
-            "The file Apocrypha writes so your desktop knows it can open nxm links. " +
+            "Where the system records that Apocrypha can open nxm links. " +
             "Setting up download links on the Downloads tab writes it for you."
           }
           control={
-            <span className="set-path mono" title={status.desktopFile}>
-              {truncatePath(status.desktopFile, 64)}
+            <span className="set-path mono" title={status.handlerLocation}>
+              {truncatePath(status.handlerLocation, 64)}
             </span>
           }
         />
