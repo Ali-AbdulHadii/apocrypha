@@ -160,6 +160,49 @@ export interface PluginListResultView {
   written: boolean;
 }
 
+/** One plugin in a Creation Engine game's list. */
+export interface PluginEntryView {
+  /** The file name the game reads, e.g. `MyMod.esp`. */
+  name: string;
+  enabled: boolean;
+  /** From the file's own flags, not its extension: a `.esp` can be a master. */
+  kind: "master" | "light-master" | "normal";
+  /** What this plugin depends on, in header order. */
+  masters: string[];
+  /** Loaded by the engine whether the list names it or not. Not movable. */
+  implicit: boolean;
+  /** False for a line naming a plugin whose mod is no longer installed. */
+  present: boolean;
+}
+
+/** A plugin loading before something it depends on. */
+export interface ViolationView {
+  plugin: string;
+  master: string;
+  message: string;
+  /** The single move that resolves it, or null when no move can. */
+  fix: FixView | null;
+}
+
+export interface FixView {
+  name: string;
+  to: number;
+  label: string;
+}
+
+/**
+ * A game's plugin list, in the order the game will read it.
+ *
+ * Entries arrive already partitioned into the master block and the rest, which
+ * is what the engine does regardless of what the file says.
+ */
+export interface PluginOrderView {
+  entries: PluginEntryView[];
+  violations: ViolationView[];
+  /** Where the list lives, for reporting a problem. */
+  path: string;
+}
+
 export interface RollbackView {
   removed: number;
   restored: number;
@@ -572,6 +615,32 @@ export const api = {
     call<string[]>("set_mod_selection", { gameId, modId, selection }),
   setModOrder: (gameId: string, orderedIds: string[]) =>
     call<void>("set_mod_order", { gameId, orderedIds }),
+
+  /**
+   * The game's plugin list, or null for a game that has no such concept.
+   *
+   * Null is what the Plugins nav item keys off. Five of the six games shipping
+   * today order by mod priority alone.
+   */
+  listPlugins: (gameId: string) =>
+    call<PluginOrderView | null>("list_plugins", { gameId }),
+  /**
+   * Move a plugin and write the list.
+   *
+   * Every one of these reaches `plugins.txt` immediately, and returns the list
+   * as it now is on disk rather than nothing — so the screen renders what was
+   * written instead of predicting it. A move the engine declines (an unknown
+   * name, or a move to where it already is) is not an error; the answer is
+   * still the current list.
+   */
+  movePlugin: (gameId: string, name: string, to: number) =>
+    call<PluginOrderView | null>("move_plugin", { gameId, name, to }),
+  setPluginEnabled: (gameId: string, name: string, enabled: boolean) =>
+    call<PluginOrderView | null>("set_plugin_enabled", {
+      gameId,
+      name,
+      enabled,
+    }),
   removeMod: (gameId: string, modId: string) =>
     call<void>("remove_mod", { gameId, modId }),
 

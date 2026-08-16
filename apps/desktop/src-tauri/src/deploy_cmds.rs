@@ -205,17 +205,10 @@ fn fold_in_plugin_list(
     journal: &mut apoc_deploy::journal::Journal,
     plan: &apoc_domain::DeploymentPlan,
 ) -> Option<PluginListResultView> {
-    let profile = crate::commands::effective_profile(state, game_id).ok()?;
-    let spec = profile.plugin_list.as_ref()?;
-    if !profile.manages_plugin_list() {
-        return None;
-    }
-
-    let prefix = {
-        let store = state.store.lock().ok()?;
-        store.get_game(game_id).ok()??.proton_prefix?
-    };
-    let target = apoc_deploy::plugin_list::PluginListTarget::resolve(Path::new(&prefix), spec)?;
+    // Resolved by the same function the Plugins screen uses. Two copies of
+    // "where does this game's list live" is how a screen and a deploy end up
+    // writing different files.
+    let target = crate::plugin_cmds::plugin_list_target(state, game_id)?;
 
     let paths: Vec<String> = plan.files.iter().map(|f| f.game_rel_path.clone()).collect();
     let rules = crate::commands::rules_for_state(state, game_id);
@@ -227,16 +220,7 @@ fn fold_in_plugin_list(
             problems: outcome
                 .violations
                 .iter()
-                .map(|v| match v.reason {
-                    apoc_domain::plugins::MasterProblem::Missing => format!(
-                        "{} needs {}, which is not installed or is switched off.",
-                        v.plugin, v.master
-                    ),
-                    apoc_domain::plugins::MasterProblem::LoadsTooLate => format!(
-                        "{} loads before {}, which it depends on. Move {} above it.",
-                        v.plugin, v.master, v.master
-                    ),
-                })
+                .map(crate::plugin_cmds::violation_sentence)
                 .collect(),
             written: outcome.written,
         }),

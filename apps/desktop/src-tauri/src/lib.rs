@@ -10,6 +10,7 @@ mod deploy_cmds;
 mod downloads;
 mod gamedb;
 mod nexus_cmds;
+mod plugin_cmds;
 mod state;
 
 use state::AppState;
@@ -170,6 +171,9 @@ pub fn run() {
             commands::duplicate_profile,
             commands::delete_profile,
             commands::set_mod_order,
+            plugin_cmds::list_plugins,
+            plugin_cmds::move_plugin,
+            plugin_cmds::set_plugin_enabled,
             commands::remove_mod,
             commands::preview_from_archive,
             commands::preview_from_mod,
