@@ -279,6 +279,13 @@
   line-height: var(--leading);
 }
 
+/* A hint the reader has to act on, rather than one they can skim past: a
+   plugin that loads before something it depends on will not work, and the
+   tertiary text colour is the one used for things that do not matter. */
+.card-hint.warn {
+  color: var(--warning);
+}
+
 /* -------------------------------------------------------------- buttons --- */
 .btn {
   display: inline-flex;
