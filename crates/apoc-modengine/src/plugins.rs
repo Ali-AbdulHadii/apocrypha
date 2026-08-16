@@ -220,6 +220,61 @@ pub fn deployed_entries(
     out
 }
 
+/// Describe plugins the game's list already names, by finding them on disk.
+///
+/// [`deployed_entries`] answers "what did this deployment just write"; this
+/// answers "what are the plugins already in the list", which is what a screen
+/// showing that list needs. The two facts a list file cannot carry are the ones
+/// that decide correctness: a plugin's real kind, which is a header flag rather
+/// than its extension, and the masters it depends on.
+///
+/// `roots` are the game-relative directories a plugin can live in — the profile's
+/// deploy target destinations, so no directory is named in code here. The first
+/// root holding a file of that name wins, matching what the game does.
+///
+/// The names come from a file this application does not own: a plugin list is
+/// hand-edited, written by other tools, and on a shared machine not necessarily
+/// by the person running this. So a name is checked before it is joined onto a
+/// path — one ordinary file name, carrying a declared plugin extension, or it is
+/// described as unknown rather than opened. `..` in a plugin list is not a path
+/// traversal this needs to survive gracefully; it is one it must not perform.
+///
+/// Every name comes back, in the order given. A plugin whose file is missing —
+/// its mod uninstalled, or never installed — is [`PluginEntry::unknown`], which
+/// already means "constraints not known" rather than "no constraints", so it
+/// stays visible in the list instead of vanishing from it.
+pub fn entries_for_names(
+    game_dir: &Path,
+    names: &[String],
+    roots: &[String],
+    rules: &crate::GameRules,
+) -> Vec<PluginEntry> {
+    names
+        .iter()
+        .map(|name| {
+            if !is_plain_file_name(name) || !rules.is_plugin_file(name) {
+                return PluginEntry::unknown(name.clone());
+            }
+            entry_for(name, || {
+                roots
+                    .iter()
+                    .map(|root| game_dir.join(root).join(name))
+                    .find_map(|path| read_header_bytes(&path))
+            })
+        })
+        .collect()
+}
+
+/// One ordinary file name: no separators, no traversal, no NUL.
+fn is_plain_file_name(s: &str) -> bool {
+    !s.is_empty()
+        && s != "."
+        && s != ".."
+        && !s.contains('/')
+        && !s.contains('\\')
+        && !s.contains('\0')
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -357,5 +412,133 @@ mod tests {
         assert_eq!(entry.name, "Mod.esm");
         assert_eq!(entry.kind, PluginKind::Master);
         assert_eq!(entry.masters, vec!["Skyrim.esm"]);
+    }
+
+    /// Rules for a game whose plugins live under `Data`, as Skyrim's do.
+    fn creation_engine_rules() -> crate::GameRules {
+        crate::GameRules {
+            plugin_extensions: vec!["esp".into(), "esm".into(), "esl".into()],
+            ..crate::GameRules::default()
+        }
+    }
+
+    #[test]
+    fn a_named_plugin_is_described_from_the_file_the_game_will_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("Data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(
+            data_dir.join("Mod.esp"),
+            plugin_bytes(FLAG_MASTER, &[mast("Skyrim.esm"), data()]),
+        )
+        .unwrap();
+
+        let entries = entries_for_names(
+            dir.path(),
+            &["Mod.esp".to_string()],
+            &["Data".to_string()],
+            &creation_engine_rules(),
+        );
+
+        assert_eq!(entries.len(), 1);
+        // The flag, not the `.esp` extension, decides what the engine does.
+        assert_eq!(entries[0].kind, PluginKind::Master);
+        assert_eq!(entries[0].masters, vec!["Skyrim.esm"]);
+    }
+
+    #[test]
+    fn a_name_with_no_file_behind_it_still_comes_back() {
+        // A plugin whose mod was uninstalled leaves a line in the list. Dropping
+        // it here would make it disappear from the screen while the game still
+        // reads it, and the user could never remove it.
+        let dir = tempfile::tempdir().unwrap();
+        let entries = entries_for_names(
+            dir.path(),
+            &["Gone.esp".to_string()],
+            &["Data".to_string()],
+            &creation_engine_rules(),
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "Gone.esp");
+        assert!(entries[0].masters.is_empty(), "constraints are not known");
+    }
+
+    #[test]
+    fn a_list_entry_that_is_a_path_is_never_opened() {
+        // The list is hand-edited and written by other tools, so a name is not
+        // a trusted path component. Joining this one would read outside the
+        // game directory entirely.
+        let dir = tempfile::tempdir().unwrap();
+        let outside = dir.path().join("outside.esp");
+        std::fs::write(
+            &outside,
+            plugin_bytes(FLAG_MASTER, &[mast("Skyrim.esm"), data()]),
+        )
+        .unwrap();
+        std::fs::create_dir_all(dir.path().join("game/Data")).unwrap();
+
+        let entries = entries_for_names(
+            &dir.path().join("game"),
+            &[
+                "../../outside.esp".to_string(),
+                "also/nested.esp".to_string(),
+            ],
+            &["Data".to_string()],
+            &creation_engine_rules(),
+        );
+
+        assert_eq!(entries.len(), 2);
+        for entry in entries {
+            assert!(
+                entry.masters.is_empty(),
+                "{} was opened when it should not have been",
+                entry.name
+            );
+        }
+    }
+
+    #[test]
+    fn a_name_without_a_plugin_extension_is_not_opened_either() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_dir = dir.path().join("Data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+        std::fs::write(
+            data_dir.join("notes.txt"),
+            plugin_bytes(FLAG_MASTER, &[mast("Skyrim.esm"), data()]),
+        )
+        .unwrap();
+
+        let entries = entries_for_names(
+            dir.path(),
+            &["notes.txt".to_string()],
+            &["Data".to_string()],
+            &creation_engine_rules(),
+        );
+
+        assert!(entries[0].masters.is_empty());
+    }
+
+    #[test]
+    fn the_first_root_holding_the_file_is_the_one_read() {
+        // Two payload roots, the plugin in the second. Matching the game, which
+        // reads the first one it finds rather than refusing to choose.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("Root")).unwrap();
+        std::fs::create_dir_all(dir.path().join("Data")).unwrap();
+        std::fs::write(
+            dir.path().join("Data/Mod.esp"),
+            plugin_bytes(0, &[mast("Base.esm"), data()]),
+        )
+        .unwrap();
+
+        let entries = entries_for_names(
+            dir.path(),
+            &["Mod.esp".to_string()],
+            &["Root".to_string(), "Data".to_string()],
+            &creation_engine_rules(),
+        );
+
+        assert_eq!(entries[0].masters, vec!["Base.esm"]);
     }
 }
