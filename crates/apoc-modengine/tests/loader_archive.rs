@@ -33,6 +33,7 @@ fn mhw_rules() -> GameRules {
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),
         plugin_extensions: Vec::new(),
+        manages_plugin_list: false,
     }
 }
 

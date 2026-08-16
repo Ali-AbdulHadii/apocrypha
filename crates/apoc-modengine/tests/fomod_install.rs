@@ -517,6 +517,7 @@ fn a_mod_that_ships_plugins_says_their_order_is_not_managed() {
     // the manager having lost the mod.
     let rules = GameRules {
         plugin_extensions: vec!["esp".into(), "esl".into(), "esm".into()],
+        manages_plugin_list: false,
         ..bethesda_rules()
     };
     let manifest = br#"<config><moduleName>M</moduleName>
@@ -538,6 +539,34 @@ fn a_mod_that_ships_plugins_says_their_order_is_not_managed() {
         .expect("a mod shipping a plugin says so");
     assert!(notice.contains("Ordinator.esp"), "{notice}");
     assert!(notice.contains("does not manage"), "{notice}");
+}
+
+#[test]
+fn a_game_whose_list_is_written_is_not_told_to_go_and_write_it() {
+    // The notice sends someone to another tool to finish the job. Once the job
+    // is done here, repeating it sends them to fix something that is not
+    // broken -- so the same field that turns the writer on turns this off, and
+    // the two cannot disagree about which games are managed.
+    let rules = GameRules {
+        plugin_extensions: vec!["esp".into(), "esl".into(), "esm".into()],
+        manages_plugin_list: true,
+        ..bethesda_rules()
+    };
+    let manifest = br#"<config><moduleName>M</moduleName>
+        <requiredInstallFiles><file source="Ordinator.esp"/></requiredInstallFiles></config>"#;
+
+    let (bundle, _p, _t) = analyze(
+        &rules,
+        &[
+            ("fomod/ModuleConfig.xml", manifest),
+            ("Ordinator.esp", b"P"),
+        ],
+    );
+
+    assert!(
+        apoc_modengine::unmanaged_plugin_notice(&bundle, &rules).is_none(),
+        "the plugins are ordered here now"
+    );
 }
 
 #[test]

@@ -219,26 +219,6 @@ impl PluginOrder {
             .unwrap_or(0)
     }
 
-    /// Drop plugins that are no longer deployed.
-    ///
-    /// A plugin the user disabled and a plugin that no longer exists look the
-    /// same in the file and are not the same thing, so removal is driven by
-    /// what is on disk rather than by what is switched off. Implicit plugins
-    /// are never removed: the game loads them whether the list agrees or not.
-    ///
-    /// Returns the names removed.
-    pub fn retain_deployed(&mut self, deployed: &[String]) -> Vec<String> {
-        let mut removed = Vec::new();
-        self.entries.retain(|e| {
-            let keep = e.implicit || deployed.iter().any(|d| same_plugin(d, &e.name));
-            if !keep {
-                removed.push(e.name.clone());
-            }
-            keep
-        });
-        removed
-    }
-
     /// Turn one plugin on or off, by the game's idea of the same name.
     ///
     /// Returns whether the list changed, so a caller can decline to write a file
@@ -459,21 +439,6 @@ mod tests {
         }]);
 
         assert!(order.violations().is_empty());
-    }
-
-    #[test]
-    fn undeployed_plugins_go_but_implicit_ones_stay() {
-        let mut order = PluginOrder::adopt(vec![
-            implicit("Skyrim.esm"),
-            plugin("Gone.esp", PluginKind::Normal, &[]),
-            plugin("Still.esp", PluginKind::Normal, &[]),
-        ]);
-
-        let removed = order.retain_deployed(&["Still.esp".to_string()]);
-
-        assert_eq!(removed, vec!["Gone.esp"]);
-        let names: Vec<&str> = order.entries().iter().map(|e| e.name.as_str()).collect();
-        assert_eq!(names, vec!["Skyrim.esm", "Still.esp"]);
     }
 
     #[test]
