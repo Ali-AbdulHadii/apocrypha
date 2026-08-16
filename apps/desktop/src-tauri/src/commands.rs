@@ -1018,7 +1018,12 @@ pub(crate) fn build_context(state: &AppState, game_id: &str) -> CmdResult<Deploy
     // copy-only path that changed in a game update is exactly the kind of
     // correction publishing profiles exists to deliver, and a deployment
     // reading the stale one would put a mod in a slot the game no longer reads.
-    let profile = effective_profile(state, game_id).ok();
+    //
+    // Read through the guard this function already holds. Asking `AppState` for
+    // it here would take the same non-reentrant mutex a second time on this
+    // thread, which does not fail — it blocks forever, holding the lock it is
+    // waiting for. That is what made every Apply hang at "Preparing".
+    let profile = crate::gamedb::profile_from(&store, game_id);
     Ok(DeployContext {
         game_id: game_id.to_string(),
         game_dir: PathBuf::from(install_dir),
