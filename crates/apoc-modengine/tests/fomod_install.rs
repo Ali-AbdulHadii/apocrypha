@@ -518,6 +518,8 @@ fn a_mod_that_ships_plugins_says_their_order_is_not_managed() {
     let rules = GameRules {
         plugin_extensions: vec!["esp".into(), "esl".into(), "esm".into()],
         manages_plugin_list: false,
+        root_folder: None,
+        root_patterns: Vec::new(),
         ..bethesda_rules()
     };
     let manifest = br#"<config><moduleName>M</moduleName>
