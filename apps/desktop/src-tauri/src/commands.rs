@@ -2184,12 +2184,24 @@ mod tests {
     }
 
     #[test]
-    fn both_shipped_games_produce_a_launch_url() {
-        // Reads the app id from the profile rather than restating it, so a
-        // profile that loses its detection block fails here.
-        for id in ["monster-hunter-wilds", "cyberpunk-2077"] {
-            let p = builtin_profile(id).expect("profile ships");
+    fn every_shipped_game_produces_a_launch_url() {
+        // Enumerated rather than listed. This test named two games when two
+        // shipped; six ship now, and a version of it that still named those two
+        // would have gone on passing while saying nothing about the other four.
+        // A seventh game is covered by adding its profile, which is the whole
+        // claim the game database makes about itself.
+        let all = LocalBuiltin::new().all().expect("builtin profiles parse");
+        assert!(
+            all.len() >= 6,
+            "expected the shipped set, got {}",
+            all.len()
+        );
+
+        for p in all {
+            // The app id is read from the profile rather than restated here, so
+            // a profile that loses its detection block fails this.
             let url = steam_run_url(p.detection.steam_app_id);
+            let id = &p.id;
             assert!(url.starts_with("steam://rungameid/"), "{id}: {url}");
             assert!(
                 url.rsplit('/')
