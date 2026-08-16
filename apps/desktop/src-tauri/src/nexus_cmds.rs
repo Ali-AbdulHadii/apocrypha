@@ -27,6 +27,12 @@ const KEY_PREMIUM: &str = "nexus_is_premium";
 const KEY_USER_ID: &str = "nexus_user_id";
 const KEY_SSO_SLUG: &str = "nexus_sso_application";
 const KEY_SSO_TOKEN: &str = "nexus_sso_token";
+/// What owned `nxm://` before this application took it.
+///
+/// Kept so turning the handler off can hand the scheme back rather than leave
+/// it unowned. `apoc-nexus` returns the value and has nowhere durable to put
+/// it; this is that somewhere.
+const KEY_HANDLER_REPLACED: &str = "nxm_handler_replaced";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -40,7 +46,9 @@ pub struct NexusStatusView {
     pub handler_registered: bool,
     pub handler_is_default: bool,
     pub current_handler: Option<String>,
-    pub desktop_file: String,
+    /// Where the registration lives: a `.desktop` path on Linux, a registry key
+    /// on Windows.
+    pub handler_location: String,
     /// Nexus-issued application id. Browser sign-in cannot work without one.
     pub sso_application: String,
     pub can_sign_in: bool,
@@ -83,7 +91,7 @@ pub fn nexus_status(state: State<AppState>) -> CmdResult<NexusStatusView> {
         handler_registered: reg.installed,
         handler_is_default: reg.is_default,
         current_handler: reg.current_handler,
-        desktop_file: reg.desktop_file.display().to_string(),
+        handler_location: reg.location,
         sso_application: get(KEY_SSO_SLUG).unwrap_or_default(),
         can_sign_in: get(KEY_SSO_SLUG).is_some_and(|s| !s.trim().is_empty()),
     })
@@ -218,16 +226,52 @@ pub fn set_sso_application(state: State<AppState>, slug: String) -> CmdResult<Ne
 }
 
 /// Register this application as the system handler for `nxm://` links.
+///
+/// Whatever owned the scheme first is written to the settings table before the
+/// status is returned, so turning the handler off later can give it back. The
+/// registration itself has already happened by then: this is a note about how
+/// to undo it, not a step the undo depends on being asked for.
+///
+/// Returns the status rather than nothing, and the caller is expected to read
+/// it. The request can be accepted and still not take effect — a desktop
+/// environment can decline to change the default — and reporting success from
+/// the absence of an error is precisely the bug this replaces.
 #[tauri::command(async)]
 pub fn register_nxm_handler(state: State<AppState>) -> CmdResult<NexusStatusView> {
     let exe = std::env::current_exe().map_err(|e| e.to_string())?;
-    apoc_nexus::register(&exe).map_err(|e| e.to_string())?;
+    let reg = apoc_nexus::register(&exe).map_err(|e| e.to_string())?;
+
+    if let Some(previous) = reg.replaced.as_deref() {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .set_setting(KEY_HANDLER_REPLACED, previous)
+            .map_err(|e| e.to_string())?;
+    }
+
     nexus_status(state)
 }
 
+/// Stop handling `nxm://`, giving the scheme back to whoever had it.
+///
+/// The note is cleared only after the handover succeeds, so a failure leaves
+/// something to try again with rather than losing the only record of what was
+/// there before.
 #[tauri::command(async)]
 pub fn unregister_nxm_handler(state: State<AppState>) -> CmdResult<NexusStatusView> {
-    apoc_nexus::unregister().map_err(|e| e.to_string())?;
+    let previous = {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store.get_setting(KEY_HANDLER_REPLACED).ok().flatten()
+    };
+
+    apoc_nexus::unregister(previous.as_deref()).map_err(|e| e.to_string())?;
+
+    if previous.is_some() {
+        let store = state.store.lock().map_err(|_| "state poisoned")?;
+        store
+            .set_setting(KEY_HANDLER_REPLACED, "")
+            .map_err(|e| e.to_string())?;
+    }
+
     nexus_status(state)
 }
 
