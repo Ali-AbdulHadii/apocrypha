@@ -611,6 +611,7 @@ pub fn evaluate_selection(
         &bundle,
         &rules_for_state(&state, &game_id),
     ));
+    warnings.extend(apoc_modengine::unclaimed_root_files_notice(&bundle));
 
     Ok(ModView {
         id: String::new(),
@@ -690,6 +691,7 @@ pub fn analyze_archive(
         &bundle,
         &rules_for_state(&state, &game_id),
     ));
+    warnings.extend(apoc_modengine::unclaimed_root_files_notice(&bundle));
 
     let mod_view = ModView {
         id: String::new(),
@@ -1793,6 +1795,7 @@ mod settled_selection_tests {
             installer_model: InstallerModel::Fomod,
             archive_sha256: None,
             fomod: None,
+            unclaimed_root_files: Vec::new(),
             groups: vec![OptionGroup {
                 index: None,
                 label: "Group".into(),
@@ -1966,6 +1969,7 @@ mod carry_view_tests {
             installer_model: InstallerModel::FluffyAio,
             archive_sha256: None,
             fomod: None,
+            unclaimed_root_files: Vec::new(),
             groups: vec![OptionGroup {
                 index: None,
                 label: "Group".into(),
@@ -2071,6 +2075,7 @@ mod resolve_replacement_tests {
                 installer_model: InstallerModel::FluffyAio,
                 archive_sha256: None,
                 fomod: None,
+                unclaimed_root_files: Vec::new(),
                 groups: Vec::new(),
             },
         }

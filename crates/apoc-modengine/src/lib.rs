@@ -85,6 +85,34 @@ pub fn unmanaged_plugin_notice(bundle: &ModBundle, rules: &GameRules) -> Option<
     ))
 }
 
+/// Say what was left at the archive root rather than installed.
+///
+/// The counterpart of the option that installs root files: that one shows what
+/// is going in, and this shows what is not. A mod shipping something beside its
+/// payload that the game's patterns do not cover installs the payload and drops
+/// the rest — the exact shape of the bug that made root files deployable at all,
+/// and worth a sentence rather than silence.
+///
+/// Documentation is already filtered out when the bundle is built, so this
+/// stays quiet for the ordinary archive with a readme in it. Returns nothing
+/// for a game whose profile declares no root files, which is most of them.
+pub fn unclaimed_root_files_notice(bundle: &ModBundle) -> Option<String> {
+    let names = &bundle.unclaimed_root_files;
+    if names.is_empty() {
+        return None;
+    }
+    let listed = if names.len() > 3 {
+        format!("{}, and {} more", names[..3].join(", "), names.len() - 3)
+    } else {
+        names.join(", ")
+    };
+    Some(format!(
+        "{listed} sat beside this mod's files and was not installed. Apocrypha only takes files \
+         from a game's folder that its profile recognises. If the mod needs them, they belong in \
+         the game directory by hand."
+    ))
+}
+
 fn stem_of(path: &Path) -> String {
     path.file_stem()
         .and_then(|s| s.to_str())

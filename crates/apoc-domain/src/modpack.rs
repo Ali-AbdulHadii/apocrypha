@@ -234,6 +234,18 @@ pub struct ModBundle {
     /// existed.
     #[serde(default)]
     pub fomod: Option<FomodModule>,
+    /// Files sitting at the archive root that no rule claimed, and that do not
+    /// look like documentation.
+    ///
+    /// Recorded so the interface can say what it left behind. A mod whose root
+    /// files the profile's patterns do not cover installs its payload and drops
+    /// these, which is exactly the shape of the bug that made root files
+    /// deployable in the first place — the difference is that now it says so.
+    ///
+    /// Empty for every bundle stored before this existed, and for the ordinary
+    /// case where the only thing beside the payload is a readme.
+    #[serde(default)]
+    pub unclaimed_root_files: Vec<String>,
     pub groups: Vec<OptionGroup>,
 }
 
@@ -333,6 +345,7 @@ mod tests {
                 conditional_installs: Vec::new(),
                 warnings: vec!["one construct was degraded".into()],
             }),
+            unclaimed_root_files: Vec::new(),
             groups: Vec::new(),
         };
 

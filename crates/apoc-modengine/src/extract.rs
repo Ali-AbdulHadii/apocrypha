@@ -231,6 +231,7 @@ mod tests {
             installer_model: InstallerModel::Fomod,
             archive_sha256: None,
             fomod: None,
+            unclaimed_root_files: Vec::new(),
             groups: vec![OptionGroup {
                 index: None,
                 label: "G".into(),

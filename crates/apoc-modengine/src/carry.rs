@@ -268,6 +268,7 @@ mod fomod_tests {
             installer_model: InstallerModel::Fomod,
             archive_sha256: None,
             fomod: Some(module),
+            unclaimed_root_files: Vec::new(),
             groups,
         }
     }
@@ -348,6 +349,7 @@ mod tests {
             installer_model: InstallerModel::FluffyAio,
             archive_sha256: None,
             fomod: None,
+            unclaimed_root_files: Vec::new(),
             groups: vec![OptionGroup {
                 index: None,
                 label: "Group".into(),

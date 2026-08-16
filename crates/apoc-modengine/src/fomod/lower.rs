@@ -150,6 +150,9 @@ pub(crate) fn lower(
             warnings: warnings.clone(),
             ..module.clone()
         }),
+        // A FOMOD declares a destination for every file it installs, so nothing
+        // is left to infer from where a file sits in the archive.
+        unclaimed_root_files: Vec::new(),
         groups,
     })
 }
