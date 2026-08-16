@@ -12,6 +12,7 @@ pub mod deploy;
 pub mod fomod;
 pub mod game;
 pub mod modpack;
+pub mod plugins;
 
 pub use deploy::{Conflict, DeployMethod, DeploymentPlan, PlannedFile, Selection, ValidationIssue};
 pub use fomod::{
@@ -20,8 +21,13 @@ pub use fomod::{
 };
 pub use game::{
     ConflictScope, DeployTarget, Engine, FomodSpec, GameProfile, LoadOrderPolicy, LoaderKind,
-    LoaderSpec, PakChainSpec, ProtonLoaderSpec, RewrapRule, SteamDetection,
+    LoaderSpec, PakChainSpec, PluginActivation, PluginListSpec, ProtonLoaderSpec, RewrapRule,
+    SteamDetection,
 };
 pub use modpack::{
     DeployRoot, FilePayload, InstallerModel, ModBundle, ModOption, OptionGroup, SelectMode,
 };
+// `Plugin` is deliberately not re-exported here: `fomod::Plugin` already holds
+// that name at the root, and a FOMOD option and a Creation Engine plugin are
+// different things that would be one import away from being confused.
+pub use plugins::{MasterProblem, MasterViolation, PluginEntry, PluginKind, PluginOrder};
