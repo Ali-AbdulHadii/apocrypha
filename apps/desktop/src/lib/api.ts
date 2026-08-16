@@ -222,10 +222,21 @@ export interface NexusStatusView {
   hasApiKey: boolean;
   userName: string | null;
   isPremium: boolean;
+  /** Whether the registration exists at all. */
   handlerRegistered: boolean;
+  /**
+   * Whether the system will actually hand `nxm://` links here.
+   *
+   * The one to believe. `handlerRegistered` can be true while this is false —
+   * on Linux the desktop entry is written but the environment prefers
+   * something else — so reporting the first as though it were the second tells
+   * people a thing is set up when it is not.
+   */
   handlerIsDefault: boolean;
+  /** Whoever owns the scheme: a desktop entry id, or a Windows command line. */
   currentHandler: string | null;
-  desktopFile: string;
+  /** A `.desktop` path on Linux, a registry key on Windows. */
+  handlerLocation: string;
   /** Nexus-issued application id. Browser sign-in needs one. */
   ssoApplication: string;
   canSignIn: boolean;

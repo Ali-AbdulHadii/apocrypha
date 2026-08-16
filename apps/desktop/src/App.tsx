@@ -1245,6 +1245,7 @@ export default function App() {
                     appearance={appearance}
                     onError={fail}
                     onInfo={push}
+                    onConfirm={setConfirm}
                   />
                 )}
               </motion.div>
