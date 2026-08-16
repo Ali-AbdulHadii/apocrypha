@@ -19,7 +19,13 @@ edition = "2021"
 license = "MIT"
 authors = ["Apocrypha"]
 repository = "https://github.com/apocrypha/apocrypha-desktop"
-rust-version = "1.77"
+# The floor the dependency tree actually imposes, not an aspiration. It was
+# "1.77" and had been untrue for some time: `sevenz-rust2` asks for 1.93 and
+# quick-xml for 1.79, so a build on the declared version failed outright. CI
+# runs `stable`, which is why nobody found out. The `msrv` job now builds on
+# exactly this version, so the next dependency that raises the floor fails a
+# pull request instead of making this line wrong again.
+rust-version = "1.93"
 
 # Shared dependency versions. Individual crates opt in via `dep.workspace = true`.
 [workspace.dependencies]
@@ -34,7 +40,8 @@ tracing = "0.1"
 # value in an attribute or a child element depending on which tool wrote them,
 # vary their casing, and ignore the schema's element order, so a derive fails on
 # files every other mod manager accepts. Pinned to the version Tauri already
-# resolves, so this compiles nothing new.
+# resolves, so this compiles nothing new. That pin is about what gets compiled;
+# it says nothing about the MSRV, which `rust-version` above now states.
 quick-xml = { version = "0.41", default-features = false }
 
 # Faster, smaller release builds for a shipped desktop app.

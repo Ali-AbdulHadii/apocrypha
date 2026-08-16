@@ -35,10 +35,23 @@ import {
 } from "react";
 import { formatBytes, type ModView } from "../lib/api";
 import { useFileDrop } from "../lib/drop";
+import {
+  DEFAULT_CRITERIA,
+  isDefault,
+  loadLast,
+  loadSaved,
+  putSaved,
+  removeSaved,
+  sameCriteria,
+  saveLast,
+  type Criteria,
+  type SavedFilter,
+  type SortKey,
+} from "../lib/filters";
 import { Icon } from "./icons";
-import { Chip, Switch } from "./ui";
+import { Checkbox, Chip, Switch } from "./ui";
 
-export type SortKey = "order" | "name" | "size" | "added";
+export type { SortKey };
 
 export interface ModsScreenProps {
   mods: ModView[];
@@ -46,7 +59,11 @@ export interface ModsScreenProps {
   appliedIds: Set<string>;
   /** True when enabled mods differ from what is deployed. */
   dirty: boolean;
+  /** Which game's filters to remember. Null before one is chosen. */
+  gameId: string | null;
   onToggle: (mod: ModView, enabled: boolean) => void;
+  /** Enable or disable a selection in one transaction. */
+  onToggleMany: (ids: string[], enabled: boolean) => void;
   onConfigure: (mod: ModView) => void;
   onRemove: (mod: ModView) => void;
   onImport: () => void;
@@ -301,7 +318,9 @@ export function ModsScreen({
   mods,
   appliedIds,
   dirty,
+  gameId,
   onToggle,
+  onToggleMany,
   onConfigure,
   onRemove,
   onImport,
@@ -309,16 +328,70 @@ export function ModsScreen({
   canDrop = true,
   onOpenLoadOrder,
 }: ModsScreenProps) {
-  const [query, setQuery] = useState("");
-  const [sort, setSort] = useState<SortKey>("order");
-  const [status, setStatus] = useState<"all" | "enabled" | "disabled">("all");
-  const [category, setCategory] = useState("all");
+  /**
+   * The criteria, and the game they were loaded for, as one value.
+   *
+   * They travel together because they are only meaningful together. On the
+   * render where `gameId` changes, this still holds the previous game's
+   * criteria, and a save effect that could not tell would write one game's
+   * filters into another game's slot. It would usually be corrected a tick
+   * later, which is exactly the kind of bug that survives testing and then
+   * bites the one time the screen unmounts in between.
+   *
+   * Seeded from storage rather than defaulted and then corrected, so the first
+   * render is already the filtered list. Restoring in an effect would show the
+   * whole library for a frame and then snap.
+   */
+  const [filters, setFilters] = useState<{ game: string | null; criteria: Criteria }>(
+    () => ({ game: gameId, criteria: loadLast(gameId) }),
+  );
+  const criteria = filters.criteria;
+  const [saved, setSaved] = useState<SavedFilter[]>(() => loadSaved(gameId));
+  const [naming, setNaming] = useState(false);
+  const [draftName, setDraftName] = useState("");
+  const { query, sort, status, category } = criteria;
+
+  const setCriteria = useCallback(
+    (next: Criteria) => setFilters((prev) => ({ ...prev, criteria: next })),
+    [],
+  );
+
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** Where the last checkbox click landed, so shift-click has a range to span. */
+  const anchorRef = useRef<string | null>(null);
+  /** Set by Escape, so a commit-on-blur knows the naming was abandoned. */
+  const cancelledRef = useRef(false);
   const duration = useCollapseDuration();
 
   const { over } = useFileDrop(canDrop && !!onDropArchives, (paths) =>
     onDropArchives?.(paths),
   );
+
+  const patch = useCallback(
+    (part: Partial<Criteria>) =>
+      setFilters((prev) => ({
+        ...prev,
+        criteria: { ...prev.criteria, ...part },
+      })),
+    [],
+  );
+
+  // Switching games must not carry one game's categories into another's list.
+  useEffect(() => {
+    setFilters({ game: gameId, criteria: loadLast(gameId) });
+    setSaved(loadSaved(gameId));
+    setSelected(new Set());
+    anchorRef.current = null;
+  }, [gameId]);
+
+  useEffect(() => {
+    // Skipped on the render where the game has changed but the criteria have
+    // not caught up yet. The effect above is what makes them agree, and this
+    // one then runs again with both halves describing the same game.
+    if (filters.game !== gameId) return;
+    saveLast(gameId, filters.criteria);
+  }, [gameId, filters]);
 
   const categories = useMemo(() => {
     const set = new Set(mods.map(categoryOf));
@@ -369,6 +442,97 @@ export function ModsScreen({
    */
   const virtualise = filtered.length > VIRTUALISE_ABOVE;
 
+  /**
+   * Selection is held as ids over `filtered`, never read back from the DOM.
+   * Past the windowing threshold most rows are genuinely not mounted, so
+   * anything that counted checkboxes on screen would be counting a viewport.
+   *
+   * It is also pruned to what is currently visible: filtering to Weapons,
+   * selecting six, then filtering to Armour must not leave six mods armed for
+   * a bulk action the user can no longer see.
+   */
+  useEffect(() => {
+    setSelected((prev) => {
+      if (prev.size === 0) return prev;
+      const visible = new Set(filtered.map((m) => m.id));
+      const next = new Set([...prev].filter((id) => visible.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [filtered]);
+
+  const selectedIds = useMemo(() => [...selected], [selected]);
+  const allVisibleSelected =
+    filtered.length > 0 && selected.size === filtered.length;
+
+  /**
+   * Click selects one; shift-click selects everything between this row and the
+   * last one clicked. The range is taken from `filtered`, the whole list in the
+   * order it is displayed, so a range can span rows scrolled out of the window.
+   */
+  const selectRow = useCallback(
+    (mod: ModView, on: boolean, shiftKey: boolean) => {
+      setSelected((prev) => {
+        const next = new Set(prev);
+        const anchor = anchorRef.current;
+        if (shiftKey && anchor) {
+          const from = filtered.findIndex((m) => m.id === anchor);
+          const to = filtered.findIndex((m) => m.id === mod.id);
+          if (from !== -1 && to !== -1) {
+            const [lo, hi] = from < to ? [from, to] : [to, from];
+            for (let i = lo; i <= hi; i++) {
+              if (on) next.add(filtered[i].id);
+              else next.delete(filtered[i].id);
+            }
+            return next;
+          }
+        }
+        if (on) next.add(mod.id);
+        else next.delete(mod.id);
+        return next;
+      });
+      anchorRef.current = mod.id;
+    },
+    [filtered],
+  );
+
+  const clearSelection = useCallback(() => {
+    setSelected(new Set());
+    anchorRef.current = null;
+  }, []);
+
+  function applyBulk(enabled: boolean) {
+    onToggleMany(selectedIds, enabled);
+    clearSelection();
+  }
+
+  function applySaved(f: SavedFilter) {
+    setCriteria(f.criteria);
+  }
+
+  /**
+   * Naming is committed on blur, so that clicking away keeps what was typed
+   * rather than discarding it. Escape has to be able to mean *no*, and removing
+   * a focused input is exactly the case where whether `blur` arrives is a
+   * matter of which browser is asked — so the cancel is recorded rather than
+   * inferred from the order the two events happen to fire in.
+   */
+  function cancelName() {
+    cancelledRef.current = true;
+    setDraftName("");
+    setNaming(false);
+  }
+
+  function commitName() {
+    if (cancelledRef.current) {
+      cancelledRef.current = false;
+      return;
+    }
+    const name = draftName.trim();
+    if (name) setSaved(putSaved(gameId, name, criteria));
+    setDraftName("");
+    setNaming(false);
+  }
+
   function toggleCategory(name: string) {
     setCollapsed((prev) => {
       const next = new Set(prev);
@@ -407,7 +571,7 @@ export function ModsScreen({
           </span>
           <input
             value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            onChange={(e) => patch({ query: e.target.value })}
             placeholder="Search mods by name, author, or category"
             aria-label="Search mods"
           />
@@ -416,7 +580,7 @@ export function ModsScreen({
         <select
           className="select"
           value={status}
-          onChange={(e) => setStatus(e.target.value as typeof status)}
+          onChange={(e) => patch({ status: e.target.value as typeof status })}
           aria-label="Filter by state"
         >
           <option value="all">All states</option>
@@ -427,7 +591,7 @@ export function ModsScreen({
         <select
           className="select"
           value={category}
-          onChange={(e) => setCategory(e.target.value)}
+          onChange={(e) => patch({ category: e.target.value })}
           aria-label="Filter by category"
         >
           {categories.map((c) => (
@@ -440,7 +604,7 @@ export function ModsScreen({
         <select
           className="select"
           value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey)}
+          onChange={(e) => patch({ sort: e.target.value as SortKey })}
           aria-label="Sort mods"
         >
           <option value="order">Load order</option>
@@ -449,6 +613,109 @@ export function ModsScreen({
           <option value="added">Recently added</option>
         </select>
       </div>
+
+      {/* Saved filters. Hidden entirely when there is nothing saved and nothing
+          to save, so a small library never grows a row it has no use for. */}
+      {(saved.length > 0 || !isDefault(criteria)) && (
+        <div className="row filter-bar">
+          {saved.map((f) => {
+            const active = sameCriteria(f.criteria, criteria);
+            return (
+              <span key={f.name} className="saved-filter" data-active={active}>
+                <button
+                  className="btn sm ghost"
+                  onClick={() => applySaved(f)}
+                  aria-pressed={active}
+                  title={`Apply the "${f.name}" filter`}
+                >
+                  {f.name}
+                </button>
+                <button
+                  className="btn sm icon ghost"
+                  onClick={() => setSaved(removeSaved(gameId, f.name))}
+                  aria-label={`Delete the "${f.name}" filter`}
+                  title="Delete this filter"
+                >
+                  <Icon.close size={12} />
+                </button>
+              </span>
+            );
+          })}
+
+          {naming ? (
+            <input
+              className="input sm"
+              autoFocus
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
+              onBlur={commitName}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") commitName();
+                if (e.key === "Escape") cancelName();
+              }}
+              placeholder="Name this filter"
+              aria-label="Name for the saved filter"
+            />
+          ) : (
+            !isDefault(criteria) && (
+              <button
+                className="btn sm ghost"
+                onClick={() => {
+                  cancelledRef.current = false;
+                  setNaming(true);
+                }}
+              >
+                <Icon.plus size={12} /> Save filter
+              </button>
+            )
+          )}
+
+          {!isDefault(criteria) && (
+            <button
+              className="btn sm ghost"
+              style={{ marginLeft: "auto" }}
+              onClick={() => setCriteria(DEFAULT_CRITERIA)}
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* The bulk bar appears only with a selection, so the list is unchanged
+          for anyone not using it. */}
+      {selected.size > 0 && (
+        <div className="row bulk-bar" role="region" aria-label="Selected mods">
+          <Checkbox
+            checked={allVisibleSelected}
+            indeterminate={!allVisibleSelected}
+            onChange={(on) =>
+              on ? setSelected(new Set(filtered.map((m) => m.id))) : clearSelection()
+            }
+            label={
+              allVisibleSelected
+                ? "Deselect all shown mods"
+                : "Select all shown mods"
+            }
+          />
+          <span className="mod-meta">
+            {selected.size} of {filtered.length} selected
+          </span>
+          <button className="btn sm" onClick={() => applyBulk(true)}>
+            Enable
+          </button>
+          <button className="btn sm" onClick={() => applyBulk(false)}>
+            Disable
+          </button>
+          <button
+            className="btn sm ghost"
+            style={{ marginLeft: "auto" }}
+            onClick={clearSelection}
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
 
       {sort === "order" && onOpenLoadOrder && (
         <div className="row">
@@ -486,8 +753,10 @@ export function ModsScreen({
             duration={duration}
             appliedIds={appliedIds}
             dirty={dirty}
+            selected={selected}
             onHeadClick={() => toggleCategory(name)}
             onToggle={onToggle}
+            onSelect={selectRow}
             onConfigure={onConfigure}
             onRemove={onRemove}
           />
@@ -531,8 +800,10 @@ function ModGroup({
   duration,
   appliedIds,
   dirty,
+  selected,
   onHeadClick,
   onToggle,
+  onSelect,
   onConfigure,
   onRemove,
 }: {
@@ -543,8 +814,10 @@ function ModGroup({
   duration: number;
   appliedIds: Set<string>;
   dirty: boolean;
+  selected: Set<string>;
   onHeadClick: () => void;
   onToggle: (m: ModView, enabled: boolean) => void;
+  onSelect: (m: ModView, on: boolean, shiftKey: boolean) => void;
   onConfigure: (m: ModView) => void;
   onRemove: (m: ModView) => void;
 }) {
@@ -595,7 +868,9 @@ function ModGroup({
                   mod={m}
                   applied={appliedIds.has(m.id)}
                   dirty={dirty}
+                  selected={selected.has(m.id)}
                   onToggle={onToggle}
+                  onSelect={onSelect}
                   onConfigure={onConfigure}
                   onRemove={onRemove}
                 />
@@ -634,19 +909,36 @@ function StatusChip({ mod, applied }: { mod: ModView; applied: boolean }) {
 function ModRow({
   mod,
   applied,
+  selected,
   onToggle,
+  onSelect,
   onConfigure,
   onRemove,
 }: {
   mod: ModView;
   applied: boolean;
   dirty: boolean;
+  selected: boolean;
   onToggle: (m: ModView, enabled: boolean) => void;
+  onSelect: (m: ModView, on: boolean, shiftKey: boolean) => void;
   onConfigure: (m: ModView) => void;
   onRemove: (m: ModView) => void;
 }) {
+  // The `mod-row` class stays on this element and the row keeps its height:
+  // `useRowWindow` measures a live `.mod-row` to derive the windowing pitch, so
+  // moving the class or making rows differ in height breaks scrolling for
+  // everyone, not just for anyone using selection.
   return (
-    <div className={`mod-row ${mod.enabled ? "" : "disabled"}`}>
+    <div
+      className={`mod-row ${mod.enabled ? "" : "disabled"}`}
+      data-selected={selected}
+    >
+      <Checkbox
+        checked={selected}
+        onChange={(on, ev) => onSelect(mod, on, ev.shiftKey)}
+        label={`Select ${mod.name}`}
+      />
+
       <span className="mod-order" title="Load order position">
         {mod.priority}
       </span>

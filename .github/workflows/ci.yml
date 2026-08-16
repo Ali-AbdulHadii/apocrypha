@@ -24,6 +24,21 @@ env:
   CARGO_INCREMENTAL: 0
 
 jobs:
+  # Seconds, and it needs no toolchain at all, so it answers before anything
+  # else has finished installing.
+  encoding:
+    name: Encoding
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      # An em dash saved by an editor that guessed cp1252 still compiles, still
+      # passes every test, and is visible only to a person reading the file --
+      # by which time it has usually been copied into the file next door.
+      - name: Text is UTF-8 and was read as UTF-8
+        run: python3 scripts/check-encoding.py .
+
   rust:
     name: Rust
     runs-on: ubuntu-24.04
@@ -63,6 +78,50 @@ jobs:
       - name: Tests
         run: cargo test --workspace
 
+  # A declared MSRV that nothing builds against is a claim, not a fact. The
+  # `rust` job above runs `stable`, so it passed for months while the declared
+  # floor could not compile the tree at all.
+  msrv:
+    name: MSRV
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install GTK and WebKit
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            build-essential
+
+      # Read from Cargo.toml rather than written here, so the version is stated
+      # once and this job cannot drift away from what the package claims.
+      - name: Read the declared MSRV
+        id: msrv
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Declared MSRV: $version"
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.version }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: msrv-${{ steps.msrv.outputs.version }}
+
+      # `check`, not `test`: the question is whether the declared version can
+      # compile the crates, and dev-dependencies are free to want newer.
+      # The explicit `+toolchain` overrides rust-toolchain.toml, which pins
+      # stable and would otherwise make this job a duplicate of the one above.
+      - name: Check on the declared MSRV
+        run: cargo +${{ steps.msrv.outputs.version }} check --workspace --all-features
+
   frontend:
     name: Frontend
     runs-on: ubuntu-24.04
@@ -87,3 +146,8 @@ jobs:
       # There is no separate lint step because `npm run build` already runs
       # `tsc --noEmit` before vite. Typechecking is the lint here.
       - run: npm run build
+
+      # In this job rather than one of its own, so the set of required checks
+      # is unchanged and no open pull request is left waiting on a context that
+      # did not exist when it was opened.
+      - run: npm test
