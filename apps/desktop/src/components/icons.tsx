@@ -120,6 +120,9 @@ export const Icon = {
   check: make(<path d="m5 13 4 4L19 7" />),
   /** The "some, but not all" half of a select-all checkbox. */
   minus: make(<path d="M5 12h14" />),
+  /* Outlined like the rest of the set rather than a solid triangle, so it sits
+     beside Add mod as a sibling and not as a media control. */
+  play: make(<path d="M8 5.5v13l11-6.5-11-6.5Z" />),
   search: make(
     <>
       <circle cx="11" cy="11" r="7" />

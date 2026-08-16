@@ -552,6 +552,11 @@ export const api = {
    * none. Never hits the network.
    */
   gameArt: (gameId: string) => call<string | null>("game_art", { gameId }),
+  /**
+   * Ask Steam to start the game. Rejects when Steam does not have it installed,
+   * because Steam's own answer to an unknown app id is to open a store page.
+   */
+  launchGame: (gameId: string) => call<void>("launch_game", { gameId }),
   // Which game a Nexus domain belongs to, so a download lands under the right
   // one instead of whichever game happens to be on screen.
   gameForDomain: (domain: string) =>
