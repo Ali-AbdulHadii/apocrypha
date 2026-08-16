@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Nexus Mods integration: nxm:// links, the download API, and Linux protocol registration."
+description = "Nexus Mods integration: nxm:// links, the download API, and protocol registration."
 
 [dependencies]
 serde = { workspace = true }
@@ -14,3 +14,9 @@ thiserror = { workspace = true }
 ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
 # Browser sign-in speaks websocket. rustls so no system OpenSSL is needed.
 tungstenite = { version = "0.24", default-features = false, features = ["handshake", "rustls-tls-webpki-roots"] }
+
+# A URL scheme handler on Windows is a registry key, so registering one needs
+# the registry. Already in Cargo.lock at this version by way of Tauri, so this
+# compiles nothing new, and it is target-gated so a Linux build never sees it.
+[target.'cfg(windows)'.dependencies]
+winreg = "0.55"
