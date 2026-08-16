@@ -27,7 +27,7 @@
 //! "fetch that from wherever a settings file says" is not a feature.
 
 use crate::{agent, send_retrying, ServiceOrigin};
-use apoc_domain::GameProfile;
+use apoc_domain::{GameProfile, PluginActivation, PluginListSpec};
 use apoc_gamedef::{GameDatabaseSource, GameDefError, LocalBuiltin};
 use serde::Deserialize;
 
@@ -339,6 +339,21 @@ fn validate(profile: &GameProfile) -> Result<(), String> {
         // it must not contain a separator either.
         paths.push(("the pak chain pattern", &chain.pattern));
     }
+    if let Some(list) = &profile.plugin_list {
+        // Each of these is joined onto a location inside the user's Proton
+        // prefix, so each is a chance for a document to choose where a write
+        // lands. `descends` refuses the separators outright, which is stricter
+        // than these need to be and exactly as strict as they should be: every
+        // one is a single directory or file name.
+        paths.push(("the plugin list directory", &list.dir));
+        paths.push(("the plugin list file", &list.plugins_file));
+        if let Some(name) = &list.load_order_file {
+            paths.push(("the load order file", name));
+        }
+        for name in &list.implicit {
+            paths.push(("an implicitly loaded plugin", name));
+        }
+    }
 
     for (what, path) in paths {
         if !descends(path) {
@@ -441,6 +456,23 @@ struct WireProfile {
     pak_chain: Option<WirePakChain>,
     #[serde(default)]
     fomod: Option<WireFomod>,
+    #[serde(default)]
+    plugin_list: Option<WirePluginList>,
+}
+
+/// A game's plugin list, as the service publishes it.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WirePluginList {
+    dir: String,
+    #[serde(default)]
+    plugins_file: Option<String>,
+    #[serde(default)]
+    load_order_file: Option<String>,
+    #[serde(default)]
+    activation: Option<String>,
+    #[serde(default)]
+    implicit: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -559,6 +591,19 @@ impl WireProfile {
                 dest_prefix: f.dest_prefix,
             }),
             plugin_extensions: self.plugin_extensions,
+            plugin_list: self.plugin_list.map(|p| PluginListSpec {
+                dir: p.dir,
+                plugins_file: p.plugins_file.unwrap_or_else(|| "plugins.txt".to_string()),
+                load_order_file: p.load_order_file,
+                // An unknown spelling reads as the modern convention rather
+                // than as an error: the field is about how a file is written,
+                // and `presence` is the one a newer profile would not pick.
+                activation: match p.activation.as_deref() {
+                    Some("presence") => PluginActivation::Presence,
+                    _ => PluginActivation::Asterisk,
+                },
+                implicit: p.implicit,
+            }),
             rewrap: self
                 .rewrap
                 .into_iter()
@@ -909,6 +954,33 @@ mod tests {
                 .to_string();
             assert!(
                 refused.contains("id") || refused.contains("leaves the directory"),
+                "the refusal should say what was wrong: {refused}"
+            );
+        }
+    }
+
+    /// A plugin list names a directory inside the user's Proton prefix and the
+    /// files written into it, so a published profile picking those strings is
+    /// picking where a write lands.
+    #[test]
+    fn a_published_plugin_list_cannot_choose_where_it_writes() {
+        let escapes = [
+            r#""dir": "../../../../../../home/someone""#,
+            r#""dir": "/etc""#,
+            r#""pluginsFile": "../../autostart/x.desktop""#,
+            r#""loadOrderFile": "/etc/passwd""#,
+        ];
+
+        for escape in escapes {
+            let document = WILDS.replace(
+                r#""schemaVersion": 1,"#,
+                &format!(r#""schemaVersion": 1, "pluginList": {{ "dir": "Fine", {escape} }},"#),
+            );
+            let refused = parse_document(&document)
+                .expect_err(&format!("{escape} should be refused"))
+                .to_string();
+            assert!(
+                refused.contains("leaves the directory") || refused.contains("could not be read"),
                 "the refusal should say what was wrong: {refused}"
             );
         }
