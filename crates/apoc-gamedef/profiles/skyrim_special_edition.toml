@@ -57,6 +57,11 @@ plugin_extensions = ["esp", "esm", "esl"]
 # override for a DLL that overrides nothing, and would report "loader ready"
 # when nothing had been set up. Showing no loader is the honest option until a
 # launcher kind exists.
+#
+# It also means nothing here claims SKSE's files, which is why `[root_files]`
+# below exists: the two questions are separate. Where a mod's files go is a
+# deployment question and is answered; whether a loader is configured is a
+# launch question and still is not.
 
 [detection]
 steam_app_id = 489830
@@ -144,3 +149,34 @@ implicit = [
   "HearthFires.esm",
   "Dragonborn.esm",
 ]
+
+# Files that belong beside SkyrimSE.exe rather than under `Data`.
+#
+# A whole class of Skyrim mods lives here: the script extender, ENB, ReShade,
+# DXVK, .NET Script Framework. Without this section their files are dropped and
+# the install reports success, which for SKSE means the Papyrus scripts arrive,
+# the extender does not, and every mod depending on it silently does nothing.
+[root_files]
+
+# Mod Organizer's Root Builder plugin established this convention and a large
+# part of the Nexus ecosystem is already packaged for it. The folder is stripped
+# and what remains deploys relative to the game directory, so `Root/dxgi.dll`
+# installs as `dxgi.dll` and `Root/Data/x.esp` as `Data/x.esp`.
+folder = "Root"
+
+# For mods packaged without that folder, which includes SKSE itself: an `.exe`,
+# two `.dll`s and a `Data` folder, all at the archive root.
+#
+# Patterns rather than names because the library carries the game version
+# (`skse64_1_6_1170.dll`), so any fixed list is wrong by the next game update.
+#
+# Extensions rather than a denylist because that is what stays quiet: a
+# `readme.txt`, a `whatsnew.txt`, a screenshot or the `src` tree SKSE ships its
+# source in match nothing and are left alone, with no list of exclusions for
+# anyone to maintain.
+#
+# `.ini` is here for ENB and ReShade, which are configured by files sitting
+# beside the executable. It is the one entry that could plausibly catch
+# something else at an archive root, and it is worth it: an ENB without its
+# `enblocal.ini` is an ENB that does not run.
+patterns = ["*.exe", "*.dll", "*.bin", "*.ini"]

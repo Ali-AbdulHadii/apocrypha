@@ -1,4 +1,4 @@
-//! `apoc`: a thin developer CLI over the Apocrypha core.
+﻿//! `apoc`: a thin developer CLI over the Apocrypha core.
 //!
 //! It is NOT the product (that is the Tauri desktop app). It exists so the core
 //! engines can be exercised and demonstrated end-to-end before the UI lands.
@@ -136,10 +136,17 @@ fn cmd_analyze(path: &Path, game_id: Option<&str>) -> Result<(), String> {
     Ok(())
 }
 
-fn role_glyph(mode: SelectMode) -> &'static str {
+/// How an option reads at a glance: whether it starts selected, and its role.
+///
+/// `recommended` is part of the answer, not decoration. An add-on that is in the
+/// default selection was rendering as an empty box, which said the opposite of
+/// what installing the mod would actually do.
+fn role_glyph(mode: SelectMode, recommended: bool) -> &'static str {
     match mode {
         SelectMode::Forced => "[x] forced   ",
+        SelectMode::Exclusive if recommended => "(o) one-of   ",
         SelectMode::Exclusive => "( ) one-of   ",
+        SelectMode::Stackable if recommended => "[x] addon    ",
         SelectMode::Stackable => "[ ] addon    ",
         SelectMode::Info => " i  info     ",
     }
@@ -184,13 +191,13 @@ fn print_bundle(b: &ModBundle) {
             1 => "pick one".to_string(),
             n => format!("{n} independent choices"),
         };
-        println!("── [{idx}] {} ({kind})", g.label);
+        println!("â”€â”€ [{idx}] {} ({kind})", g.label);
 
         // Non-exclusive options first (forced / addon / info), in order.
         for o in g.options.iter().filter(|o| o.radio_set.is_none()) {
             println!(
                 "     {}{:<40} {}",
-                role_glyph(o.select_mode),
+                role_glyph(o.select_mode, o.recommended),
                 truncate(&o.name, 40),
                 files_label(o)
             );
@@ -203,11 +210,11 @@ fn print_bundle(b: &ModBundle) {
                 .filter(|o| o.radio_set.as_ref() == Some(key))
                 .collect();
             let sub = key.split_once(':').map(|x| x.1).unwrap_or(key);
-            println!("     ┌ pick one of {} ({} options):", sub, members.len());
+            println!("     â”Œ pick one of {} ({} options):", sub, members.len());
             for o in members {
                 println!(
-                    "     │ {}{:<38} {}",
-                    role_glyph(o.select_mode),
+                    "     â”‚ {}{:<38} {}",
+                    role_glyph(o.select_mode, o.recommended),
                     truncate(&o.name, 38),
                     files_label(o)
                 );

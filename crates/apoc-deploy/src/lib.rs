@@ -131,6 +131,12 @@ impl DryRun {
 /// correct for REFramework. It is only a heuristic: it cannot see a proxy in a
 /// subdirectory, which is where both of Cyberpunk's live. When the profile says
 /// which paths are proxies, [`DeployContext::copy_only_paths`] answers instead.
+///
+/// A root-level `.exe` counts for the same reason. SKSE is launched *instead of*
+/// the game — `skse64_loader.exe` is what the user runs — and an executable
+/// reached through a link is the case where Proton, the Steam overlay and
+/// anti-tamper checks each behave differently for no benefit. The disk cost is
+/// a megabyte.
 fn is_loader_file(ctx: &DeployContext, game_rel_path: &str) -> bool {
     if ctx
         .copy_only_paths
@@ -142,7 +148,7 @@ fn is_loader_file(ctx: &DeployContext, game_rel_path: &str) -> bool {
     !game_rel_path.contains('/')
         && std::path::Path::new(game_rel_path)
             .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("dll"))
+            .is_some_and(|e| e.eq_ignore_ascii_case("dll") || e.eq_ignore_ascii_case("exe"))
 }
 
 /// The ladder to use for one file: copy-only for loader DLLs, else the context's.
