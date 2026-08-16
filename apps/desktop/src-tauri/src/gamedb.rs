@@ -37,13 +37,18 @@ pub struct ProfileSourceView {
     pub fetched_at: Option<i64>,
 }
 
-/// The profiles to use, given the setting and what has been cached.
-pub fn effective_profiles(state: &AppState) -> Vec<GameProfile> {
+/// The profiles to use, from a store the caller has already locked.
+///
+/// **This, rather than [`effective_profiles`], is what a caller holding the
+/// store lock must use.** `AppState::store` is a `std::sync::Mutex`, which is
+/// not reentrant: locking it again on the same thread does not fail, it blocks
+/// forever against itself. Taking the guard as an argument makes that mistake
+/// impossible to write, which matters because when it was possible it was made
+/// — `build_context` did exactly this, and every Apply deadlocked before
+/// writing a single file.
+pub fn profiles_from(store: &apoc_storage::Store) -> Vec<GameProfile> {
     let builtin = LocalBuiltin::new().all().unwrap_or_default();
 
-    let Ok(store) = state.store.lock() else {
-        return builtin;
-    };
     if store.game_db_source().unwrap_or(GameDbSource::LocalBuiltin) != GameDbSource::OnlineApi {
         return builtin;
     }
@@ -51,7 +56,6 @@ pub fn effective_profiles(state: &AppState) -> Vec<GameProfile> {
     let cached = store
         .cached_profiles(SUPPORTED_SCHEMA as i64)
         .unwrap_or_default();
-    drop(store);
 
     let mut merged = builtin;
     for (_, document) in cached {
@@ -66,6 +70,22 @@ pub fn effective_profiles(state: &AppState) -> Vec<GameProfile> {
         }
     }
     merged
+}
+
+/// The profiles to use, locking the store to find out.
+///
+/// For callers that do not already hold it. One that does must use
+/// [`profiles_from`] instead.
+pub fn effective_profiles(state: &AppState) -> Vec<GameProfile> {
+    let Ok(store) = state.store.lock() else {
+        return LocalBuiltin::new().all().unwrap_or_default();
+    };
+    profiles_from(&store)
+}
+
+/// One profile, from a store the caller has already locked.
+pub fn profile_from(store: &apoc_storage::Store, game_id: &str) -> Option<GameProfile> {
+    profiles_from(store).into_iter().find(|g| g.id == game_id)
 }
 
 /// One profile, or the bundled one when the service has nothing to say.
@@ -130,4 +150,47 @@ pub fn refresh(state: &AppState, app_version: &str) -> Result<String, String> {
         1 => "1 game profile updated.".to_string(),
         n => format!("{n} game profiles updated."),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use apoc_storage::Store;
+    use std::sync::mpsc;
+    use std::sync::Mutex;
+    use std::time::Duration;
+
+    /// The regression. `build_context` held the store lock and asked `AppState`
+    /// for the profile in force, which locked it again on the same thread.
+    ///
+    /// A non-reentrant mutex does not report that: it blocks, holding the lock
+    /// it is waiting for, so the only way to assert its absence is to bound the
+    /// time. Applying deadlocked at "Preparing" before a single file was
+    /// written, and no test could have failed on it, because there was no
+    /// return value to be wrong.
+    #[test]
+    fn profiles_can_be_read_while_the_store_is_already_locked() {
+        static STORE: Mutex<Option<Mutex<Store>>> = Mutex::new(None);
+        *STORE.lock().unwrap() = Some(Mutex::new(Store::open_in_memory().unwrap()));
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outer = STORE.lock().unwrap();
+            let store = outer.as_ref().unwrap();
+            // Exactly the shape `build_context` has: hold the guard, then read
+            // the profile in force through it.
+            let guard = store.lock().unwrap();
+            let profiles = profiles_from(&guard);
+            let _ = tx.send(profiles.len());
+        });
+
+        let count = rx.recv_timeout(Duration::from_secs(10)).expect(
+            "reading the profiles in force while holding the store lock must not block: \
+             this is the deadlock that made every Apply hang",
+        );
+        assert!(
+            count >= 6,
+            "the bundled profiles are the floor, got {count}"
+        );
+    }
 }
