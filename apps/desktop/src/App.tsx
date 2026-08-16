@@ -10,6 +10,7 @@ import { InstallWizard } from "./components/InstallWizard";
 import { LinkPreviewDialog } from "./components/LinkPreviewDialog";
 import { ModsScreen } from "./components/ModsScreen";
 import { OrderScreen } from "./components/OrderScreen";
+import { PluginsScreen } from "./components/PluginsScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { Splash } from "./components/Splash";
 import { TitleBar } from "./components/TitleBar";
@@ -38,6 +39,7 @@ import {
   type GameView,
   type ModUpdateView,
   type ModView,
+  type PluginOrderView,
   type PreviewSource,
   type ProfileView,
   type ReplaceCandidateView,
@@ -90,6 +92,7 @@ type Screen =
   | "library"
   | "mods"
   | "order"
+  | "plugins"
   | "downloads"
   | "updates"
   | "profiles"
@@ -102,6 +105,7 @@ const NAV: { id: Screen; label: string; icon: IconName }[] = [
   { id: "library", label: "Library", icon: "library" },
   { id: "mods", label: "Mods", icon: "mods" },
   { id: "order", label: "Load order", icon: "order" },
+  { id: "plugins", label: "Plugins", icon: "plugins" },
   { id: "downloads", label: "Downloads", icon: "downloads" },
   { id: "updates", label: "Updates", icon: "refresh" },
   { id: "profiles", label: "Profiles", icon: "profiles" },
@@ -141,6 +145,8 @@ export default function App() {
   const [downloads, setDownloads] = useState<DownloadView[]>([]);
   const [installingId, setInstallingId] = useState<string | null>(null);
   const [conflicts, setConflicts] = useState<ConflictView[]>([]);
+  /** The game's plugin list, or null for a game that has no such concept. */
+  const [plugins, setPlugins] = useState<PluginOrderView | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
   const [updates, setUpdates] = useState<UpdateCheckView | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
@@ -204,6 +210,22 @@ export default function App() {
     setOverrides(pinned);
   }, []);
 
+  /**
+   * Re-read the game's plugin list.
+   *
+   * Null for a game with no such concept, which is what hides the nav item.
+   * A failure is not reported: this runs on every game switch, and a game that
+   * has never been launched under Proton has no prefix for the list to live in,
+   * which is ordinary rather than wrong.
+   */
+  const refreshPlugins = useCallback(async (gameId: string) => {
+    try {
+      setPlugins(await api.listPlugins(gameId));
+    } catch {
+      setPlugins(null);
+    }
+  }, []);
+
   useEffect(() => {
     if (!IS_TAURI) {
       setBooting(false);
@@ -233,12 +255,27 @@ export default function App() {
           refreshMods(activeGameId),
           refreshProfiles(activeGameId),
           refreshConflicts(activeGameId),
+          refreshPlugins(activeGameId),
         ]);
       } catch (e) {
         fail(e);
       }
     })();
-  }, [activeGameId, refreshMods, refreshProfiles, refreshConflicts, fail]);
+  }, [
+    activeGameId,
+    refreshMods,
+    refreshProfiles,
+    refreshConflicts,
+    refreshPlugins,
+    fail,
+  ]);
+
+  // Switching from Skyrim to a game with no plugin list takes the Plugins item
+  // out of the rail, and leaving the screen behind it showing would strand the
+  // user on a page they can no longer navigate back to.
+  useEffect(() => {
+    if (screen === "plugins" && plugins === null) setScreen("mods");
+  }, [screen, plugins]);
 
   // Whether this computer is linked, so Browse knows to offer sign-in rather
   // than an error. Refreshed when the screen changes, which is when it can have
@@ -849,6 +886,30 @@ export default function App() {
     [activeGameId, refreshMods, refreshConflicts, fail],
   );
 
+  /**
+   * Move a plugin, or switch one on or off.
+   *
+   * No optimistic update, unlike every mod action above it. The command writes
+   * `plugins.txt` and returns the list as it then is, and that answer is the
+   * only one worth rendering: the file is edited by other tools too, so a
+   * predicted order could differ from the one on disk in a way nothing would
+   * correct.
+   */
+  const editPlugins = useCallback(
+    async (edit: () => Promise<PluginOrderView | null>) => {
+      setBusy(true);
+      try {
+        setPlugins(await edit());
+      } catch (e) {
+        fail(e);
+        if (activeGameId) await refreshPlugins(activeGameId);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [activeGameId, refreshPlugins, fail],
+  );
+
   const pinConflict = useCallback(
     async (path: string, modId: string) => {
       if (!activeGameId) return;
@@ -1042,6 +1103,7 @@ export default function App() {
           setScreen={setScreen}
           modCount={mods.length}
           downloadCount={downloadBadge}
+          hasPlugins={plugins !== null}
         />
 
         <div className="content">
@@ -1102,6 +1164,21 @@ export default function App() {
                     onReorder={reorderMods}
                     onOverride={pinConflict}
                     onClearOverride={unpinConflict}
+                  />
+                ) : screen === "plugins" && plugins ? (
+                  <PluginsScreen
+                    order={plugins}
+                    busy={busy}
+                    onMove={(name, to) =>
+                      editPlugins(() =>
+                        api.movePlugin(activeGameId!, name, to),
+                      )
+                    }
+                    onToggle={(name, enabled) =>
+                      editPlugins(() =>
+                        api.setPluginEnabled(activeGameId!, name, enabled),
+                      )
+                    }
                   />
                 ) : screen === "downloads" ? (
                   <DownloadsScreen
@@ -1264,17 +1341,25 @@ function Rail({
   setScreen,
   modCount,
   downloadCount,
+  hasPlugins,
 }: {
   screen: Screen;
   setScreen: (s: Screen) => void;
   modCount: number;
   /** Downloads running or waiting to be installed. */
   downloadCount: number;
+  /** Whether this game keeps a plugin list. */
+  hasPlugins: boolean;
 }) {
+  // Five of the six games shipping today order by mod priority alone and have
+  // no plugin concept at all. A permanently empty screen would be worse than no
+  // screen, so the item is absent rather than disabled.
+  const items = NAV.filter((item) => item.id !== "plugins" || hasPlugins);
+
   return (
     <aside className="rail">
       <nav style={{ display: "flex", flexDirection: "column", gap: 2 }}>
-        {NAV.map((item) => {
+        {items.map((item) => {
           const IconCmp = Icon[item.icon];
           const active = screen === item.id;
           return (
@@ -1361,6 +1446,7 @@ function TopBar({
     library: "Library",
     mods: "Mods",
     order: "Load order",
+    plugins: "Plugins",
     downloads: "Downloads",
     updates: "Updates",
     profiles: "Profiles",
