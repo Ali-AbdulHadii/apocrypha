@@ -34,6 +34,8 @@ fn mhw_rules() -> GameRules {
         fomod_dest_prefix: String::new(),
         plugin_extensions: Vec::new(),
         manages_plugin_list: false,
+        root_folder: None,
+        root_patterns: Vec::new(),
     }
 }
 
