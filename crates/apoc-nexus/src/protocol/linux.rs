@@ -1,4 +1,4 @@
-//! Registering Apocrypha as the system handler for `nxm://` links on Linux.
+//! `nxm://` registration on Linux, through the XDG desktop entry system.
 //!
 //! Three steps, in order:
 //!   1. write a `.desktop` entry declaring `x-scheme-handler/nxm`
@@ -15,6 +15,7 @@
 //!   launched by the browser and inherits its environment, which has been known
 //!   to crash the launched application.
 
+use super::Registration;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -77,17 +78,6 @@ fn wrapper_script(binary: &Path) -> String {
     )
 }
 
-/// Current registration state, for showing an honest status in settings.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Registration {
-    pub desktop_file: PathBuf,
-    pub installed: bool,
-    /// Whether this desktop entry is the system default for `nxm://`.
-    pub is_default: bool,
-    /// Whichever handler currently owns the scheme, if any.
-    pub current_handler: Option<String>,
-}
-
 fn query_default_handler() -> Option<String> {
     let out = Command::new("xdg-mime")
         .args(["query", "default", "x-scheme-handler/nxm"])
@@ -102,18 +92,23 @@ pub fn status() -> Registration {
     let desktop_file = desktop_file_path();
     let current_handler = query_default_handler();
     Registration {
+        // The file existing is what "installed" has always meant here, and it is
+        // a genuine fact: the entry is on disk whether or not the desktop
+        // environment has been persuaded to prefer it. `is_default` is the
+        // question of who actually gets the link, and it is answered by asking
+        // the system rather than by looking at what we wrote.
         installed: desktop_file.is_file(),
         is_default: current_handler.as_deref() == Some(DESKTOP_ID),
         current_handler,
-        desktop_file,
+        location: desktop_file.display().to_string(),
+        replaced: None,
     }
 }
 
 /// Register Apocrypha as the handler for `nxm://`.
-///
-/// `binary` is the executable to launch. Returns the resulting state so the
-/// caller can report exactly what happened rather than assuming success.
 pub fn register(binary: &Path) -> io::Result<Registration> {
+    let previous = query_default_handler().filter(|h| h != DESKTOP_ID);
+
     let dir = applications_dir();
     fs::create_dir_all(&dir)?;
 
@@ -137,16 +132,33 @@ pub fn register(binary: &Path) -> io::Result<Registration> {
         .args(["default", DESKTOP_ID, "x-scheme-handler/nxm"])
         .status();
 
-    Ok(status())
+    Ok(Registration {
+        replaced: previous,
+        ..status()
+    })
 }
 
-/// Remove the registration. Leaves any other handler alone.
-pub fn unregister() -> io::Result<()> {
+/// Remove the registration, handing the scheme back to `previous` if there was
+/// one.
+///
+/// Handing it back matters more than it looks. Taking the scheme from another
+/// manager and then simply dropping it leaves the user with nothing handling
+/// their downloads and no indication of what changed.
+pub fn unregister(previous: Option<&str>) -> io::Result<()> {
     let _ = fs::remove_file(desktop_file_path());
     let _ = fs::remove_file(wrapper_path());
     let _ = Command::new("update-desktop-database")
         .arg(applications_dir())
         .status();
+
+    if let Some(desktop_id) = previous {
+        let _ = Command::new("xdg-settings")
+            .args(["set", "default-url-scheme-handler", "nxm", desktop_id])
+            .status();
+        let _ = Command::new("xdg-mime")
+            .args(["default", desktop_id, "x-scheme-handler/nxm"])
+            .status();
+    }
     Ok(())
 }
 
