@@ -22,8 +22,7 @@ Known gaps today:
 | Gap | Detail |
 | --- | --- |
 | Archive formats | ZIP, 7z and RAR. Encrypted and multi-volume archives are not handled. |
-| Game database | Local bundled TOML only. The online source is a stored setting, not a working client. |
-| Plugin order | Skyrim's plugin list is not managed. Mods install and their files land correctly, but `.esp`, `.esm` and `.esl` files must be enabled and sorted in your usual tool afterwards. The manager says so on every install that ships one, rather than leaving it to be discovered. |
+| Plugin sorting | The plugin list is managed and editable, but Apocrypha has no opinion about what a good order is. There is no LOOT-style automatic sort: it tells you when a plugin loads before something it depends on and offers the move that fixes it, and the arranging is yours. |
 | Loader binary | Apocrypha configures REFramework for Proton but does not redistribute `dinput8.dll`. You supply it. SKSE is not provisioned at all. |
 | Platform | Linux only. No Windows or macOS build. |
 
@@ -38,6 +37,7 @@ What works today:
 - **Profiles.** Separate selections per profile, so a "clean run" profile and a "everything on" profile can coexist over the same installed mods.
 - **Enable and disable without deleting.** Staged payloads live in Apocrypha's own directory. Turning a mod off removes its deployed files, not your download.
 - **Load order on its own screen.** A flat, always-draggable list with keyboard move controls, showing how many contested files each mod wins and loses. Mods stays a library you browse; ordering is its own job.
+- **Plugin order on its own screen**, for Creation Engine games. A game's plugin list is a named list of files rather than a priority per mod, so it gets its own screen: drag or use the arrows, switch a plugin on or off, and see the master block the engine loads first drawn as the boundary it is. What a plugin depends on is read out of the file's own header, so it can tell you when one loads before something it needs and offer the single move that fixes it. Every change is written to the game's list straight away — vaulted and journaled first, like everything else that writes.
 - **Conflict detection, and per-file overrides.** Before anything is written, you get the list of files two mods both want and which one wins. You can pin a single file to a different mod without reordering anything, so you can take one mod's mesh and another's texture.
 - **Dry run preview.** The full plan (every file, every destination, the placement method chosen) without touching the game directory.
 - **Journaled deployment with hash-guarded rollback.** Every operation is flushed to an append-only JSONL journal as it happens. Undo replays in reverse and refuses to delete a file whose bytes changed since deploy.
