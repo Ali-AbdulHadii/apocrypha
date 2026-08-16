@@ -146,6 +146,18 @@ export interface DeployResultView {
   filesDeployed: number;
   bytes: number;
   method: string;
+  /** Null for a game ordered by mod priority, which is every game but the
+   * Creation Engine ones. */
+  pluginList: PluginListResultView | null;
+}
+
+/** What writing the game's plugin list changed. */
+export interface PluginListResultView {
+  added: string[];
+  /** Plugins that load before something they depend on, each already a
+   * sentence: reported, never repaired. */
+  problems: string[];
+  written: boolean;
 }
 
 export interface RollbackView {

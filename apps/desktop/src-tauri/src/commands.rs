@@ -109,7 +109,7 @@ fn rules_for(game_id: &str) -> apoc_modengine::GameRules {
 /// Used wherever the state is in hand. The bundled-only [`rules_for`] remains
 /// for the few callers that have no state to consult, where reading a published
 /// profile is not possible and the compiled-in one is the whole truth available.
-fn rules_for_state(state: &AppState, game_id: &str) -> apoc_modengine::GameRules {
+pub(crate) fn rules_for_state(state: &AppState, game_id: &str) -> apoc_modengine::GameRules {
     crate::gamedb::effective_profile(state, game_id)
         .map(|p| apoc_modengine::GameRules::from_profile(&p))
         .unwrap_or_else(|| rules_for(game_id))

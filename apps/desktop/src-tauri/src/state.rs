@@ -288,6 +288,27 @@ pub struct DeployResultView {
     pub files_deployed: usize,
     pub bytes: u64,
     pub method: String,
+    /// What writing the game's plugin list changed, for a game that has one.
+    ///
+    /// `None` for every game ordered by mod priority, which is all of them but
+    /// the Creation Engine ones.
+    pub plugin_list: Option<PluginListResultView>,
+}
+
+/// The plugin-list half of a deployment's outcome.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginListResultView {
+    /// Plugins that were not in the list before and now are.
+    pub added: Vec<String>,
+    /// Plugins that load before something they depend on, each as a sentence.
+    ///
+    /// Reported rather than repaired: the order is the user's, and this says
+    /// what is wrong so they can decide, which is the whole difference between
+    /// a manager and a tool that rearranges your game behind you.
+    pub problems: Vec<String>,
+    /// Whether the list file was actually written.
+    pub written: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

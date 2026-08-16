@@ -21,6 +21,27 @@ pub enum GameDefError {
     Parse(#[from] toml::de::Error),
     #[error("no game profile found for id '{0}'")]
     NotFound(String),
+    #[error("game profile '{0}' declares load_order = \"explicit\" but no [plugin_list] section, so nothing could write the list it claims to manage")]
+    ExplicitWithoutPluginList(String),
+}
+
+/// Refuse a profile whose claims and means disagree.
+///
+/// `load_order = "explicit"` is a promise that this application writes the
+/// game's plugin list. `[plugin_list]` is what makes that possible. A profile
+/// with the first and not the second announces management it cannot perform,
+/// which is the exact failure the Skyrim profile spent three releases avoiding
+/// by declaring `priority` and saying why in a comment.
+///
+/// Checked here rather than in `apoc-domain` because it is a rule about a
+/// document being well-formed, and the domain crate describes what a profile
+/// *is* rather than which ones are worth loading.
+fn check_coherent(profile: &GameProfile) -> Result<(), GameDefError> {
+    if profile.load_order == apoc_domain::LoadOrderPolicy::Explicit && profile.plugin_list.is_none()
+    {
+        return Err(GameDefError::ExplicitWithoutPluginList(profile.id.clone()));
+    }
+    Ok(())
 }
 
 /// A source of game definitions. Local-first today, API-capable tomorrow.
@@ -59,7 +80,11 @@ impl GameDatabaseSource for LocalBuiltin {
     fn all(&self) -> Result<Vec<GameProfile>, GameDefError> {
         Self::raw_profiles()
             .iter()
-            .map(|raw| toml::from_str::<GameProfile>(raw).map_err(GameDefError::from))
+            .map(|raw| {
+                let profile = toml::from_str::<GameProfile>(raw)?;
+                check_coherent(&profile)?;
+                Ok(profile)
+            })
             .collect()
     }
 }
@@ -67,7 +92,7 @@ impl GameDatabaseSource for LocalBuiltin {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use apoc_domain::{Engine, LoadOrderPolicy, LoaderKind};
+    use apoc_domain::{Engine, LoadOrderPolicy, LoaderKind, PluginActivation};
 
     #[test]
     fn every_builtin_profile_parses() {
@@ -143,22 +168,55 @@ mod tests {
     }
 
     #[test]
-    fn skyrim_does_not_claim_to_manage_its_plugin_order() {
-        // `explicit` describes Creation Engine's plugin list, and nothing
-        // implements it: `combine_with_overrides` sorts by priority whatever
-        // this says. Declaring it would be a claim about behaviour that does
-        // not exist. The profile says what is true and names the plugin
-        // extensions instead, which is what makes the manager admit the gap
-        // rather than leave someone to find it.
+    fn skyrim_claims_to_manage_its_plugin_order_and_says_how() {
+        // This assertion was the inverse until plugin management shipped: the
+        // profile declared `priority` and a comment said why, so that the
+        // manager admitted the gap rather than leaving someone to find it. The
+        // claim is only allowed now because something honours it.
         let src = LocalBuiltin::new();
         let g = src.get("skyrim-special-edition").expect("skyrim present");
 
-        assert_eq!(
-            g.load_order,
-            LoadOrderPolicy::Priority,
-            "do not change this to Explicit until something implements it"
+        assert_eq!(g.load_order, LoadOrderPolicy::Explicit);
+        assert!(
+            g.manages_plugin_list(),
+            "the claim and the means to keep it arrive together"
         );
         assert_eq!(g.plugin_extensions, vec!["esp", "esm", "esl"]);
+
+        let list = g.plugin_list.as_ref().expect("checked above");
+        assert_eq!(list.dir, "Skyrim Special Edition");
+        assert_eq!(list.plugins_file, "plugins.txt");
+        assert_eq!(list.load_order_file.as_deref(), Some("loadorder.txt"));
+        assert_eq!(list.activation, PluginActivation::Asterisk);
+        assert!(
+            list.implicit.iter().any(|p| p == "Skyrim.esm"),
+            "every mod names the base game as a master"
+        );
+    }
+
+    /// The rule that keeps the two halves together. A profile may not announce
+    /// management it has given nothing the means to perform.
+    #[test]
+    fn a_profile_claiming_explicit_without_a_plugin_list_is_refused() {
+        let mut profile = LocalBuiltin::new()
+            .get("skyrim-special-edition")
+            .expect("skyrim present");
+        profile.plugin_list = None;
+
+        let err = check_coherent(&profile).expect_err("this is not a loadable profile");
+        assert!(matches!(err, GameDefError::ExplicitWithoutPluginList(id) if id == profile.id));
+    }
+
+    /// Games ordered by an integer per mod are unaffected and say nothing.
+    #[test]
+    fn the_re_engine_games_have_no_plugin_list_at_all() {
+        let src = LocalBuiltin::new();
+        for id in ["monster-hunter-wilds", "cyberpunk-2077"] {
+            let g = src.get(id).expect("present");
+            assert_eq!(g.load_order, LoadOrderPolicy::Priority, "{id}");
+            assert!(g.plugin_list.is_none(), "{id}");
+            assert!(!g.manages_plugin_list(), "{id}");
+        }
     }
 
     #[test]

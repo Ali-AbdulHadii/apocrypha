@@ -8,10 +8,32 @@
 //!    [`journal`] as it happens, so an interrupted deploy is still reversible.
 //! 3. **Deletion is hash-guarded.** Rollback refuses to remove a file whose bytes
 //!    no longer match what we deployed (e.g. a Steam update replaced it).
+//!
+//! ## What they cover
+//!
+//! All three say *do the recoverable thing first, then the destructive one*, and
+//! the third adds that when the record and the disk disagree the engine reports
+//! rather than guesses. None of that is a statement about which directory a file
+//! is in. They are written in terms of "a game file" because for a long time the
+//! game directory was the only place this crate wrote.
+//!
+//! It is not any more. [`loader`] writes a Wine DLL override into the Proton
+//! prefix registry, and [`plugin_list`] writes a game's plugin list into the
+//! prefix as well. **Both are covered.** A file is in scope when this crate
+//! replaces something it did not create, in a directory it does not own — which
+//! is the situation the invariants were written for, and the prefix is more that
+//! situation rather than less: a plugin list is a file the user curates by hand,
+//! in another tool, on purpose.
+//!
+//! So read "game file" as "pre-existing file we replace". The one deliberate
+//! difference is [`loader`]'s registry values, which carry the previous value
+//! inline in the journal rather than vaulting it, because a registry value is
+//! not a file and a vault key would name nothing.
 
 pub mod journal;
 pub mod loader;
 pub mod place;
+pub mod plugin_list;
 pub mod vault;
 pub mod verify;
 
@@ -427,6 +449,81 @@ pub fn apply_with(
     Ok(Applied::Complete(journal))
 }
 
+/// What writing the plugin list changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginListOutcome {
+    /// Plugins that were not in the list before and now are.
+    pub added: Vec<String>,
+    /// Master constraints the resulting order breaks, reported and not repaired.
+    pub violations: Vec<apoc_domain::plugins::MasterViolation>,
+    /// Whether anything was actually written.
+    pub written: bool,
+}
+
+/// Fold newly deployed plugins into the game's list.
+///
+/// Separate from [`apply_with`] and appending to its journal, the way
+/// [`provision_loader`] is, so the order of operations stays legible at the call
+/// site: the files land first, then the list that points at them.
+///
+/// `deployed` is built by the caller because deciding which files are plugins
+/// and reading their headers is `apoc-modengine`'s work, and this crate does not
+/// depend on it. That seam is also what keeps this testable with no game.
+///
+/// **Nothing is removed and nothing is reordered.** The list is the user's,
+/// very likely curated in another tool, and appending is the only change a
+/// deploy is entitled to make to it. A plugin whose mod is later uninstalled
+/// leaves an entry naming a file that is not there, which the game ignores —
+/// a stale line is a smaller harm than this deciding which of somebody's
+/// entries were theirs.
+pub fn provision_plugin_list(
+    ctx: &DeployContext,
+    journal: &mut Journal,
+    target: &plugin_list::PluginListTarget,
+    deployed: Vec<apoc_domain::plugins::PluginEntry>,
+) -> Result<PluginListOutcome> {
+    let mut order = plugin_list::read(target);
+    let added = order.append_new(deployed);
+
+    // A deploy with no new plugins has nothing to say about the list, and says
+    // nothing. Without this, installing a texture pack onto a game that has
+    // never been launched would create a `plugins.txt` holding only the
+    // implicitly-loaded masters -- a file the game writes for itself, appearing
+    // because a mod manager touched a mod that has no plugins in it.
+    //
+    // Checked on `added` rather than on the rendered text because the two agree:
+    // the file carries names and switches, and nothing else this reads can
+    // change one without adding an entry.
+    if added.is_empty() {
+        return Ok(PluginListOutcome {
+            added,
+            violations: order.violations(),
+            written: false,
+        });
+    }
+
+    // A plugin that arrives with a mod is switched on: the user asked for the
+    // mod, and installing something the game will not load is the failure the
+    // notice this replaces was written to warn about. Existing entries keep
+    // whatever the user chose, which `append_new` guarantees.
+    for name in &added {
+        order.set_enabled(name, true);
+    }
+
+    let ops = plugin_list::write(target, &ctx.vault_dir, &order)?;
+    let written = !ops.is_empty();
+    // Invariant 2. Each write is recorded and flushed before any of it counts.
+    for op in ops {
+        journal.append(op)?;
+    }
+
+    Ok(PluginListOutcome {
+        added,
+        violations: order.violations(),
+        written,
+    })
+}
+
 /// Install the loader proxy DLL (always a real copy) and register the Wine DLL
 /// override in the Proton prefix. Appends to an existing deployment journal.
 pub fn provision_loader(
@@ -560,6 +657,27 @@ pub fn rollback(ctx: &DeployContext, journal: &Journal, user_reg: Option<&Path>)
                             }
                         }
                     }
+                }
+            }
+            JournalOp::PluginListWritten {
+                path,
+                original_vault_key,
+                sha256,
+            } => {
+                let file = Path::new(path);
+                match plugin_list::rollback_one(
+                    file,
+                    original_vault_key.as_deref(),
+                    sha256,
+                    &ctx.vault_dir,
+                ) {
+                    Ok(true) if original_vault_key.is_some() => report.restored.push(path.clone()),
+                    Ok(true) => report.removed.push(path.clone()),
+                    // The list no longer matches what we wrote, so somebody
+                    // curated it in between. Invariant 3, and the case it exists
+                    // for most clearly.
+                    Ok(false) => report.skipped_modified.push(path.clone()),
+                    Err(e) => report.errors.push(format!("{path}: {e}")),
                 }
             }
             JournalOp::RegistryOverride { name, previous, .. } => {
