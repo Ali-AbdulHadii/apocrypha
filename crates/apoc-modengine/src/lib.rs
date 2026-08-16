@@ -15,6 +15,7 @@ mod modinfo;
 mod naming;
 mod normalize;
 pub mod plan;
+pub mod plugins;
 mod rules;
 
 // Indexing is exposed for tests and tooling that need to see what an archive

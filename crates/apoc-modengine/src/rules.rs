@@ -213,6 +213,7 @@ mod tests {
             formats: vec![],
             fomod: None,
             plugin_extensions: vec![],
+            plugin_list: None,
             rewrap: vec![],
             canonical_case: vec!["STM".into()],
             pak_chain: Some(apoc_domain::PakChainSpec {
