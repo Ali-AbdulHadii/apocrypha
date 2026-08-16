@@ -449,6 +449,81 @@ pub fn apply_with(
     Ok(Applied::Complete(journal))
 }
 
+/// What writing the plugin list changed.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct PluginListOutcome {
+    /// Plugins that were not in the list before and now are.
+    pub added: Vec<String>,
+    /// Master constraints the resulting order breaks, reported and not repaired.
+    pub violations: Vec<apoc_domain::plugins::MasterViolation>,
+    /// Whether anything was actually written.
+    pub written: bool,
+}
+
+/// Fold newly deployed plugins into the game's list.
+///
+/// Separate from [`apply_with`] and appending to its journal, the way
+/// [`provision_loader`] is, so the order of operations stays legible at the call
+/// site: the files land first, then the list that points at them.
+///
+/// `deployed` is built by the caller because deciding which files are plugins
+/// and reading their headers is `apoc-modengine`'s work, and this crate does not
+/// depend on it. That seam is also what keeps this testable with no game.
+///
+/// **Nothing is removed and nothing is reordered.** The list is the user's,
+/// very likely curated in another tool, and appending is the only change a
+/// deploy is entitled to make to it. A plugin whose mod is later uninstalled
+/// leaves an entry naming a file that is not there, which the game ignores —
+/// a stale line is a smaller harm than this deciding which of somebody's
+/// entries were theirs.
+pub fn provision_plugin_list(
+    ctx: &DeployContext,
+    journal: &mut Journal,
+    target: &plugin_list::PluginListTarget,
+    deployed: Vec<apoc_domain::plugins::PluginEntry>,
+) -> Result<PluginListOutcome> {
+    let mut order = plugin_list::read(target);
+    let added = order.append_new(deployed);
+
+    // A deploy with no new plugins has nothing to say about the list, and says
+    // nothing. Without this, installing a texture pack onto a game that has
+    // never been launched would create a `plugins.txt` holding only the
+    // implicitly-loaded masters -- a file the game writes for itself, appearing
+    // because a mod manager touched a mod that has no plugins in it.
+    //
+    // Checked on `added` rather than on the rendered text because the two agree:
+    // the file carries names and switches, and nothing else this reads can
+    // change one without adding an entry.
+    if added.is_empty() {
+        return Ok(PluginListOutcome {
+            added,
+            violations: order.violations(),
+            written: false,
+        });
+    }
+
+    // A plugin that arrives with a mod is switched on: the user asked for the
+    // mod, and installing something the game will not load is the failure the
+    // notice this replaces was written to warn about. Existing entries keep
+    // whatever the user chose, which `append_new` guarantees.
+    for name in &added {
+        order.set_enabled(name, true);
+    }
+
+    let ops = plugin_list::write(target, &ctx.vault_dir, &order)?;
+    let written = !ops.is_empty();
+    // Invariant 2. Each write is recorded and flushed before any of it counts.
+    for op in ops {
+        journal.append(op)?;
+    }
+
+    Ok(PluginListOutcome {
+        added,
+        violations: order.violations(),
+        written,
+    })
+}
+
 /// Install the loader proxy DLL (always a real copy) and register the Wine DLL
 /// override in the Proton prefix. Appends to an existing deployment journal.
 pub fn provision_loader(

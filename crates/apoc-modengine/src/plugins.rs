@@ -187,6 +187,39 @@ pub fn read_header_bytes(path: &Path) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+/// The plugins among a set of deployed files, described from what is on disk.
+///
+/// `game_rel_paths` is what a deployment wrote; `rules` decides which of them
+/// carry load order, from the profile's declared extensions. Each surviving file
+/// is read where it now lives, because that is the version the game will load —
+/// a mod update can change what a plugin depends on, and the staged copy may
+/// already be gone.
+///
+/// Order is preserved and duplicates are dropped, keeping the first: two mods
+/// can deploy a file of the same name, and the one that won the conflict is the
+/// one on disk.
+pub fn deployed_entries(
+    game_dir: &Path,
+    game_rel_paths: &[String],
+    rules: &crate::GameRules,
+) -> Vec<PluginEntry> {
+    let mut seen: Vec<String> = Vec::new();
+    let mut out = Vec::new();
+
+    for path in game_rel_paths {
+        if !rules.is_plugin_file(path) {
+            continue;
+        }
+        let entry = entry_for(path, || read_header_bytes(&game_dir.join(path)));
+        if seen.iter().any(|n| n.eq_ignore_ascii_case(&entry.name)) {
+            continue;
+        }
+        seen.push(entry.name.clone());
+        out.push(entry);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

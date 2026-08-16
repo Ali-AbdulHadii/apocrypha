@@ -42,17 +42,25 @@ use std::path::Path;
 /// Say plainly when a mod ships files whose load order this application does
 /// not manage.
 ///
-/// A Creation Engine game reads its own plugin list, and nothing here writes
-/// it. So a Skyrim mod installs, its files land exactly where they belong, and
-/// the game ignores them until the plugins are enabled somewhere else. That is
-/// the safe failure — the alternative is writing a user's load order without
-/// being asked — but it is invisible, and invisible is what makes it read as
-/// the manager having failed.
+/// A game whose plugin list nobody writes installs a mod perfectly and then
+/// ignores it, because the plugins are never switched on. That is the safe
+/// failure — the alternative is writing somebody's load order without being
+/// asked — but it is invisible, and invisible is what makes it read as the
+/// manager having failed.
+///
+/// **Silent for a game whose list this application does write.** The notice
+/// says "do this elsewhere", and repeating it where the work is already done
+/// would send someone to fix something that is not broken. The two answers are
+/// driven by one field so they cannot disagree: a profile that declares
+/// `explicit` and a `[plugin_list]` is managed, and everything else is not.
 ///
 /// Driven entirely by what the game profile declares, so a game gets this by
 /// saying which extensions carry load order, never by being named in code.
 /// Returns nothing at all for an engine with no such concept.
 pub fn unmanaged_plugin_notice(bundle: &ModBundle, rules: &GameRules) -> Option<String> {
+    if rules.manages_plugin_list {
+        return None;
+    }
     let mut names: Vec<&str> = bundle
         .options()
         .flat_map(|o| o.payload.iter())
