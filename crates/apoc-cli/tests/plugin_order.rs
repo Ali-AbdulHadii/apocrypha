@@ -366,3 +366,280 @@ fn the_kind_comes_from_the_flag_not_the_name() {
         PluginKind::Master
     );
 }
+
+/* ======================================================= editing the order ===
+
+The Plugins screen. A deploy may only append to somebody's list; moving an
+entry that is already in it is the user's own action, and these cover the
+sequence the commands perform: read what is on disk, describe it from the
+files it names, apply one domain call, write, journal.
+
+The commands themselves live in the Tauri crate and need a running
+application state. What is worth proving is the engine sequence underneath
+them, which is where every invariant actually lives.
+========================================================================== */
+
+/// What `plugin_cmds::read_described` does: the list as the user has it, with
+/// each entry's real kind and masters read from the file the game will load.
+fn describe(w: &World) -> apoc_domain::plugins::PluginOrder {
+    let mut order = plugin_list::read(&w.target);
+    let names: Vec<String> = order.entries().iter().map(|e| e.name.clone()).collect();
+    let roots = vec!["Data".to_string()];
+    order.append_new(apoc_modengine::plugins::entries_for_names(
+        &w.game_dir,
+        &names,
+        &roots,
+        &rules(),
+    ));
+    // Held the way the game reads it, so the index the screen shows and the
+    // index a move names are the same number.
+    apoc_domain::plugins::PluginOrder::adopt(
+        order.as_the_game_reads_it().into_iter().cloned().collect(),
+    )
+}
+
+/// What `plugin_cmds::commit` does: write, then journal, in that order.
+fn commit(w: &World, order: &apoc_domain::plugins::PluginOrder) -> apoc_deploy::journal::Journal {
+    let ops = plugin_list::write(&w.target, &w.ctx.vault_dir, order).unwrap();
+    let mut journal = apoc_deploy::journal::Journal::create(
+        &w.ctx.journal_dir,
+        apoc_deploy::journal::DeploymentHeader {
+            id: apoc_deploy::journal::new_deployment_id(),
+            game_id: w.ctx.game_id.clone(),
+            bundle_name: "plugin order".into(),
+            created_at: 0,
+            game_dir: w.game_dir.to_string_lossy().into_owned(),
+        },
+    )
+    .unwrap();
+    for op in ops {
+        journal.append(op).unwrap();
+    }
+    journal
+}
+
+/// A list with two masters and two ordinary plugins, all present on disk.
+fn curated(w: &World) {
+    deploy_plugin(&w.game_dir, "Data/Armour.esp", false, &[]);
+    deploy_plugin(&w.game_dir, "Data/Weapons.esp", false, &[]);
+    fs::write(
+        &w.target.plugins_file,
+        "*Skyrim.esm\n*Update.esm\n*Armour.esp\n*Weapons.esp\n",
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_move_reaches_the_file_the_game_reads() {
+    let w = world();
+    curated(&w);
+
+    let mut order = describe(&w);
+    assert!(
+        order.move_to("Weapons.esp", 2),
+        "Weapons moves above Armour"
+    );
+    commit(&w, &order);
+
+    assert_eq!(
+        list(&w),
+        "*Skyrim.esm\n*Update.esm\n*Weapons.esp\n*Armour.esp\n",
+        "the next thing to read this file is the game"
+    );
+}
+
+/// Invariants 1 and 2 for an edit, which is the whole reason an edit journals
+/// at all: the list the user had is recoverable, and the record of replacing it
+/// survives the replacing.
+#[test]
+fn an_edit_vaults_the_previous_list_and_journals_the_write() {
+    let w = world();
+    curated(&w);
+    let before = list(&w);
+
+    let mut order = describe(&w);
+    order.move_to("Weapons.esp", 2);
+    let journal = commit(&w, &order);
+
+    let op = journal
+        .ops()
+        .iter()
+        .find(|op| matches!(op, JournalOp::PluginListWritten { .. }))
+        .expect("the write is recorded");
+    let JournalOp::PluginListWritten {
+        original_vault_key, ..
+    } = op
+    else {
+        unreachable!()
+    };
+
+    let key = original_vault_key
+        .as_ref()
+        .expect("there was a list before this edit");
+
+    // Asked of the vault rather than of a path spelled out here, so this keeps
+    // proving what it claims if the vault's layout ever changes.
+    let vault = apoc_deploy::vault::Vault::new(&w.ctx.vault_dir);
+    assert!(vault.contains(key), "the previous list is in the vault");
+
+    let scratch = w.ctx.staging_dir.join("recovered.txt");
+    fs::create_dir_all(&w.ctx.staging_dir).unwrap();
+    vault.restore(key, &scratch).unwrap();
+    assert_eq!(
+        fs::read_to_string(scratch).unwrap(),
+        before,
+        "the order the user had is still recoverable byte for byte"
+    );
+}
+
+/// An edit is reversible on exactly the terms a deployment is, including the
+/// refusal that matters most here: between the edit and the undo, the user may
+/// have arranged the list again in another tool.
+#[test]
+fn an_edit_can_be_rolled_back_and_refuses_to_when_it_should() {
+    let w = world();
+    curated(&w);
+    let before = list(&w);
+
+    let mut order = describe(&w);
+    order.move_to("Weapons.esp", 2);
+    let journal = commit(&w, &order);
+
+    let report = apoc_deploy::rollback(&w.ctx, &journal, None);
+    assert!(report.is_clean(), "{report:?}");
+    assert_eq!(list(&w), before, "the arrangement is back");
+
+    // And again, with somebody else's hand in between.
+    let mut order = describe(&w);
+    order.move_to("Weapons.esp", 2);
+    let journal = commit(&w, &order);
+    let theirs = "*Skyrim.esm\n*Update.esm\n*TheirOwnIdea.esp\n";
+    fs::write(&w.target.plugins_file, theirs).unwrap();
+
+    let report = apoc_deploy::rollback(&w.ctx, &journal, None);
+    assert_eq!(list(&w), theirs, "their curation survives");
+    assert!(
+        report
+            .skipped_modified
+            .iter()
+            .any(|p| p.ends_with("plugins.txt")),
+        "and is reported rather than silently skipped: {report:?}"
+    );
+}
+
+/// Dragging a plugin back where it started must not write a file, or the
+/// journal directory fills with records that nothing happened.
+#[test]
+fn a_move_that_changes_nothing_writes_nothing() {
+    let w = world();
+    curated(&w);
+    // Both files as a previous edit would have left them, so what this measures
+    // is the second write and not the creation of `loadorder.txt`.
+    commit(&w, &describe(&w));
+
+    let mut order = describe(&w);
+    assert!(!order.move_to("Armour.esp", 2), "it is already at 2");
+    let ops = plugin_list::write(&w.target, &w.ctx.vault_dir, &order).unwrap();
+
+    assert!(ops.is_empty(), "an unchanged list is not rewritten");
+}
+
+/// The masters this reports are read out of the deployed files, which is the
+/// only place they exist — a list file carries names and switches and nothing
+/// else. Without that the screen would show no problems, ever.
+#[test]
+fn the_screen_sees_a_violation_the_list_file_alone_cannot_express() {
+    let w = world();
+    deploy_plugin(&w.game_dir, "Data/Base.esp", false, &[]);
+    deploy_plugin(&w.game_dir, "Data/Patch.esp", false, &["Base.esp"]);
+    // The patch is written above the thing it depends on.
+    fs::write(
+        &w.target.plugins_file,
+        "*Skyrim.esm\n*Update.esm\n*Patch.esp\n*Base.esp\n",
+    )
+    .unwrap();
+
+    let plain = plugin_list::read(&w.target);
+    assert!(
+        plain.violations().is_empty(),
+        "the file alone knows of no dependency"
+    );
+
+    let described = describe(&w);
+    let violations = described.violations();
+    assert_eq!(violations.len(), 1, "{violations:?}");
+    assert_eq!(violations[0].plugin, "Patch.esp");
+    assert_eq!(violations[0].master, "Base.esp");
+    assert_eq!(violations[0].reason, MasterProblem::LoadsTooLate);
+}
+
+/// The targeted fix: move the master to where the plugin that needs it sits.
+/// The master moves, not the dependant — moving the dependant down would
+/// satisfy this one constraint by changing its relationship to everything else.
+#[test]
+fn the_offered_fix_resolves_the_violation_it_names() {
+    let w = world();
+    deploy_plugin(&w.game_dir, "Data/Base.esp", false, &[]);
+    deploy_plugin(&w.game_dir, "Data/Patch.esp", false, &["Base.esp"]);
+    fs::write(
+        &w.target.plugins_file,
+        "*Skyrim.esm\n*Update.esm\n*Patch.esp\n*Base.esp\n",
+    )
+    .unwrap();
+
+    let mut order = describe(&w);
+    let v = order.violations().remove(0);
+    // Exactly what `fix_for` computes: the master goes to the dependant's index.
+    let to = order.position(&v.plugin).unwrap();
+    assert!(order.move_to(&v.master, to));
+    commit(&w, &order);
+
+    assert!(
+        describe(&w).violations().is_empty(),
+        "still broken: {}",
+        list(&w)
+    );
+    assert_eq!(
+        list(&w),
+        "*Skyrim.esm\n*Update.esm\n*Base.esp\n*Patch.esp\n"
+    );
+}
+
+/// Switching a plugin off is the other edit, and it is not the same as removing
+/// it: the line stays, so the user can switch it back on.
+#[test]
+fn switching_a_plugin_off_keeps_its_place_in_the_list() {
+    let w = world();
+    curated(&w);
+
+    let mut order = describe(&w);
+    assert!(order.set_enabled("Armour.esp", false));
+    commit(&w, &order);
+
+    assert_eq!(
+        list(&w),
+        "*Skyrim.esm\n*Update.esm\nArmour.esp\n*Weapons.esp\n",
+        "still third, no longer loaded"
+    );
+}
+
+/// A line naming a plugin whose mod was uninstalled. The game ignores it; the
+/// screen has to show it, because otherwise nobody can ever remove it.
+#[test]
+fn a_line_whose_file_is_gone_stays_in_the_list() {
+    let w = world();
+    fs::write(
+        &w.target.plugins_file,
+        "*Skyrim.esm\n*Update.esm\n*Vanished.esp\n",
+    )
+    .unwrap();
+
+    let order = describe(&w);
+
+    let entry = order.get("Vanished.esp").expect("still listed");
+    assert!(entry.enabled);
+    assert!(
+        entry.masters.is_empty(),
+        "nothing is known about a file that is not there"
+    );
+}
