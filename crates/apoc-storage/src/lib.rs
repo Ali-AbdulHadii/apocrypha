@@ -842,9 +842,9 @@ impl Store {
     /// for one mod, applied to the set. Half a bulk action is worse than none,
     /// because the user's next move is to look at the list and believe it.
     ///
-    /// [`Store::set_mod_order`] is the older multi-row writer and does loop bare
-    /// statements. It has the same weakness; it is left alone here rather than
-    /// changed underneath a feature that is not about load order.
+    /// [`Store::set_mod_order`] is the other multi-row writer and had the same
+    /// weakness for longer. It is written the same way now, so this file has one
+    /// answer to "what happens halfway through" rather than two.
     pub fn set_enabled_bulk(
         &self,
         profile_id: i64,
@@ -965,14 +965,38 @@ impl Store {
         Ok(out)
     }
 
-    /// Rewrite load-order priority for a profile from an ordered id list.
+    /// Rewrite load-order priority for a profile from an ordered id list, all
+    /// or nothing.
+    ///
+    /// A load order is a single arrangement rather than a list of independent
+    /// facts, so half of one is not a partial success: it is an order the user
+    /// did not choose, and the file that wins each conflict follows from it.
+    /// This ran as bare statements outside a transaction until now, which meant
+    /// a failure partway left exactly that.
+    ///
+    /// An id that is not in the profile fails the whole batch, the same refusal
+    /// [`Store::set_enabled`] and [`Store::set_enabled_bulk`] already make.
+    /// Silently writing nothing for it was the older behaviour and the worse
+    /// one: the caller was told the order it asked for had been stored when the
+    /// stored order was a different arrangement.
     pub fn set_mod_order(&self, profile_id: i64, ordered_ids: &[String]) -> Result<()> {
+        // `unchecked_transaction` for the reason given on `set_enabled_bulk`:
+        // `Store` owns its `Connection` behind `&self`, and the checked form
+        // needs `&mut self` to rule out a nesting that does not happen here.
+        let tx = self.conn.unchecked_transaction()?;
         for (index, id) in ordered_ids.iter().enumerate() {
-            self.conn.execute(
+            let changed = tx.execute(
                 "UPDATE profile_mod_state SET priority=?3 WHERE profile_id=?1 AND mod_id=?2",
                 params![profile_id, id, index as i64],
             )?;
+            if changed == 0 {
+                tx.rollback()?;
+                return Err(StorageError::NotFound(format!(
+                    "mod {id} is not in profile {profile_id}"
+                )));
+            }
         }
+        tx.commit()?;
         Ok(())
     }
 
@@ -1413,6 +1437,45 @@ mod tests {
         let p = profile_of_enabled_mods(&s, 2);
         assert_eq!(s.set_enabled_bulk(p, &[], false).unwrap(), 0);
         assert_eq!(enabled_ids(&s, p), vec!["mod-0", "mod-1"]);
+    }
+
+    /// The load order, by mod id.
+    fn order_of(s: &Store, p: i64) -> Vec<String> {
+        s.list_mod_states(p)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.mod_id)
+            .collect()
+    }
+
+    #[test]
+    fn a_reorder_naming_a_mod_that_is_not_there_changes_nothing() {
+        // The absent id sits in the middle, so two priorities have already been
+        // rewritten by the time it is reached. Before this was a transaction
+        // those two writes stood, the call reported success, and the stored
+        // order was an arrangement nobody asked for -- which then decided who
+        // won every contested file.
+        let s = seeded();
+        let p = profile_of_enabled_mods(&s, 4);
+        let before = order_of(&s, p);
+
+        let err = s.set_mod_order(
+            p,
+            &[
+                "mod-3".into(),
+                "mod-2".into(),
+                "ghost".into(),
+                "mod-1".into(),
+                "mod-0".into(),
+            ],
+        );
+
+        assert!(matches!(err, Err(StorageError::NotFound(_))));
+        assert_eq!(
+            order_of(&s, p),
+            before,
+            "a refused reorder must leave the order it found"
+        );
     }
 
     #[test]
