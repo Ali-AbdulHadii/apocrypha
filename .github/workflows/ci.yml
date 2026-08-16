@@ -146,3 +146,8 @@ jobs:
       # There is no separate lint step because `npm run build` already runs
       # `tsc --noEmit` before vite. Typechecking is the lint here.
       - run: npm run build
+
+      # In this job rather than one of its own, so the set of required checks
+      # is unchanged and no open pull request is left waiting on a context that
+      # did not exist when it was opened.
+      - run: npm test
