@@ -2397,15 +2397,26 @@ mod tests {
     fn starting_a_script_extender_runs_it_inside_the_prefix_steam_already_built() {
         let (dir, install) = skse_world();
         let steam_root = dir.path().join("Steam");
+        let loader = install.install_dir.join("skse64_loader.exe");
 
         let launch = loader_launch(&skyrim(), &install, &steam_root).expect("everything is here");
 
-        assert!(launch.program.ends_with("Proton - Experimental/proton"));
+        // Compared as paths rather than as text. A rendered path carries
+        // whichever separator the platform's `join` produced, and asserting on
+        // a spelling makes the test about that instead of about the file: this
+        // passed on Linux and failed on Windows purely because `join` there
+        // writes a backslash. `Path` compares by component, so both spellings
+        // of the same file agree.
+        assert_eq!(
+            std::path::Path::new(&launch.program),
+            steam_root.join("steamapps/common/Proton - Experimental/proton"),
+            "Proton is what runs, and it is the one Steam recorded for this game"
+        );
         assert_eq!(launch.args[0], "run", "the verb Proton takes");
-        assert!(
-            launch.args[1].ends_with("Skyrim Special Edition/skse64_loader.exe"),
-            "{}",
-            launch.args[1]
+        assert_eq!(
+            std::path::Path::new(&launch.args[1]),
+            loader,
+            "the script extender is what Proton is asked to start, not the game"
         );
 
         let env: std::collections::HashMap<_, _> = launch.env.into_iter().collect();
