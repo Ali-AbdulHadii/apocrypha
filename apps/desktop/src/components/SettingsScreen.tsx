@@ -13,7 +13,7 @@
  * away and each row fills in when its number arrives.
  */
 
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import {
   useCallback,
   useEffect,
@@ -180,39 +180,43 @@ export function SettingsScreen({
         </div>
       </div>
 
-      <AnimatePresence mode="wait" initial={false}>
-        <motion.div
-          key={section}
-          className="set-section"
-          id={`set-panel-${section}`}
-          role="tabpanel"
-          aria-labelledby={`set-tab-${section}`}
-          {...anim}
-        >
-          {section === "appearance" ? (
-            <AppearanceSection appearance={appearance} onInfo={onInfo} />
-          ) : section === "downloads" ? (
-            <DownloadsSection
-              settings={settings}
-              onSettings={onSettings}
-              status={status}
-              onStatus={setStatus}
-              onError={onError}
-              onInfo={onInfo}
-              onConfirm={onConfirm}
-            />
-          ) : section === "library" ? (
-            <LibrarySection
-              settings={settings}
-              game={game}
-              onSettings={onSettings}
-              onError={onError}
-            />
-          ) : (
-            <AdvancedSection status={status} onStatus={setStatus} onError={onError} />
-          )}
-        </motion.div>
-      </AnimatePresence>
+      {/* Keyed rather than wrapped in `AnimatePresence`, for the reason given
+          on `pageMotion`: the waiting mode shows nothing until the outgoing
+          panel finishes leaving, and every panel here holds a `Segmented` whose
+          pill is a `layoutId`. The same shape emptied the whole content pane
+          one level up, and a settings panel that renders nothing would be the
+          same bug in a smaller box. */}
+      <motion.div
+        key={section}
+        className="set-section"
+        id={`set-panel-${section}`}
+        role="tabpanel"
+        aria-labelledby={`set-tab-${section}`}
+        {...anim}
+      >
+        {section === "appearance" ? (
+          <AppearanceSection appearance={appearance} onInfo={onInfo} />
+        ) : section === "downloads" ? (
+          <DownloadsSection
+            settings={settings}
+            onSettings={onSettings}
+            status={status}
+            onStatus={setStatus}
+            onError={onError}
+            onInfo={onInfo}
+            onConfirm={onConfirm}
+          />
+        ) : section === "library" ? (
+          <LibrarySection
+            settings={settings}
+            game={game}
+            onSettings={onSettings}
+            onError={onError}
+          />
+        ) : (
+          <AdvancedSection status={status} onStatus={setStatus} onError={onError} />
+        )}
+      </motion.div>
     </div>
   );
 }

@@ -232,11 +232,26 @@ const EASE = [0.16, 1, 0.3, 1] as const;
 /**
  * Standard page transition for the main content pane.
  *
- * Asymmetric on purpose. The pane lives inside `AnimatePresence mode="wait"`,
- * so the outgoing screen has to finish before the incoming one starts, and
- * every millisecond of exit is dead time between a click and anything
- * appearing. Leaving is therefore quick and arriving is unhurried, which reads
- * as responsive and smooth rather than as one slow thing.
+ * **Enter only, and deliberately not wrapped in `AnimatePresence`.**
+ *
+ * It used to be asymmetric — a quick exit, an unhurried arrival — inside
+ * `AnimatePresence mode="wait"`, which holds the incoming screen back until the
+ * outgoing one has finished leaving. That mode has a property worth stating
+ * plainly: while it is waiting, **it renders nothing at all**. So any screen
+ * whose exit fails to complete does not leave a stale page behind or a visual
+ * glitch; it leaves an empty window, permanently, for every screen after it.
+ *
+ * That happened. Settings is the only screen holding `layoutId` elements — its
+ * tab pill and every `Segmented` control — and framer-motion's shared-layout
+ * work on those interacts with the exit it is being asked to complete. Leaving
+ * Settings emptied Mods, Downloads and Profiles until the app was restarted,
+ * while Settings itself kept rendering because arriving at it was never the
+ * problem.
+ *
+ * Keying the pane and letting React remount it removes the entire failure
+ * class: there is no exit to wait on, so there is no state in which the content
+ * pane is empty. The cost is the 120ms leaving fade, which nobody was looking
+ * at — the arrival is the part you see, and it is unchanged.
  *
  * The travel is 8px rather than the 4px this used to be: at 4px over 180ms the
  * movement was too small and too brief to register, so switching screens looked
@@ -248,10 +263,5 @@ export const pageMotion = {
     opacity: 1,
     y: 0,
     transition: { duration: 0.26, ease: EASE },
-  },
-  exit: {
-    opacity: 0,
-    y: -6,
-    transition: { duration: 0.12, ease: EASE },
   },
 };

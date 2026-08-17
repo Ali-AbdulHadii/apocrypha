@@ -1143,9 +1143,13 @@ export default function App() {
           />
 
           <div className="scroll">
-            <AnimatePresence mode="wait">
-              <motion.div key={screen} {...pageMotion}>
-                {screen === "library" ? (
+            {/* Keyed, and deliberately not inside `AnimatePresence`. The
+                waiting mode renders nothing until the outgoing screen finishes
+                leaving, so one screen that fails to complete its exit empties
+                the window for every screen after it — which is what leaving
+                Settings used to do. See `pageMotion`. */}
+            <motion.div key={screen} {...pageMotion}>
+              {screen === "library" ? (
                   <LibraryScreen
                     art={gameArt}
                     games={games}
@@ -1272,9 +1276,8 @@ export default function App() {
                     onInfo={push}
                     onConfirm={setConfirm}
                   />
-                )}
-              </motion.div>
-            </AnimatePresence>
+              )}
+            </motion.div>
           </div>
 
           <DeployBar
