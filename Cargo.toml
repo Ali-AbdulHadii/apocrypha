@@ -33,7 +33,32 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 thiserror = "1"
-zip = { version = "2", default-features = false, features = ["deflate"] }
+# Every compression method the format allows, not just the common one. A zip
+# entry names its own codec, and `deflate` alone turned every other one into
+# "Compression method not supported" — which is what a real Nexus mod (SkyHUD,
+# packed with LZMA) did. Authors pick the codec from their packer's dropdown and
+# the choice is invisible from the file name, so refusing one is refusing a mod
+# for how it was zipped. `legacy-zip` and `ppmd` are here for the same reason at
+# the other end of the age range: implode/shrink archives from the Oblivion era
+# and WinZip's PPMd are both still on Nexus.
+#
+# 8 rather than 2 because 2's LZMA reader is wrong: it feeds the entry straight
+# to `lzma-rs` including the four-byte ZIP-LZMA header, so it can only read the
+# LZMA *it* wrote and fails on 7-Zip's with a bogus "LZ distance beyond output
+# size". 8 parses that header and is pure Rust for lzma/xz/bzip2.
+#
+# `default-features` stays off to leave out `aes-crypto`: an encrypted mod needs
+# a password nothing here can supply.
+zip = { version = "8", default-features = false, features = [
+    "deflate",
+    "deflate64",
+    "bzip2",
+    "lzma",
+    "xz",
+    "zstd",
+    "ppmd",
+    "legacy-zip",
+] }
 sha2 = "0.10"
 tracing = "0.1"
 # A pull parser, not a deserializer. Real ModuleConfig.xml files put the same
