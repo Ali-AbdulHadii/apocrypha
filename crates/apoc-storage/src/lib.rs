@@ -6,6 +6,7 @@
 
 pub mod paths;
 
+use apoc_domain::modgroups::{self, Arrangement, LockBreach, Membership, ModGroup, OrderMove};
 use apoc_domain::{ModBundle, Selection};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,13 @@ pub enum StorageError {
     Io(#[from] std::io::Error),
     #[error("not found: {0}")]
     NotFound(String),
+    /// An order that would disturb a locked group.
+    ///
+    /// Carries the finished sentence rather than ids. The person reading it
+    /// named the group and installed the mod; matching an id against a row to
+    /// find out what was refused is work the refusal should have done.
+    #[error("{0}")]
+    LockedGroup(String),
 }
 
 pub type Result<T> = std::result::Result<T, StorageError>;
@@ -114,6 +122,24 @@ pub struct ModState {
     /// Load-order priority; higher wins conflicts.
     pub priority: i64,
     pub selection: Selection,
+    /// The group this mod belongs to in this profile, if any.
+    #[serde(default)]
+    pub group_id: Option<i64>,
+}
+
+/// A group as stored, with the one field the domain type has no use for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModGroupRecord {
+    pub group: ModGroup,
+    pub profile_id: i64,
+    /// Where an *empty* group sits in the list.
+    ///
+    /// Read only while the group has no members, because a group that has
+    /// members is already positioned by them. Two stored answers to one question
+    /// is how a block ends up drawn in two places, so this one is written when
+    /// the group is created and when its last member leaves, and consulted
+    /// nowhere else.
+    pub anchor: i64,
 }
 
 /// Where a downloaded archive came from.
@@ -135,7 +161,7 @@ pub struct Provenance {
     pub replaces_mod_id: Option<String>,
 }
 
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 7;
 
 /// The application's persistent store.
 pub struct Store {
@@ -210,12 +236,24 @@ impl Store {
                 UNIQUE(game_id, name)
             );
 
+            CREATE TABLE IF NOT EXISTS mod_groups (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+                name       TEXT NOT NULL,
+                color      TEXT NOT NULL DEFAULT 'default',
+                locked     INTEGER NOT NULL DEFAULT 0,
+                collapsed  INTEGER NOT NULL DEFAULT 0,
+                anchor     INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_mod_groups_profile ON mod_groups(profile_id);
+
             CREATE TABLE IF NOT EXISTS profile_mod_state (
                 profile_id     INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
                 mod_id         TEXT NOT NULL REFERENCES mods(id) ON DELETE CASCADE,
                 enabled        INTEGER NOT NULL DEFAULT 0,
                 priority       INTEGER NOT NULL DEFAULT 0,
                 selection_json TEXT NOT NULL DEFAULT '{"chosen":[]}',
+                group_id       INTEGER REFERENCES mod_groups(id) ON DELETE SET NULL,
                 PRIMARY KEY (profile_id, mod_id)
             );
 
@@ -330,6 +368,35 @@ impl Store {
             );
             "#,
         )?;
+
+        // v7: named, lockable blocks of mods inside one profile's load order.
+        //
+        // Membership is a column rather than a position. The tempting model is
+        // Mod Organizer's separators, where a group is a divider row and a mod
+        // belongs to whichever divider sits above it, but that cannot be locked:
+        // a lock is a promise about position, and membership derived from
+        // position is defined by the very thing the lock freezes.
+        //
+        // `ON DELETE SET NULL` rather than a cascade, because deleting a group
+        // is a statement about the grouping and never about the mods. SQLite
+        // only accepts a REFERENCES clause on ADD COLUMN when the column
+        // defaults to NULL, and NULL is exactly what "ungrouped" means, so the
+        // two constraints happen to want the same thing.
+        //
+        // Nothing moves for an existing database: every row gets a NULL
+        // `group_id`, no priority is rewritten, and an order with no groups in
+        // it is unconstrained exactly as it was before.
+        let has_group_id: bool = self
+            .conn
+            .prepare("SELECT group_id FROM profile_mod_state LIMIT 1")
+            .is_ok();
+        if !has_group_id {
+            let _ = self.conn.execute(
+                "ALTER TABLE profile_mod_state
+                 ADD COLUMN group_id INTEGER REFERENCES mod_groups(id) ON DELETE SET NULL",
+                [],
+            );
+        }
 
         self.conn
             .pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -732,12 +799,52 @@ impl Store {
             |r| r.get(0),
         )?;
         let new_id = self.create_profile(&game_id, new_name)?;
-        self.conn.execute(
-            "INSERT INTO profile_mod_state(profile_id,mod_id,enabled,priority,selection_json)
-             SELECT ?1, mod_id, enabled, priority, selection_json
+
+        // Groups first, and the copies get their own rows. Copying the state
+        // rows alone would leave the new profile's mods pointing at the *source*
+        // profile's groups, which no invariant here would ever catch: the
+        // foreign key is satisfied, the rows exist, and the two profiles would
+        // quietly share a lock.
+        let tx = self.conn.unchecked_transaction()?;
+        let mut remap: HashMap<i64, i64> = HashMap::new();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT id,name,color,locked,collapsed,anchor FROM mod_groups WHERE profile_id=?1",
+            )?;
+            let rows = stmt.query_map(params![source_id], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, i64>(4)?,
+                    r.get::<_, i64>(5)?,
+                ))
+            })?;
+            for row in rows {
+                let (old_id, name, color, locked, collapsed, anchor) = row?;
+                tx.execute(
+                    "INSERT INTO mod_groups(profile_id,name,color,locked,collapsed,anchor)
+                     VALUES(?1,?2,?3,?4,?5,?6)",
+                    params![new_id, name, color, locked, collapsed, anchor],
+                )?;
+                remap.insert(old_id, tx.last_insert_rowid());
+            }
+        }
+
+        tx.execute(
+            "INSERT INTO profile_mod_state(profile_id,mod_id,enabled,priority,selection_json,group_id)
+             SELECT ?1, mod_id, enabled, priority, selection_json, group_id
              FROM profile_mod_state WHERE profile_id=?2",
             params![new_id, source_id],
         )?;
+        for (old_id, copy_id) in &remap {
+            tx.execute(
+                "UPDATE profile_mod_state SET group_id=?3 WHERE profile_id=?1 AND group_id=?2",
+                params![new_id, old_id, copy_id],
+            )?;
+        }
+        tx.commit()?;
         Ok(new_id)
     }
 
@@ -746,17 +853,18 @@ impl Store {
     pub fn set_mod_state(&self, profile_id: i64, state: &ModState) -> Result<()> {
         let selection_json = serde_json::to_string(&state.selection)?;
         self.conn.execute(
-            "INSERT INTO profile_mod_state(profile_id,mod_id,enabled,priority,selection_json)
-             VALUES(?1,?2,?3,?4,?5)
+            "INSERT INTO profile_mod_state(profile_id,mod_id,enabled,priority,selection_json,group_id)
+             VALUES(?1,?2,?3,?4,?5,?6)
              ON CONFLICT(profile_id,mod_id) DO UPDATE SET
                 enabled=excluded.enabled, priority=excluded.priority,
-                selection_json=excluded.selection_json",
+                selection_json=excluded.selection_json, group_id=excluded.group_id",
             params![
                 profile_id,
                 state.mod_id,
                 state.enabled as i64,
                 state.priority,
-                selection_json
+                selection_json,
+                state.group_id
             ],
         )?;
         Ok(())
@@ -766,7 +874,7 @@ impl Store {
         let row = self
             .conn
             .query_row(
-                "SELECT mod_id,enabled,priority,selection_json
+                "SELECT mod_id,enabled,priority,selection_json,group_id
                  FROM profile_mod_state WHERE profile_id=?1 AND mod_id=?2",
                 params![profile_id, mod_id],
                 |r| {
@@ -775,11 +883,12 @@ impl Store {
                         r.get::<_, i64>(1)?,
                         r.get::<_, i64>(2)?,
                         r.get::<_, String>(3)?,
+                        r.get::<_, Option<i64>>(4)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((mod_id, enabled, priority, selection_json)) = row else {
+        let Some((mod_id, enabled, priority, selection_json, group_id)) = row else {
             return Ok(None);
         };
         Ok(Some(ModState {
@@ -787,13 +896,14 @@ impl Store {
             enabled: enabled != 0,
             priority,
             selection: serde_json::from_str(&selection_json)?,
+            group_id,
         }))
     }
 
     /// All mod states in a profile, ordered by load-order priority.
     pub fn list_mod_states(&self, profile_id: i64) -> Result<Vec<ModState>> {
         let mut stmt = self.conn.prepare(
-            "SELECT mod_id,enabled,priority,selection_json
+            "SELECT mod_id,enabled,priority,selection_json,group_id
              FROM profile_mod_state WHERE profile_id=?1 ORDER BY priority, mod_id",
         )?;
         let rows = stmt.query_map(params![profile_id], |r| {
@@ -802,16 +912,18 @@ impl Store {
                 r.get::<_, i64>(1)?,
                 r.get::<_, i64>(2)?,
                 r.get::<_, String>(3)?,
+                r.get::<_, Option<i64>>(4)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (mod_id, enabled, priority, selection_json) = row?;
+            let (mod_id, enabled, priority, selection_json, group_id) = row?;
             out.push(ModState {
                 mod_id,
                 enabled: enabled != 0,
                 priority,
                 selection: serde_json::from_str(&selection_json)?,
+                group_id,
             });
         }
         Ok(out)
@@ -979,7 +1091,13 @@ impl Store {
     /// Silently writing nothing for it was the older behaviour and the worse
     /// one: the caller was told the order it asked for had been stored when the
     /// stored order was a different arrangement.
+    ///
+    /// An order that would disturb a locked group is refused the same way, and
+    /// for the same reason. This is the chokepoint every writer passes through:
+    /// the screen, the command line, and whatever sorts a list automatically
+    /// later. A guard in the screen would be an affordance, not a rule.
     pub fn set_mod_order(&self, profile_id: i64, ordered_ids: &[String]) -> Result<()> {
+        self.check_locks(profile_id, ordered_ids)?;
         // `unchecked_transaction` for the reason given on `set_enabled_bulk`:
         // `Store` owns its `Connection` behind `&self`, and the checked form
         // needs `&mut self` to rule out a nesting that does not happen here.
@@ -998,6 +1116,370 @@ impl Store {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    // ---- groups ---------------------------------------------------------
+
+    /// The load order as ids alone, which is what the group rules are stated in.
+    fn order_of(&self, profile_id: i64) -> Result<Vec<String>> {
+        Ok(self
+            .list_mod_states(profile_id)?
+            .into_iter()
+            .map(|s| s.mod_id)
+            .collect())
+    }
+
+    /// Which group each mod in this profile belongs to.
+    pub fn membership(&self, profile_id: i64) -> Result<Membership> {
+        let mut out = Membership::new();
+        for state in self.list_mod_states(profile_id)? {
+            if let Some(group_id) = state.group_id {
+                out.insert(state.mod_id, group_id);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every group in a profile, in the order their blocks appear.
+    pub fn list_groups(&self, profile_id: i64) -> Result<Vec<ModGroupRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id,name,color,locked,collapsed,anchor
+             FROM mod_groups WHERE profile_id=?1",
+        )?;
+        let rows = stmt.query_map(params![profile_id], |r| {
+            Ok(ModGroupRecord {
+                group: ModGroup {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    color: r.get(2)?,
+                    locked: r.get::<_, i64>(3)? != 0,
+                    collapsed: r.get::<_, i64>(4)? != 0,
+                },
+                profile_id,
+                anchor: r.get(5)?,
+            })
+        })?;
+        let mut groups: Vec<ModGroupRecord> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+
+        // Sorted by where each block actually sits, so the caller never has to
+        // work that out and never disagrees with the screen about it.
+        let order = self.order_of(profile_id)?;
+        let membership = self.membership(profile_id)?;
+        groups.sort_by_key(|g| {
+            order
+                .iter()
+                .position(|id| membership.get(id) == Some(&g.group.id))
+                .map(|p| p as i64)
+                .unwrap_or(g.anchor)
+        });
+        Ok(groups)
+    }
+
+    /// The domain view of a profile's groups, for the ordering rules.
+    fn groups_only(&self, profile_id: i64) -> Result<Vec<ModGroup>> {
+        Ok(self
+            .list_groups(profile_id)?
+            .into_iter()
+            .map(|g| g.group)
+            .collect())
+    }
+
+    fn group_name(&self, group_id: i64) -> Result<String> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT name FROM mod_groups WHERE id=?1",
+                params![group_id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or_else(|| format!("group {group_id}")))
+    }
+
+    fn mod_name(&self, mod_id: &str) -> Result<String> {
+        Ok(self
+            .conn
+            .query_row("SELECT name FROM mods WHERE id=?1", params![mod_id], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .unwrap_or_else(|| mod_id.to_string()))
+    }
+
+    /// Turn a breach into the sentence the person who set the lock will read.
+    fn refuse(&self, breach: LockBreach) -> StorageError {
+        let group = self
+            .group_name(breach.group_id())
+            .unwrap_or_else(|_| "this group".into());
+        let name = self
+            .mod_name(breach.mod_id())
+            .unwrap_or_else(|_| breach.mod_id().to_string());
+        StorageError::LockedGroup(match breach {
+            LockBreach::MemberMoved { .. } => format!(
+                "\"{group}\" is locked, so its mods stay together in the order you set. \
+                 Unlock it to move \"{name}\"."
+            ),
+            LockBreach::Split { .. } => format!(
+                "\"{group}\" is locked, so nothing can sit between its mods. \
+                 Unlock it to put \"{name}\" inside it."
+            ),
+        })
+    }
+
+    fn check_locks(&self, profile_id: i64, requested: &[String]) -> Result<()> {
+        let groups = self.groups_only(profile_id)?;
+        if groups.iter().all(|g| !g.locked) {
+            return Ok(());
+        }
+        let current = self.order_of(profile_id)?;
+        let membership = self.membership(profile_id)?;
+        modgroups::check_order(&current, requested, &groups, &membership)
+            .map_err(|breach| self.refuse(breach))
+    }
+
+    /// Replay one drag and store what it produced, returning the new order.
+    ///
+    /// The screen sends the drag rather than the arrangement it thinks resulted,
+    /// because the screen can be searched, filtered and collapsed: the row above
+    /// a drop point is very often not the entry above it in the true order. An
+    /// anchor id means the same thing in every one of those views, and applies
+    /// against the order as the store currently holds it rather than the one the
+    /// client last saw.
+    pub fn move_in_order(&self, profile_id: i64, mv: &OrderMove) -> Result<Vec<String>> {
+        let current = self.order_of(profile_id)?;
+        let groups = self.groups_only(profile_id)?;
+        let membership = self.membership(profile_id)?;
+
+        let Arrangement { order, regrouped } =
+            modgroups::apply_move(&current, &groups, &membership, mv)
+                .map_err(|breach| self.refuse(breach))?;
+
+        let tx = self.conn.unchecked_transaction()?;
+        for (mod_id, group_id) in &regrouped {
+            tx.execute(
+                "UPDATE profile_mod_state SET group_id=?3 WHERE profile_id=?1 AND mod_id=?2",
+                params![profile_id, mod_id, group_id],
+            )?;
+        }
+        for (index, id) in order.iter().enumerate() {
+            let changed = tx.execute(
+                "UPDATE profile_mod_state SET priority=?3 WHERE profile_id=?1 AND mod_id=?2",
+                params![profile_id, id, index as i64],
+            )?;
+            if changed == 0 {
+                tx.rollback()?;
+                return Err(StorageError::NotFound(format!(
+                    "mod {id} is not in profile {profile_id}"
+                )));
+            }
+        }
+        // A group that just lost its last member has nothing left positioning
+        // it, so it records where it was before it can be forgotten.
+        self.park_empty_groups(&tx, profile_id, &order)?;
+        tx.commit()?;
+        Ok(order)
+    }
+
+    /// Give every memberless group an anchor, so it keeps its place in the list.
+    fn park_empty_groups(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        profile_id: i64,
+        order: &[String],
+    ) -> Result<()> {
+        let membership = self.membership(profile_id)?;
+        let mut stmt = tx.prepare("SELECT id FROM mod_groups WHERE profile_id=?1")?;
+        let ids: Vec<i64> = stmt
+            .query_map(params![profile_id], |r| r.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(stmt);
+        for group_id in ids {
+            let first = order
+                .iter()
+                .position(|id| membership.get(id) == Some(&group_id));
+            if first.is_none() {
+                continue;
+            }
+            tx.execute(
+                "UPDATE mod_groups SET anchor=?2 WHERE id=?1",
+                params![group_id, first.unwrap() as i64],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Create a group, positioned where the caller says and holding nothing yet.
+    pub fn create_group(&self, profile_id: i64, name: &str, color: &str) -> Result<i64> {
+        let tx = self.conn.unchecked_transaction()?;
+        let anchor: i64 = tx.query_row(
+            "SELECT COALESCE(MAX(priority), -1) + 1 FROM profile_mod_state WHERE profile_id=?1",
+            params![profile_id],
+            |r| r.get(0),
+        )?;
+        tx.execute(
+            "INSERT INTO mod_groups(profile_id,name,color,anchor) VALUES(?1,?2,?3,?4)",
+            params![profile_id, name, color, anchor],
+        )?;
+        let id = tx.last_insert_rowid();
+        tx.commit()?;
+        Ok(id)
+    }
+
+    /// Rename, recolour, or collapse a group.
+    ///
+    /// Allowed while locked, all three of them. A lock holds the order; refusing
+    /// to fix a typo in the name would teach people to unlock out of habit,
+    /// which costs the lock the only thing it is for.
+    pub fn update_group(
+        &self,
+        group_id: i64,
+        name: Option<&str>,
+        color: Option<&str>,
+        collapsed: Option<bool>,
+    ) -> Result<()> {
+        if let Some(name) = name {
+            self.conn.execute(
+                "UPDATE mod_groups SET name=?2 WHERE id=?1",
+                params![group_id, name],
+            )?;
+        }
+        if let Some(color) = color {
+            self.conn.execute(
+                "UPDATE mod_groups SET color=?2 WHERE id=?1",
+                params![group_id, color],
+            )?;
+        }
+        if let Some(collapsed) = collapsed {
+            self.conn.execute(
+                "UPDATE mod_groups SET collapsed=?2 WHERE id=?1",
+                params![group_id, collapsed as i64],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Lock or unlock a group.
+    ///
+    /// Locking gathers the members first. A lock is somebody asking for a
+    /// guarantee, and latching one onto a group whose mods are scattered would
+    /// promise an arrangement that does not exist and then refuse every attempt
+    /// to reach one.
+    pub fn set_group_locked(&self, profile_id: i64, group_id: i64, locked: bool) -> Result<()> {
+        if locked {
+            let order = self.order_of(profile_id)?;
+            let membership = self.membership(profile_id)?;
+            let gathered = modgroups::gather(&order, &membership);
+            let tx = self.conn.unchecked_transaction()?;
+            for (index, id) in gathered.iter().enumerate() {
+                tx.execute(
+                    "UPDATE profile_mod_state SET priority=?3 WHERE profile_id=?1 AND mod_id=?2",
+                    params![profile_id, id, index as i64],
+                )?;
+            }
+            tx.execute(
+                "UPDATE mod_groups SET locked=1 WHERE id=?1",
+                params![group_id],
+            )?;
+            tx.commit()?;
+            return Ok(());
+        }
+        self.conn.execute(
+            "UPDATE mod_groups SET locked=0 WHERE id=?1",
+            params![group_id],
+        )?;
+        Ok(())
+    }
+
+    /// Put mods in a group, gathering them beside the members already there.
+    pub fn assign_to_group(
+        &self,
+        profile_id: i64,
+        group_id: Option<i64>,
+        mod_ids: &[String],
+    ) -> Result<()> {
+        let groups = self.groups_only(profile_id)?;
+        let membership = self.membership(profile_id)?;
+        let locked = |id: i64| groups.iter().any(|g| g.id == id && g.locked);
+
+        for mod_id in mod_ids {
+            if let Some(from) = membership.get(mod_id) {
+                if locked(*from) && Some(*from) != group_id {
+                    return Err(self.refuse(LockBreach::MemberMoved {
+                        group_id: *from,
+                        mod_id: mod_id.clone(),
+                    }));
+                }
+            }
+            if let Some(to) = group_id {
+                if locked(to) && membership.get(mod_id) != Some(&to) {
+                    return Err(self.refuse(LockBreach::Split {
+                        group_id: to,
+                        mod_id: mod_id.clone(),
+                    }));
+                }
+            }
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        for mod_id in mod_ids {
+            let changed = tx.execute(
+                "UPDATE profile_mod_state SET group_id=?3 WHERE profile_id=?1 AND mod_id=?2",
+                params![profile_id, mod_id, group_id],
+            )?;
+            if changed == 0 {
+                tx.rollback()?;
+                return Err(StorageError::NotFound(format!(
+                    "mod {mod_id} is not in profile {profile_id}"
+                )));
+            }
+        }
+        tx.commit()?;
+
+        // Gathering is a second write on purpose: membership decides where the
+        // run is, so it has to be true before the run can be worked out.
+        let order = self.order_of(profile_id)?;
+        let membership = self.membership(profile_id)?;
+        let gathered = modgroups::gather(&order, &membership);
+        let tx = self.conn.unchecked_transaction()?;
+        for (index, id) in gathered.iter().enumerate() {
+            tx.execute(
+                "UPDATE profile_mod_state SET priority=?3 WHERE profile_id=?1 AND mod_id=?2",
+                params![profile_id, id, index as i64],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Delete a group. Its mods keep every priority they had.
+    ///
+    /// Deleting a group is a statement about the grouping and never about the
+    /// mods, so nothing is gathered, nothing is compacted, and the deployment it
+    /// plans is byte for byte the one it planned before.
+    pub fn delete_group(&self, profile_id: i64, group_id: i64) -> Result<()> {
+        let groups = self.groups_only(profile_id)?;
+        if groups.iter().any(|g| g.id == group_id && g.locked) {
+            let name = self.group_name(group_id)?;
+            return Err(StorageError::LockedGroup(format!(
+                "\"{name}\" is locked. Unlock it before deleting it."
+            )));
+        }
+        self.conn
+            .execute("DELETE FROM mod_groups WHERE id=?1", params![group_id])?;
+        Ok(())
+    }
+
+    /// The priority a newly imported mod should take: after everything else.
+    ///
+    /// Every never-ordered mod used to be written at zero and the list breaks
+    /// ties by id, so an import landed wherever the alphabet put it, which with
+    /// groups means it could land inside one.
+    pub fn next_priority(&self, profile_id: i64) -> Result<i64> {
+        Ok(self.conn.query_row(
+            "SELECT COALESCE(MAX(priority), -1) + 1 FROM profile_mod_state WHERE profile_id=?1",
+            params![profile_id],
+            |r| r.get(0),
+        )?)
     }
 
     /// Every deployment still marked applied, newest first. Reconciling the game
@@ -1029,6 +1511,7 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use apoc_domain::modgroups::{Belonging, MoveSubject, Placement};
     use apoc_domain::InstallerModel;
 
     fn empty_bundle(name: &str) -> ModBundle {
@@ -1210,6 +1693,7 @@ mod tests {
                 enabled: true,
                 priority: 0,
                 selection: sel_a,
+                group_id: None,
             },
         )
         .unwrap();
@@ -1223,6 +1707,7 @@ mod tests {
                 enabled: false,
                 priority: 5,
                 selection: sel_b,
+                group_id: None,
             },
         )
         .unwrap();
@@ -1262,6 +1747,7 @@ mod tests {
                 enabled: true,
                 priority: 3,
                 selection: sel,
+                group_id: None,
             },
         )
         .unwrap();
@@ -1327,6 +1813,7 @@ mod tests {
                     enabled: true,
                     priority: 0,
                     selection: Selection::new(),
+                    group_id: None,
                 },
             )
             .unwrap();
@@ -1366,6 +1853,7 @@ mod tests {
                     enabled: true,
                     priority: i as i64,
                     selection: Selection::new(),
+                    group_id: None,
                 },
             )
             .unwrap();
@@ -1646,6 +2134,7 @@ mod tests {
                     enabled: true,
                     priority: 7,
                     selection: Selection::new(),
+                    group_id: None,
                 },
             )
             .unwrap();
@@ -1819,6 +2308,7 @@ mod tests {
                 enabled: false,
                 priority: 7,
                 selection: Selection::new(),
+                group_id: None,
             },
         )
         .unwrap();
@@ -1931,5 +2421,273 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(s.all_archive_provenance().unwrap().is_empty());
+    }
+
+    // ---- groups ---------------------------------------------------------
+
+    /// Five mods in a profile, ordered `a b c x y`, with `a b c` in one group.
+    fn grouped() -> (Store, i64, i64) {
+        let s = seeded();
+        let profile_id = s.ensure_profile("monster-hunter-wilds", "Default").unwrap();
+        for id in ["a", "b", "c", "x", "y"] {
+            add_mod(&s, id, None);
+            s.set_mod_state(
+                profile_id,
+                &ModState {
+                    mod_id: id.into(),
+                    enabled: true,
+                    priority: 0,
+                    selection: Selection::default(),
+                    group_id: None,
+                },
+            )
+            .unwrap();
+        }
+        s.set_mod_order(profile_id, &ids(&["a", "b", "c", "x", "y"]))
+            .unwrap();
+        let group_id = s.create_group(profile_id, "Frameworks", "default").unwrap();
+        s.assign_to_group(profile_id, Some(group_id), &ids(&["a", "b", "c"]))
+            .unwrap();
+        (s, profile_id, group_id)
+    }
+
+    fn ids(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn order(s: &Store, profile_id: i64) -> Vec<String> {
+        s.list_mod_states(profile_id)
+            .unwrap()
+            .into_iter()
+            .map(|m| m.mod_id)
+            .collect()
+    }
+
+    #[test]
+    fn a_reorder_that_lifts_one_mod_out_of_a_locked_group_is_refused_and_writes_nothing() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+
+        let err = s
+            .set_mod_order(profile_id, &ids(&["a", "c", "x", "b", "y"]))
+            .unwrap_err();
+        assert!(matches!(err, StorageError::LockedGroup(_)), "{err}");
+        assert_eq!(
+            order(&s, profile_id),
+            ids(&["a", "b", "c", "x", "y"]),
+            "a refused order must leave every priority where it was"
+        );
+    }
+
+    #[test]
+    fn a_reorder_that_drops_a_stranger_between_two_members_of_a_locked_group_is_refused() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        assert!(s
+            .set_mod_order(profile_id, &ids(&["a", "b", "x", "c", "y"]))
+            .is_err());
+    }
+
+    #[test]
+    fn a_locked_block_can_still_be_carried_whole() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        s.set_mod_order(profile_id, &ids(&["x", "y", "a", "b", "c"]))
+            .unwrap();
+        assert_eq!(order(&s, profile_id), ids(&["x", "y", "a", "b", "c"]));
+    }
+
+    #[test]
+    fn unlocking_a_group_lets_the_very_reorder_that_was_just_refused_through() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        assert!(s
+            .set_mod_order(profile_id, &ids(&["a", "c", "x", "b", "y"]))
+            .is_err());
+
+        s.set_group_locked(profile_id, group_id, false).unwrap();
+        s.set_mod_order(profile_id, &ids(&["a", "c", "x", "b", "y"]))
+            .unwrap();
+        assert_eq!(order(&s, profile_id), ids(&["a", "c", "x", "b", "y"]));
+    }
+
+    #[test]
+    fn an_order_naming_a_mod_that_is_not_in_the_profile_is_still_the_refusal_it_always_was() {
+        let (s, profile_id, _) = grouped();
+        let err = s
+            .set_mod_order(profile_id, &ids(&["a", "b", "c", "x", "y", "ghost"]))
+            .unwrap_err();
+        assert!(matches!(err, StorageError::NotFound(_)), "{err}");
+    }
+
+    #[test]
+    fn assigning_a_mod_to_a_group_gathers_it_beside_the_members_instead_of_leaving_it_behind() {
+        let (s, profile_id, group_id) = grouped();
+        s.assign_to_group(profile_id, Some(group_id), &ids(&["y"]))
+            .unwrap();
+        assert_eq!(order(&s, profile_id), ids(&["a", "b", "c", "y", "x"]));
+    }
+
+    #[test]
+    fn assigning_a_mod_to_a_locked_group_is_refused() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        assert!(s
+            .assign_to_group(profile_id, Some(group_id), &ids(&["y"]))
+            .is_err());
+    }
+
+    #[test]
+    fn deleting_a_group_keeps_its_mods_and_every_priority_exactly_where_they_were() {
+        let (s, profile_id, group_id) = grouped();
+        let before = order(&s, profile_id);
+        s.delete_group(profile_id, group_id).unwrap();
+        assert_eq!(order(&s, profile_id), before);
+        assert!(s.membership(profile_id).unwrap().is_empty());
+        assert_eq!(s.list_mod_states(profile_id).unwrap().len(), 5);
+    }
+
+    #[test]
+    fn a_locked_group_cannot_be_deleted_until_it_is_unlocked() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        assert!(s.delete_group(profile_id, group_id).is_err());
+        s.set_group_locked(profile_id, group_id, false).unwrap();
+        assert!(s.delete_group(profile_id, group_id).is_ok());
+    }
+
+    #[test]
+    fn cloning_a_profile_points_the_copy_at_its_own_groups_rather_than_the_originals() {
+        let (s, profile_id, group_id) = grouped();
+        let copy_id = s.clone_profile(profile_id, "Experiment").unwrap();
+
+        let copies = s.list_groups(copy_id).unwrap();
+        assert_eq!(copies.len(), 1);
+        let copied_group = copies[0].group.id;
+        assert_ne!(
+            copied_group, group_id,
+            "the copy must own its group, not share one"
+        );
+
+        let membership = s.membership(copy_id).unwrap();
+        assert_eq!(membership.get("a"), Some(&copied_group));
+        assert_eq!(order(&s, copy_id), ids(&["a", "b", "c", "x", "y"]));
+
+        // Regrouping the copy must not reach back into what it came from.
+        s.assign_to_group(copy_id, None, &ids(&["a"])).unwrap();
+        assert_eq!(s.membership(profile_id).unwrap().get("a"), Some(&group_id));
+    }
+
+    #[test]
+    fn a_cloned_profile_keeps_its_locks_so_the_copy_is_as_trustworthy_as_its_source() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        let copy_id = s.clone_profile(profile_id, "Experiment").unwrap();
+        assert!(s.list_groups(copy_id).unwrap()[0].group.locked);
+        assert!(s
+            .set_mod_order(copy_id, &ids(&["a", "c", "x", "b", "y"]))
+            .is_err());
+    }
+
+    #[test]
+    fn removing_a_mod_from_the_library_shrinks_the_group_it_was_in_and_leaves_the_rest_locked() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        s.delete_mod("b").unwrap();
+
+        assert_eq!(order(&s, profile_id), ids(&["a", "c", "x", "y"]));
+        assert!(
+            s.set_mod_order(profile_id, &ids(&["a", "x", "c", "y"]))
+                .is_err(),
+            "the survivors are still a locked group"
+        );
+    }
+
+    #[test]
+    fn a_group_whose_last_member_left_the_library_survives_as_an_empty_group() {
+        let (s, profile_id, group_id) = grouped();
+        for id in ["a", "b", "c"] {
+            s.delete_mod(id).unwrap();
+        }
+        let groups = s.list_groups(profile_id).unwrap();
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].group.id, group_id);
+        assert!(s.membership(profile_id).unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_locked_group_still_takes_a_bulk_enable_because_a_lock_holds_the_order_not_the_switches() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        s.set_enabled_bulk(profile_id, &ids(&["a", "b"]), false)
+            .unwrap();
+        let states = s.list_mod_states(profile_id).unwrap();
+        assert!(!states.iter().find(|m| m.mod_id == "a").unwrap().enabled);
+        assert_eq!(order(&s, profile_id), ids(&["a", "b", "c", "x", "y"]));
+    }
+
+    #[test]
+    fn renaming_a_locked_group_is_allowed_because_a_lock_holds_the_order_and_not_the_label() {
+        let (s, profile_id, group_id) = grouped();
+        s.set_group_locked(profile_id, group_id, true).unwrap();
+        s.update_group(group_id, Some("Core"), None, Some(true))
+            .unwrap();
+        let g = &s.list_groups(profile_id).unwrap()[0].group;
+        assert_eq!(g.name, "Core");
+        assert!(g.collapsed);
+    }
+
+    #[test]
+    fn a_drop_below_a_row_lands_immediately_after_it_whatever_the_screen_was_showing() {
+        let (s, profile_id, _) = grouped();
+        let out = s
+            .move_in_order(
+                profile_id,
+                &OrderMove {
+                    subject: MoveSubject::Mod("y".into()),
+                    // "x" is what the person saw above the drop point. Whatever
+                    // was filtered out between them is not their problem.
+                    placement: Placement::After("x".into()),
+                    belonging: Belonging::Keep,
+                },
+            )
+            .unwrap();
+        assert_eq!(out, ids(&["a", "b", "c", "x", "y"]));
+    }
+
+    #[test]
+    fn a_new_mod_lands_after_everything_rather_than_wherever_the_alphabet_puts_it() {
+        let (s, profile_id, _) = grouped();
+        assert_eq!(s.next_priority(profile_id).unwrap(), 5);
+    }
+
+    #[test]
+    fn upgrading_a_database_written_before_groups_keeps_every_priority_and_groups_nothing() {
+        let s = seeded();
+        let profile_id = s.ensure_profile("monster-hunter-wilds", "Default").unwrap();
+        for id in ["a", "b"] {
+            add_mod(&s, id, None);
+            s.set_mod_state(
+                profile_id,
+                &ModState {
+                    mod_id: id.into(),
+                    enabled: true,
+                    priority: 0,
+                    selection: Selection::default(),
+                    group_id: None,
+                },
+            )
+            .unwrap();
+        }
+        s.set_mod_order(profile_id, &ids(&["b", "a"])).unwrap();
+
+        // What a v6 database looks like on the next launch: the migration runs
+        // again from a lower version against rows that already exist.
+        s.conn.pragma_update(None, "user_version", 6i64).unwrap();
+        let s = Store::init(s.conn).unwrap();
+
+        assert_eq!(order(&s, profile_id), ids(&["b", "a"]));
+        assert!(s.membership(profile_id).unwrap().is_empty());
+        assert!(s.list_groups(profile_id).unwrap().is_empty());
     }
 }

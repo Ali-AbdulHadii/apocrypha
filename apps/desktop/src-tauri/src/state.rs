@@ -215,6 +215,28 @@ pub struct ModView {
     /// install looks identical to a correct one until the game misbehaves.
     #[serde(default)]
     pub warnings: Vec<String>,
+    /// The mod's Nexus page id, when it came from there. Shown in the list
+    /// because it is the number people search, quote in bug reports and match
+    /// against a mod's page, and no other field identifies a mod to anyone else.
+    pub nexus_mod_id: Option<i64>,
+    /// The group this mod sits in, in the active profile.
+    ///
+    /// Not to be confused with [`ModView::groups`], which is a completely
+    /// different thing wearing the same word: those are the option groups a
+    /// FOMOD installer declares.
+    pub group_id: Option<i64>,
+}
+
+/// A named block of mods in the load order.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModGroupView {
+    pub id: i64,
+    pub name: String,
+    /// A colour token, resolved against the stylesheet when it is painted.
+    pub color: String,
+    pub locked: bool,
+    pub collapsed: bool,
 }
 
 /// What happened when a previous install's choices were moved onto a new

@@ -54,6 +54,8 @@ const WEAPONS: Criteria = {
   status: "disabled",
   category: "Weapons",
   sort: "name",
+  group: "all",
+  conflicts: "all",
 };
 
 describe("what was stored last", () => {
@@ -117,7 +119,24 @@ describe("input this build did not write", () => {
       status: "disabled",
       category: DEFAULT_CRITERIA.category,
       sort: DEFAULT_CRITERIA.sort,
+      group: DEFAULT_CRITERIA.group,
+      conflicts: DEFAULT_CRITERIA.conflicts,
     });
+  });
+
+  it("gives a record written before groups existed the default group filter", () => {
+    // Every stored filter predates them, so the fields simply are not there.
+    // Defaulting them to "all" is what keeps somebody's saved "textures I have
+    // not applied" filter showing the same mods it always did.
+    store.set(
+      KEY,
+      JSON.stringify({
+        "monster-hunter-wilds": {
+          last: { query: "", status: "all", category: "all", sort: "order" },
+        },
+      }),
+    );
+    expect(loadLast("monster-hunter-wilds")).toEqual(DEFAULT_CRITERIA);
   });
 
   it("gives defaults for a blob that is not JSON at all", () => {

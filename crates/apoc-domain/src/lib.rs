@@ -11,6 +11,7 @@
 pub mod deploy;
 pub mod fomod;
 pub mod game;
+pub mod modgroups;
 pub mod modpack;
 pub mod plugins;
 
@@ -30,4 +31,7 @@ pub use modpack::{
 // `Plugin` is deliberately not re-exported here: `fomod::Plugin` already holds
 // that name at the root, and a FOMOD option and a Creation Engine plugin are
 // different things that would be one import away from being confused.
+pub use modgroups::{
+    Arrangement, Belonging, LockBreach, Membership, ModGroup, MoveSubject, OrderMove, Placement,
+};
 pub use plugins::{MasterProblem, MasterViolation, PluginEntry, PluginKind, PluginOrder};

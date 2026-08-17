@@ -7,10 +7,10 @@
  * can ship one plugin each and the user can want them in either order.
  *
  * Two things are stated here rather than assumed, because both are the reverse
- * of the Load order screen next door:
+ * of the mod list next door:
  *
- * 1. **Higher loads first, and later overrides earlier.** On the Load order
- *    screen the mod further *down* wins. Here the plugin further down is the
+ * 1. **Higher loads first, and later overrides earlier.** In the mod list the
+ *    mod further *down* wins. Here the plugin further down is the
  *    one that overrides, but the ordering language people use for plugin lists
  *    is "loads first", so the screen says both rather than picking one and
  *    leaving the other to be inferred wrongly.

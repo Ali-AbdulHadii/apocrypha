@@ -836,6 +836,8 @@ pub fn evaluate_selection(
         total_files: bundle.deployable_options().map(|o| o.payload.len()).sum(),
         total_bytes: bundle.deployable_options().map(|o| o.total_size()).sum(),
         warnings,
+        nexus_mod_id: None,
+        group_id: None,
     })
 }
 
@@ -916,6 +918,8 @@ pub fn analyze_archive(
         total_files: bundle.deployable_options().map(|o| o.payload.len()).sum(),
         total_bytes: bundle.deployable_options().map(|o| o.total_size()).sum(),
         warnings,
+        nexus_mod_id: None,
+        group_id: None,
     };
     Ok(AnalyzedArchive {
         mod_view,
@@ -1026,9 +1030,23 @@ pub fn import_mod(
     // would re-enable a mod the user had turned off and drop it to the bottom of
     // load order, both of which read as the app undoing their decisions.
     let enabled = previous_state.as_ref().map(|s| s.enabled).unwrap_or(true);
-    let priority = previous_state.as_ref().map(|s| s.priority).unwrap_or(0);
+    let group_id = previous_state.as_ref().and_then(|s| s.group_id);
 
     let profile_id = profile_of(&state, &game_id)?;
+
+    // A new mod goes after everything already ordered. It used to be written at
+    // zero, and the list breaks ties by id, so an import landed wherever the
+    // alphabet put it: harmless when the order was one number per mod, wrong
+    // once a group can be sitting at the top of the list waiting to be joined
+    // by something nobody put there.
+    let priority = match previous_state.as_ref() {
+        Some(previous) => previous.priority,
+        None => {
+            let store = state.store.lock().map_err(|_| "state poisoned")?;
+            store.next_priority(profile_id).map_err(err)?
+        }
+    };
+
     {
         let store = state.store.lock().map_err(|_| "state poisoned")?;
         store
@@ -1059,6 +1077,7 @@ pub fn import_mod(
                     enabled,
                     priority,
                     selection: sel.clone(),
+                    group_id,
                 },
             )
             .map_err(err)?;
@@ -1080,6 +1099,8 @@ pub fn import_mod(
         total_files: bundle.deployable_options().map(|o| o.payload.len()).sum(),
         total_bytes: bundle.deployable_options().map(|o| o.total_size()).sum(),
         warnings: Vec::new(),
+        nexus_mod_id: provenance.as_ref().and_then(|p| p.nexus_mod_id),
+        group_id,
     })
 }
 
@@ -1123,6 +1144,8 @@ pub fn list_mods(state: State<AppState>, game_id: String) -> CmdResult<Vec<ModVi
             total_files: m.bundle.deployable_options().map(|o| o.payload.len()).sum(),
             total_bytes: m.bundle.deployable_options().map(|o| o.total_size()).sum(),
             warnings: Vec::new(),
+            nexus_mod_id: m.nexus_mod_id,
+            group_id: st.as_ref().and_then(|s| s.group_id),
         });
     }
     Ok(out)
@@ -1247,6 +1270,7 @@ pub fn set_mod_selection(
                 enabled: existing.as_ref().map(|s| s.enabled).unwrap_or(true),
                 priority: existing.as_ref().map(|s| s.priority).unwrap_or(0),
                 selection: sel.clone(),
+                group_id: existing.as_ref().and_then(|s| s.group_id),
             },
         )
         .map_err(err)?;

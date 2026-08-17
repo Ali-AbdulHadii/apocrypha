@@ -9,7 +9,6 @@ import { Icon, type IconName } from "./components/icons";
 import { InstallWizard } from "./components/InstallWizard";
 import { LinkPreviewDialog } from "./components/LinkPreviewDialog";
 import { ModsScreen } from "./components/ModsScreen";
-import { OrderScreen } from "./components/OrderScreen";
 import { PluginsScreen } from "./components/PluginsScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
 import { Splash } from "./components/Splash";
@@ -34,6 +33,8 @@ import {
   truncatePath,
   type CarryView,
   type ConflictView,
+  type ModGroupView,
+  type OrderMove,
   type DownloadView,
   type DryRunView,
   type GameView,
@@ -91,7 +92,6 @@ function canInstallDirectly(
 type Screen =
   | "library"
   | "mods"
-  | "order"
   | "plugins"
   | "downloads"
   | "updates"
@@ -104,7 +104,6 @@ type Screen =
 const NAV: { id: Screen; label: string; icon: IconName }[] = [
   { id: "library", label: "Library", icon: "library" },
   { id: "mods", label: "Mods", icon: "mods" },
-  { id: "order", label: "Load order", icon: "order" },
   { id: "plugins", label: "Plugins", icon: "plugins" },
   { id: "downloads", label: "Downloads", icon: "downloads" },
   { id: "updates", label: "Updates", icon: "refresh" },
@@ -148,6 +147,8 @@ export default function App() {
   /** The game's plugin list, or null for a game that has no such concept. */
   const [plugins, setPlugins] = useState<PluginOrderView | null>(null);
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  /** The load-order groups in the active profile. */
+  const [modGroups, setModGroups] = useState<ModGroupView[]>([]);
   const [updates, setUpdates] = useState<UpdateCheckView | null>(null);
   const [checkingUpdates, setCheckingUpdates] = useState(false);
   const [updateBusyId, setUpdateBusyId] = useState<string | null>(null);
@@ -197,6 +198,10 @@ export default function App() {
 
   const refreshDownloads = useCallback(async () => {
     setDownloads(await api.listDownloads());
+  }, []);
+
+  const refreshGroups = useCallback(async (gameId: string) => {
+    setModGroups(await api.modGroups(gameId));
   }, []);
 
   // Cheap enough to run after every reorder: it plans in memory and never
@@ -256,6 +261,7 @@ export default function App() {
           refreshProfiles(activeGameId),
           refreshConflicts(activeGameId),
           refreshPlugins(activeGameId),
+          refreshGroups(activeGameId),
         ]);
       } catch (e) {
         fail(e);
@@ -267,6 +273,7 @@ export default function App() {
     refreshProfiles,
     refreshConflicts,
     refreshPlugins,
+    refreshGroups,
     fail,
   ]);
 
@@ -887,27 +894,72 @@ export default function App() {
     [activeGameId, refreshMods, fail],
   );
 
-  const reorderMods = useCallback(
-    async (orderedIds: string[]) => {
+  /**
+   * One drag.
+   *
+   * Optimistic, unlike the plugin list, because this order is ours alone: no
+   * other tool writes it between two clicks, so the arrangement predicted here
+   * and the one stored are the same arrangement. A refusal is the exception
+   * that proves it worth predicting: a locked group answers with a sentence, and
+   * the true order is read back so the row visibly returns to where it was.
+   */
+  const moveInOrder = useCallback(
+    async (move: OrderMove) => {
       if (!activeGameId) return;
-      setMods((prev) => {
-        const rank = new Map(orderedIds.map((id, i) => [id, i]));
-        return [...prev]
-          .map((m) => ({ ...m, priority: rank.get(m.id) ?? m.priority }))
-          .sort((a, b) => a.priority - b.priority);
-      });
       setDirty(true);
       try {
-        await api.setModOrder(activeGameId, orderedIds);
-        // Who wins each contested file follows directly from the order, so the
-        // conflict list would otherwise describe the arrangement before the drag.
-        await refreshConflicts(activeGameId);
+        const order = await api.moveInOrder(activeGameId, move);
+        const rank = new Map(order.map((id, i) => [id, i]));
+        setMods((prev) =>
+          [...prev]
+            .map((m) => ({ ...m, priority: rank.get(m.id) ?? m.priority }))
+            .sort(
+              (a, b) => a.priority - b.priority || a.id.localeCompare(b.id),
+            ),
+        );
+        // Membership can change with the same drag, and who wins each contested
+        // file follows directly from the order, so both would otherwise still
+        // describe the arrangement from before it.
+        await Promise.all([
+          refreshGroups(activeGameId),
+          refreshConflicts(activeGameId),
+        ]);
+        // The group a mod belongs to lives on the mod, so the rows have to come
+        // back with it. Cheap next to the reorder itself.
+        await refreshMods(activeGameId);
       } catch (e) {
         fail(e);
         await refreshMods(activeGameId);
       }
     },
-    [activeGameId, refreshMods, refreshConflicts, fail],
+    [activeGameId, refreshMods, refreshGroups, refreshConflicts, fail],
+  );
+
+  /** Any group edit: they all end with re-reading the groups and the rows. */
+  const editGroups = useCallback(
+    async (edit: () => Promise<unknown>) => {
+      if (!activeGameId) return;
+      try {
+        await edit();
+        await Promise.all([
+          refreshGroups(activeGameId),
+          refreshMods(activeGameId),
+          refreshConflicts(activeGameId),
+        ]);
+      } catch (e) {
+        fail(e);
+        await refreshGroups(activeGameId);
+      }
+    },
+    [activeGameId, refreshGroups, refreshMods, refreshConflicts, fail],
+  );
+
+  const createGroup = useCallback(
+    (name: string) => {
+      if (!activeGameId) return;
+      void editGroups(() => api.createModGroup(activeGameId, name, "default"));
+    },
+    [activeGameId, editGroups],
   );
 
   /**
@@ -1165,8 +1217,12 @@ export default function App() {
                 ) : screen === "mods" ? (
                   <ModsScreen
                     mods={mods}
+                    groups={modGroups}
+                    conflicts={conflicts}
+                    overrides={overrides}
                     appliedIds={appliedIds}
                     dirty={dirty}
+                    busy={busy}
                     onToggle={toggleMod}
                     onToggleMany={toggleMods}
                     gameId={activeGameId}
@@ -1178,21 +1234,35 @@ export default function App() {
                     }}
                     onRemove={removeMod}
                     onImport={startImport}
+                    onMove={moveInOrder}
+                    onCreateGroup={createGroup}
+                    onRenameGroup={(id, name) =>
+                      editGroups(() => api.updateModGroup(id, { name }))
+                    }
+                    onCollapseGroup={(id, collapsed) =>
+                      editGroups(() => api.updateModGroup(id, { collapsed }))
+                    }
+                    onLockGroup={(id, locked) =>
+                      editGroups(() =>
+                        api.setModGroupLocked(activeGameId!, id, locked),
+                      )
+                    }
+                    onDeleteGroup={(id) =>
+                      editGroups(() =>
+                        api.deleteModGroup(activeGameId!, id),
+                      )
+                    }
+                    onAssignToGroup={(id, modIds) =>
+                      editGroups(() =>
+                        api.assignToModGroup(activeGameId!, id, modIds),
+                      )
+                    }
+                    onOverride={pinConflict}
+                    onClearOverride={unpinConflict}
                     onDropArchives={dropArchives}
                     // A drop is refused while the wizard is open or an analyse
                     // is already running, rather than queued behind them.
                     canDrop={!busy && !wizardMod}
-                    onOpenLoadOrder={() => setScreen("order")}
-                  />
-                ) : screen === "order" ? (
-                  <OrderScreen
-                    mods={mods}
-                    conflicts={conflicts}
-                    overrides={overrides}
-                    busy={busy}
-                    onReorder={reorderMods}
-                    onOverride={pinConflict}
-                    onClearOverride={unpinConflict}
                   />
                 ) : screen === "plugins" && plugins ? (
                   <PluginsScreen
@@ -1476,7 +1546,6 @@ function TopBar({
   const titles: Record<Screen, string> = {
     library: "Library",
     mods: "Mods",
-    order: "Load order",
     plugins: "Plugins",
     downloads: "Downloads",
     updates: "Updates",

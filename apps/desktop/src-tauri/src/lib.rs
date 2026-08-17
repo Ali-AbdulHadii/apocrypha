@@ -9,6 +9,7 @@ mod commands;
 mod deploy_cmds;
 mod downloads;
 mod gamedb;
+mod group_cmds;
 mod nexus_cmds;
 mod plugin_cmds;
 mod state;
@@ -176,6 +177,13 @@ pub fn run() {
             plugin_cmds::list_plugins,
             plugin_cmds::move_plugin,
             plugin_cmds::set_plugin_enabled,
+            group_cmds::list_mod_groups,
+            group_cmds::create_mod_group,
+            group_cmds::update_mod_group,
+            group_cmds::set_mod_group_locked,
+            group_cmds::delete_mod_group,
+            group_cmds::assign_to_mod_group,
+            group_cmds::move_in_order,
             commands::remove_mod,
             commands::preview_from_archive,
             commands::preview_from_mod,
