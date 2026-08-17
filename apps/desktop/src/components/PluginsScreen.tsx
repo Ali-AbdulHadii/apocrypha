@@ -262,7 +262,12 @@ function PluginRow({
       value={entry.name}
       dragListener={false}
       dragControls={fixed ? undefined : controls}
-      drag={fixed ? false : undefined}
+      // Spread, never `drag={fixed ? false : undefined}`. Reorder.Item renders
+      // `{ drag: axis, ...props }`, so a `drag` key present in props wins even
+      // when its value is undefined: passing undefined turned dragging off for
+      // every plugin rather than only for the implicit ones. The arrows worked,
+      // which is why this survived. The prop has to be absent.
+      {...(fixed ? { drag: false as const } : {})}
       className={`order-row plugin-row ${endsMasterBlock ? "ends-masters" : ""}`}
       whileDrag={{ scale: 1.01, zIndex: 2 }}
       transition={reduceMotion ? { duration: 0 } : DRAG_SPRING}

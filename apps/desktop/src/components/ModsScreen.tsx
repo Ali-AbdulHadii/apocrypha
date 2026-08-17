@@ -1473,9 +1473,13 @@ function ModRow({
    */
   const startDrag = (e: React.PointerEvent) => {
     if (!canDrag || busy) return;
+    // `.drag-handle` first, and it is not decoration. The grip's own handler
+    // already started this gesture, and the event then bubbles to the row:
+    // without this the same `dragControls` are started twice for one press,
+    // and the second start cancels the first, so the card never moves.
     if (
       (e.target as HTMLElement).closest(
-        "button, input, select, a, label, [role=switch], [role=checkbox]",
+        ".drag-handle, button, input, select, a, label, [role=switch], [role=checkbox]",
       )
     ) {
       return;
@@ -1493,7 +1497,11 @@ function ModRow({
       value={mod.id}
       dragListener={false}
       dragControls={canDrag ? controls : undefined}
-      drag={canDrag ? undefined : false}
+      // Spread, never `drag={canDrag ? undefined : false}`. Reorder.Item renders
+      // `{ drag: axis, ...props }`, so a `drag` key present in props wins even
+      // when its value is undefined, and passing undefined therefore turns
+      // dragging off rather than leaving it alone. The prop has to be absent.
+      {...(canDrag ? {} : { drag: false as const })}
       className={`mod-row ${mod.enabled ? "" : "disabled"}`}
       data-selected={selected}
       whileDrag={{ scale: 1.01, zIndex: 2 }}
