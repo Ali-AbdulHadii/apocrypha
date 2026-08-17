@@ -24,6 +24,10 @@ pub struct GameRules {
     /// author zipped the *inside* of a payload root. Maps the folder name to
     /// the prefix that must be restored, e.g. `autorun` -> `reframework`.
     pub rewrap: Vec<(String, String)>,
+    /// File extensions found directly at the archive root that carry the same
+    /// missing prefix, e.g. `esp` -> `Data`. A Skyrim archive frequently *is*
+    /// the `Data` folder, with no folder for [`GameRules::rewrap`] to match.
+    pub rewrap_extensions: Vec<(String, String)>,
     /// Exact casing to force on payload path components, e.g. `stm` -> `STM`.
     /// Windows-authored archives use random casing and Linux is case-sensitive,
     /// so without this the game silently ignores half a mod's files.
@@ -57,6 +61,7 @@ impl Default for GameRules {
             root_files: Vec::new(),
             accepts_pak: false,
             rewrap: Vec::new(),
+            rewrap_extensions: Vec::new(),
             canonical_case: Vec::new(),
             formats: Vec::new(),
             fomod_dest_prefix: String::new(),
@@ -109,7 +114,14 @@ impl GameRules {
             rewrap: profile
                 .rewrap
                 .iter()
-                .map(|r| (r.folder.clone(), r.prefix.clone()))
+                .filter_map(|r| Some((r.folder.clone()?, r.prefix.clone())))
+                .collect(),
+            // The same idea for a file with no folder around it: a Skyrim
+            // archive is very often the `Data` folder itself.
+            rewrap_extensions: profile
+                .rewrap
+                .iter()
+                .filter_map(|r| Some((r.extension.clone()?, r.prefix.clone())))
                 .collect(),
             canonical_case: profile.canonical_case.clone(),
             formats: profile.formats.clone(),
@@ -161,6 +173,23 @@ impl GameRules {
         self.rewrap
             .iter()
             .find(|(folder, _)| folder.eq_ignore_ascii_case(root_name))
+            .map(|(_, prefix)| prefix.as_str())
+    }
+
+    /// The prefix a bare file at the archive root must be re-wrapped under.
+    ///
+    /// The same question as [`GameRules::rewrap_prefix`] for an author who
+    /// dropped the folder entirely rather than zipping its inside: `SkyUI_SE.esp`
+    /// at the archive root means `Data/SkyUI_SE.esp`.
+    ///
+    /// Asked only of files sitting directly at the root. Deeper in the archive
+    /// the surrounding folders already say where things go, and an `.esp` under
+    /// `Data/` is where it should be already.
+    pub fn rewrap_file_prefix(&self, name: &str) -> Option<&str> {
+        let ext = std::path::Path::new(name).extension()?;
+        self.rewrap_extensions
+            .iter()
+            .find(|(e, _)| ext.eq_ignore_ascii_case(e.as_str()))
             .map(|(_, prefix)| prefix.as_str())
     }
 

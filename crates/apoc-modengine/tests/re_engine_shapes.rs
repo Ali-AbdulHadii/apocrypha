@@ -227,6 +227,7 @@ fn a_game_that_declares_none_of_this_installs_none_of_it() {
         root_files: Vec::new(),
         accepts_pak: false,
         rewrap: Vec::new(),
+        rewrap_extensions: Vec::new(),
         canonical_case: Vec::new(),
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),

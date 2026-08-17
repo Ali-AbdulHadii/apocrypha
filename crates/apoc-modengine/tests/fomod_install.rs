@@ -16,6 +16,7 @@ fn bethesda_rules() -> GameRules {
     GameRules {
         formats: vec!["fomod".into()],
         fomod_dest_prefix: "Data".into(),
+        rewrap_extensions: Vec::new(),
         canonical_case: vec!["Data".into()],
         payload_roots: vec!["Data".into()],
         ..GameRules::default()

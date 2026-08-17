@@ -20,6 +20,7 @@ fn wilds_rules() -> GameRules {
             ("fonts".into(), "reframework".into()),
             ("STM".into(), "natives".into()),
         ],
+        rewrap_extensions: Vec::new(),
         canonical_case: vec!["STM".into()],
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),

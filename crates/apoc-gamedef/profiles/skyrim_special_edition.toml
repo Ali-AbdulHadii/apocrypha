@@ -63,6 +63,28 @@ target = "Data"
 # Archives packed from the inside out: a bare `meshes/` at the archive root
 # really means `Data/meshes/`. This is the single most common way a Skyrim mod
 # is packaged, so without these an ordinary archive imports as zero files.
+
+# The same thing with no folder at all. A great many Skyrim archives simply
+# *are* the `Data` folder: SkyUI ships `SkyUI_SE.esp` and `SkyUI_SE.bsa` at the
+# archive root with nothing around them, and no folder rule can catch that
+# because there is no folder. A plugin or an archive file sitting loose at the
+# root has exactly one place it can belong.
+[[rewrap]]
+extension = "esp"
+prefix = "Data"
+
+[[rewrap]]
+extension = "esm"
+prefix = "Data"
+
+[[rewrap]]
+extension = "esl"
+prefix = "Data"
+
+[[rewrap]]
+extension = "bsa"
+prefix = "Data"
+
 [[rewrap]]
 folder = "meshes"
 prefix = "Data"
