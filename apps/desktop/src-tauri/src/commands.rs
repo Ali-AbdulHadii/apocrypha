@@ -232,6 +232,47 @@ pub(crate) fn loader_launch(
         ));
     }
 
+    // Everything up to here is the same question on any platform: is there a
+    // launcher, and has it been installed. How it is *started* is not, so the
+    // two answers live in their own functions rather than behind branches in
+    // this one — the same shape `apoc_deploy::loader::steam_is_running` uses.
+    launch_command(profile, install, steam_root, exe, loader)
+}
+
+/// Start the extender directly, which on Windows is all there is to it.
+///
+/// No prefix, no Proton, nothing in front of it. The caller sets the working
+/// directory to the game folder, which is what a script extender needs to find
+/// its own files.
+///
+/// The Proton refusals the other implementation makes would be actively
+/// misleading here: telling somebody to launch through Steam first "so it
+/// creates the Proton prefix" is an instruction they cannot follow on a machine
+/// that has no Proton.
+#[cfg(windows)]
+fn launch_command(
+    _profile: &GameProfile,
+    _install: &apoc_steam::GameInstall,
+    _steam_root: &Path,
+    exe: PathBuf,
+    _loader: &apoc_domain::LoaderSpec,
+) -> CmdResult<LoaderLaunch> {
+    Ok(LoaderLaunch {
+        program: exe,
+        args: Vec::new(),
+        env: Vec::new(),
+    })
+}
+
+/// Start the extender inside the Proton prefix Steam already built for the game.
+#[cfg(not(windows))]
+fn launch_command(
+    profile: &GameProfile,
+    install: &apoc_steam::GameInstall,
+    steam_root: &Path,
+    exe: PathBuf,
+    loader: &apoc_domain::LoaderSpec,
+) -> CmdResult<LoaderLaunch> {
     // Proton builds its prefix the first time Steam runs the game. Without one
     // there is nothing to run inside, and building it here would mean guessing
     // at the settings Steam is about to choose.
@@ -2393,6 +2434,52 @@ mod tests {
             .expect("skyrim ships")
     }
 
+    /// On Windows the extender is simply the program: no prefix, no Proton, and
+    /// nothing to put in front of it.
+    #[cfg(windows)]
+    #[test]
+    fn starting_a_script_extender_runs_it_directly() {
+        let (dir, install) = skse_world();
+        let loader = install.install_dir.join("skse64_loader.exe");
+
+        let launch =
+            loader_launch(&skyrim(), &install, &dir.path().join("Steam")).expect("it is installed");
+
+        assert_eq!(launch.program, loader, "the extender itself is the program");
+        assert!(
+            launch.args.is_empty(),
+            "nothing wraps it: {:?}",
+            launch.args
+        );
+        assert!(
+            launch.env.is_empty(),
+            "the Proton variables describe a machine this is not: {:?}",
+            launch.env
+        );
+    }
+
+    /// The prefix does not exist on Windows, so its absence must not be a
+    /// refusal there. Telling somebody to launch through Steam first "so it
+    /// creates the Proton prefix" is an instruction they cannot follow.
+    #[cfg(windows)]
+    #[test]
+    fn a_missing_proton_prefix_is_not_a_reason_to_refuse_on_windows() {
+        let (dir, install) = skse_world();
+        let install = apoc_steam::GameInstall {
+            proton_prefix: None,
+            proton_tool: None,
+            ..install
+        };
+
+        let launch = loader_launch(&skyrim(), &install, &dir.path().join("Steam"))
+            .expect("a prefix is a Linux concern");
+        assert_eq!(
+            launch.program,
+            install.install_dir.join("skse64_loader.exe")
+        );
+    }
+
+    #[cfg(not(windows))]
     #[test]
     fn starting_a_script_extender_runs_it_inside_the_prefix_steam_already_built() {
         let (dir, install) = skse_world();
@@ -2447,6 +2534,7 @@ mod tests {
 
     /// Proton builds the prefix the first time Steam runs the game. Building one
     /// here would mean guessing at settings Steam is about to choose.
+    #[cfg(not(windows))]
     #[test]
     fn a_game_never_launched_under_proton_is_told_to_start_once_first() {
         let (dir, install) = skse_world();
@@ -2460,6 +2548,7 @@ mod tests {
         assert!(err.contains("through Steam once first"), "{err}");
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn a_proton_build_that_cannot_be_found_is_named_rather_than_guessed_at() {
         let (dir, install) = skse_world();
