@@ -697,6 +697,30 @@ export default function App() {
     }
   }, [activeGameId, push, fail]);
 
+  /**
+   * Start the script extender rather than the game.
+   *
+   * Its own action rather than a change to what Play means: Play hands the game
+   * to Steam and Steam decides everything after that, while this starts a
+   * different executable inside the prefix Steam built. Two buttons because
+   * they are two things, and because a mod list that works without the extender
+   * is a reason somebody might want the other one.
+   */
+  const launchWithLoader = useCallback(async () => {
+    if (!activeGameId) {
+      push("Select a game first", "bad");
+      return;
+    }
+    const name =
+      games.find((g) => g.id === activeGameId)?.loaderName ?? "the loader";
+    try {
+      await api.launchWithLoader(activeGameId);
+      push(`Started ${name}`, "ok");
+    } catch (e) {
+      fail(e);
+    }
+  }, [activeGameId, games, push, fail]);
+
   // Installing from Downloads joins the same path as Add mod: analyze, then the
   // wizard. Nothing about the archive is treated differently for having been
   // fetched here rather than picked from disk.
@@ -1115,6 +1139,7 @@ export default function App() {
             onImport={startImport}
             onDetect={detect}
             onLaunch={launchGame}
+            onLaunchWithLoader={launchWithLoader}
           />
 
           <div className="scroll">
@@ -1433,6 +1458,7 @@ function TopBar({
   onImport,
   onDetect,
   onLaunch,
+  onLaunchWithLoader,
 }: {
   screen: Screen;
   game: GameView | null;
@@ -1442,6 +1468,7 @@ function TopBar({
   onImport: () => void;
   onDetect: () => void;
   onLaunch: () => void;
+  onLaunchWithLoader: () => void;
 }) {
   const titles: Record<Screen, string> = {
     library: "Library",
@@ -1499,6 +1526,28 @@ function TopBar({
             }
           >
             <Icon.play /> Play
+          </button>
+        )}
+        {/* A script extender is a different executable, run instead of the
+            game, and Steam's Play cannot reach it: `rungameid` starts the
+            executable Steam registered and nothing else. So it gets its own
+            button rather than quietly changing what Play does — which also
+            leaves running without it available, which is what somebody
+            diagnosing a broken load order wants. */}
+        {screen === "mods" && game?.loaderKind === "launcher" && (
+          <button
+            className="btn"
+            onClick={onLaunchWithLoader}
+            disabled={busy || !game.installDir || !game.loaderOverrideActive}
+            title={
+              !game.installDir
+                ? "Steam does not have this game installed"
+                : !game.loaderOverrideActive
+                  ? `${game.loaderName} is not installed yet. Add it as a mod and press Apply.`
+                  : `Start ${game.loaderName} instead of the game`
+            }
+          >
+            <Icon.play /> Play with {game.loaderName}
           </button>
         )}
       </div>
@@ -1732,7 +1781,14 @@ function LibraryScreen({
             )}
           </div>
 
-          {active.loaderName && !active.loaderOverrideActive && (
+          {/* Only a DLL proxy has anything to set up. A launcher registers
+              nothing — offering to "set up SKSE" would write a Wine override
+              for a DLL that does not exist, and then still report it as not
+              set up, because what a launcher needs is to be installed as a mod
+              and then started. */}
+          {active.loaderKind === "dll-proxy" &&
+            active.loaderName &&
+            !active.loaderOverrideActive && (
             <>
               <div className="lib-group-note">
                 {active.protonPrefix

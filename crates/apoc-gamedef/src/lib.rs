@@ -26,6 +26,8 @@ pub enum GameDefError {
     NotFound(String),
     #[error("game profile '{0}' declares load_order = \"explicit\" but no [plugin_list] section, so nothing could write the list it claims to manage")]
     ExplicitWithoutPluginList(String),
+    #[error("game profile '{0}' declares a loader of kind \"launcher\" but no executable, so nothing could start the loader it claims to have")]
+    LauncherWithoutExecutable(String),
 }
 
 /// Refuse a profile whose claims and means disagree.
@@ -36,6 +38,9 @@ pub enum GameDefError {
 /// which is the exact failure the Skyrim profile spent three releases avoiding
 /// by declaring `priority` and saying why in a comment.
 ///
+/// A loader of kind `launcher` is the same rule again: the kind promises there
+/// is something to start, and `executable` is the only thing that says what.
+///
 /// Checked here rather than in `apoc-domain` because it is a rule about a
 /// document being well-formed, and the domain crate describes what a profile
 /// *is* rather than which ones are worth loading.
@@ -43,6 +48,13 @@ fn check_coherent(profile: &GameProfile) -> Result<(), GameDefError> {
     if profile.load_order == apoc_domain::LoadOrderPolicy::Explicit && profile.plugin_list.is_none()
     {
         return Err(GameDefError::ExplicitWithoutPluginList(profile.id.clone()));
+    }
+    if let Some(loader) = &profile.loader {
+        if loader.kind == apoc_domain::LoaderKind::Launcher
+            && loader.executable.as_deref().unwrap_or("").is_empty()
+        {
+            return Err(GameDefError::LauncherWithoutExecutable(profile.id.clone()));
+        }
     }
     Ok(())
 }
@@ -230,14 +242,51 @@ mod tests {
     }
 
     #[test]
-    fn skyrim_declares_no_loader_rather_than_the_wrong_one() {
-        // SKSE is a separate launcher plus a DLL that nothing proxies, and
-        // LoaderKind offers only `none` and `dll-proxy`. Declaring dll-proxy
-        // would write a Wine override for a DLL that overrides nothing and
-        // report "loader ready" when nothing had been set up.
+    fn skyrim_declares_skse_as_a_launcher_and_names_what_to_run() {
+        // This asserted `g.loader.is_none()` until `launcher` existed: with only
+        // `none` and `dll-proxy` to choose from, declaring dll-proxy would have
+        // written a Wine override for a DLL that overrides nothing and reported
+        // "loader ready" when nothing had been set up. Declaring the loader is
+        // only honest now because a kind exists that describes it.
         let src = LocalBuiltin::new();
         let g = src.get("skyrim-special-edition").expect("skyrim present");
-        assert!(g.loader.is_none());
+        let loader = g.loader.as_ref().expect("SKSE is declared");
+
+        assert_eq!(loader.name, "SKSE");
+        assert_eq!(loader.kind, LoaderKind::Launcher);
+        assert_eq!(loader.launcher_executable(), Some("skse64_loader.exe"));
+
+        // Nothing to provision: no proxy DLL, and no Proton section, because
+        // there is no registry value a launcher needs.
+        assert!(loader.proxy_dll.is_none());
+        assert!(loader.proxy_dlls().is_empty());
+        assert!(loader.dll_overrides().is_empty());
+        assert!(loader.proton.steam_launch_options.is_none());
+    }
+
+    /// The rule that keeps the kind and the means together, like
+    /// `explicit` and `[plugin_list]`.
+    #[test]
+    fn a_launcher_without_an_executable_is_refused() {
+        let mut profile = LocalBuiltin::new()
+            .get("skyrim-special-edition")
+            .expect("skyrim present");
+        profile.loader.as_mut().unwrap().executable = None;
+
+        let err = check_coherent(&profile).expect_err("nothing could be started");
+        assert!(matches!(err, GameDefError::LauncherWithoutExecutable(id) if id == profile.id));
+    }
+
+    /// A DLL-proxy profile carrying the field anyway does not become a launcher
+    /// by accident.
+    #[test]
+    fn only_a_launcher_answers_with_an_executable() {
+        let mut cp = LocalBuiltin::new().get("cyberpunk-2077").expect("present");
+        let loader = cp.loader.as_mut().unwrap();
+        loader.executable = Some("something.exe".into());
+
+        assert_eq!(loader.kind, LoaderKind::DllProxy);
+        assert_eq!(loader.launcher_executable(), None);
     }
 
     #[test]

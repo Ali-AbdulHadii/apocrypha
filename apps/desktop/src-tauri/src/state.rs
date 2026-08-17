@@ -129,7 +129,18 @@ pub struct GameView {
     /// Loader name, e.g. "REFramework".
     pub loader_name: Option<String>,
     pub loader_dll: Option<String>,
-    /// Whether the DLL override is currently registered in the prefix.
+    /// How the loader works, as the profile spells it: `dll-proxy`, `launcher`
+    /// or `none`.
+    ///
+    /// The interface needs the distinction because the two kinds are set up in
+    /// different ways and only one of them can be started: a DLL proxy is
+    /// registered in the prefix, a launcher is run instead of the game.
+    pub loader_kind: Option<String>,
+    /// The executable a launcher runs, e.g. `skse64_loader.exe`. `None` for
+    /// every other kind.
+    pub loader_executable: Option<String>,
+    /// Whether the loader would actually run: the DLL override registered for a
+    /// proxy, the executable present on disk for a launcher.
     pub loader_override_active: bool,
     pub steam_launch_options: Option<String>,
     /// Nexus Mods domain, so an incoming `nxm://` link can be routed to the

@@ -51,18 +51,6 @@ formats = ["fomod", "loose-roots"]
 # scanner reads to decide which deployed files belong in the list at all.
 plugin_extensions = ["esp", "esm", "esl"]
 
-# There is no `[loader]` section, and that is deliberate. SKSE is a separate
-# launcher executable plus a DLL that nothing proxies, and `LoaderKind` offers
-# only `none` and `dll-proxy`. Declaring `dll-proxy` would write a Wine DLL
-# override for a DLL that overrides nothing, and would report "loader ready"
-# when nothing had been set up. Showing no loader is the honest option until a
-# launcher kind exists.
-#
-# It also means nothing here claims SKSE's files, which is why `[root_files]`
-# below exists: the two questions are separate. Where a mod's files go is a
-# deployment question and is answered; whether a loader is configured is a
-# launch question and still is not.
-
 [detection]
 steam_app_id = 489830
 executable = "SkyrimSE.exe"
@@ -180,3 +168,25 @@ folder = "Root"
 # something else at an archive root, and it is worth it: an ENB without its
 # `enblocal.ini` is an ENB that does not run.
 patterns = ["*.exe", "*.dll", "*.bin", "*.ini"]
+
+# SKSE, the Skyrim Script Extender.
+#
+# This section said nothing for three releases, because `LoaderKind` offered
+# only `none` and `dll-proxy`: declaring `dll-proxy` would have written a Wine
+# DLL override for a DLL that overrides nothing and reported "loader ready"
+# when nothing had been set up, so declaring no loader at all was the honest
+# option. `launcher` is the kind that was missing.
+#
+# Nothing is provisioned for a launcher. There is no proxy DLL and no
+# `[loader.proton]` section, because there is no registry value to write: the
+# extender installs like any other mod through `[root_files]` above, and the
+# only thing left is to *start* it instead of the game.
+[loader]
+name = "SKSE"
+kind = "launcher"
+
+# What Steam's Play button cannot reach. `steam://rungameid/489830` starts the
+# executable Steam has registered and nothing else, so running this one is a
+# separate action, offered as its own button rather than by quietly changing
+# what Play means.
+executable = "skse64_loader.exe"
