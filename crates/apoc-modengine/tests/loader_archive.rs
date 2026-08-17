@@ -29,6 +29,7 @@ fn mhw_rules() -> GameRules {
         root_files: vec![("dinput8.dll".into(), "dinput8.dll".into())],
         accepts_pak: true,
         rewrap: vec![],
+        rewrap_extensions: Vec::new(),
         canonical_case: vec!["STM".into()],
         formats: Vec::new(),
         fomod_dest_prefix: String::new(),

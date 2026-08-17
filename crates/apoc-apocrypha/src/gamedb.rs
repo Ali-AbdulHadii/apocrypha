@@ -314,7 +314,16 @@ fn validate(profile: &GameProfile) -> Result<(), String> {
         paths.push(("a deploy target", &t.target));
     }
     for r in &profile.rewrap {
-        paths.push(("a rewrap folder", &r.folder));
+        if let Some(folder) = &r.folder {
+            paths.push(("a rewrap folder", folder));
+        }
+        // An extension is matched against a filename and never joined onto
+        // anything, so a separator in one could not escape — it simply could
+        // never match. Refused anyway: a rule that cannot match is a profile
+        // that silently does nothing, and saying so is more useful.
+        if let Some(extension) = &r.extension {
+            paths.push(("a rewrap extension", extension));
+        }
         paths.push(("a rewrap prefix", &r.prefix));
     }
     for c in &profile.canonical_case {
@@ -526,7 +535,10 @@ struct WireDeployTarget {
 
 #[derive(Debug, Deserialize)]
 struct WireRewrap {
-    folder: String,
+    #[serde(default)]
+    folder: Option<String>,
+    #[serde(default)]
+    extension: Option<String>,
     prefix: String,
 }
 
@@ -650,6 +662,7 @@ impl WireProfile {
                 .into_iter()
                 .map(|r| RewrapRule {
                     folder: r.folder,
+                    extension: r.extension,
                     prefix: r.prefix,
                 })
                 .collect(),

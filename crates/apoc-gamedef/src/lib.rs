@@ -1,4 +1,4 @@
-//! The game-definition plugin system.
+﻿//! The game-definition plugin system.
 //!
 //! Games are loaded as declarative [`GameProfile`] documents. The
 //! [`GameDatabaseSource`] port abstracts *where* profiles come from; the
@@ -183,7 +183,7 @@ mod tests {
             assert!(
                 g.rewrap
                     .iter()
-                    .any(|r| r.folder == folder && r.prefix == "Data"),
+                    .any(|r| r.folder.as_deref() == Some(folder) && r.prefix == "Data"),
                 "{folder} is not rewrapped under Data"
             );
         }
@@ -402,7 +402,7 @@ mod tests {
             assert!(
                 g.rewrap
                     .iter()
-                    .any(|r| r.folder == folder && r.prefix == prefix),
+                    .any(|r| r.folder.as_deref() == Some(folder) && r.prefix == prefix),
                 "{folder} is not rewrapped under {prefix}"
             );
         }

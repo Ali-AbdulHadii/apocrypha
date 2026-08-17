@@ -238,14 +238,29 @@ impl PakChainSpec {
     }
 }
 
-/// A folder that mod authors sometimes ship at the archive root because they
-/// zipped the *inside* of a payload directory. `autorun/` at the root really
-/// means `reframework/autorun/`, and without this the mod imports as zero files.
+/// Something shipped at the archive root that is missing the directory it
+/// belongs under, because the author zipped the *inside* of a payload folder.
+///
+/// Two shapes, because authors drop the prefix off two kinds of thing:
+///
+/// * A **folder**. `autorun/` at the root really means `reframework/autorun/`,
+///   and without this the mod imports as zero files.
+/// * A **file, by extension**. A Skyrim archive very often simply *is* the
+///   `Data` folder: SkyUI ships `SkyUI_SE.esp` and `SkyUI_SE.bsa` with nothing
+///   around them at all. No folder rule can catch that, because there is no
+///   folder.
+///
+/// Exactly one of the two is set. A rule naming neither matches nothing, and a
+/// rule naming both would be asking one entry to answer two questions.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RewrapRule {
     /// Folder name found at the archive root.
-    pub folder: String,
+    #[serde(default)]
+    pub folder: Option<String>,
+    /// File extension found directly at the archive root, without its dot.
+    #[serde(default)]
+    pub extension: Option<String>,
     /// Prefix to restore above it.
     pub prefix: String,
 }

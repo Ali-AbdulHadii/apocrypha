@@ -28,6 +28,12 @@ fn creation_engine_rules() -> GameRules {
             "*.bin".into(),
             "*.ini".into(),
         ],
+        rewrap_extensions: vec![
+            ("esp".into(), "Data".into()),
+            ("esm".into(), "Data".into()),
+            ("esl".into(), "Data".into()),
+            ("bsa".into(), "Data".into()),
+        ],
         ..GameRules::default()
     }
 }

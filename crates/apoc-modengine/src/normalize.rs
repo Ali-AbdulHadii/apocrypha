@@ -132,6 +132,16 @@ fn detect(index: &ArchiveIndex, rules: &GameRules) -> InstallerModel {
                         || rules.strip_root_folder(&e.path).is_some())
             });
 
+            // An archive that simply *is* the payload folder: SkyUI ships an
+            // `.esp` and a `.bsa` and nothing else, so there is no directory
+            // anywhere in it for the check above to recognise. Without this it
+            // classifies as unknown and installs nothing at all, which is what
+            // it used to do.
+            let has_loose_payload = index
+                .entries
+                .iter()
+                .any(|e| !e.path.contains('/') && rules.rewrap_file_prefix(&e.path).is_some());
+
             // Files belonging beside the game executable, e.g. SKSE's loader
             // and its versioned library. Counted so an archive that is *only*
             // those — a bare ENB drop, a script extender with no `Data` — is
@@ -150,7 +160,7 @@ fn detect(index: &ArchiveIndex, rules: &GameRules) -> InstallerModel {
                 InstallerModel::FlatNatives
             } else if has_ref {
                 InstallerModel::ReframeworkOnly
-            } else if has_declared_root || has_root_files {
+            } else if has_declared_root || has_root_files || has_loose_payload {
                 InstallerModel::LooseRoots
             } else if has_loader {
                 InstallerModel::Loader
@@ -246,6 +256,25 @@ fn payload_for(index: &ArchiveIndex, folder: &str, rules: &GameRules) -> Vec<Fil
                 priority: 0,
             });
             continue;
+        }
+
+        // A bare file at the archive root whose extension says where it belongs:
+        // `SkyUI_SE.esp` means `Data/SkyUI_SE.esp`. Checked before the folder
+        // rule because there is no folder here to match — this is the case
+        // where the author dropped the directory entirely rather than zipping
+        // its inside.
+        if !rest.contains('/') {
+            if let Some(prefix) = rules.rewrap_file_prefix(rest) {
+                let rewrapped = format!("{prefix}/{rest}");
+                out.push(FilePayload {
+                    archive_path: e.archive_path.clone(),
+                    game_rel_path: rules.canonicalize(&rewrapped),
+                    root: DeployRoot::from_root_dir(&prefix.to_ascii_lowercase()),
+                    size: e.size,
+                    priority: 0,
+                });
+                continue;
+            }
         }
 
         // The archive was packed from the inside out: restore the prefix the
@@ -479,7 +508,11 @@ fn unclaimed_root_files(index: &ArchiveIndex, rules: &GameRules) -> Vec<String> 
         .iter()
         .map(|e| e.path.as_str())
         .filter(|p| !p.contains('/'))
-        .filter(|p| !rules.matches_root_pattern(p) && !rules.is_root_file(p))
+        .filter(|p| {
+            !rules.matches_root_pattern(p)
+                && !rules.is_root_file(p)
+                && rules.rewrap_file_prefix(p).is_none()
+        })
         .filter(|p| {
             !std::path::Path::new(p)
                 .extension()
