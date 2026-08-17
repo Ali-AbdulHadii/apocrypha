@@ -20,22 +20,19 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use zip::CompressionMethod;
 
+/// The defaults are already RE Engine's, so only the three fields this test
+/// actually depends on are named. Spreading the rest is not brevity: nothing
+/// here is about the shape of `GameRules`, and listing every field would make
+/// this file fail to compile the next time somebody adds one.
 fn wilds_rules() -> GameRules {
     GameRules {
-        payload_roots: vec!["natives".into(), "reframework".into()],
-        root_files: Vec::new(),
         accepts_pak: true,
         rewrap: vec![
             ("autorun".into(), "reframework".into()),
             ("STM".into(), "natives".into()),
         ],
         canonical_case: vec!["STM".into()],
-        formats: Vec::new(),
-        fomod_dest_prefix: String::new(),
-        plugin_extensions: Vec::new(),
-        manages_plugin_list: false,
-        root_folder: None,
-        root_patterns: Vec::new(),
+        ..Default::default()
     }
 }
 
