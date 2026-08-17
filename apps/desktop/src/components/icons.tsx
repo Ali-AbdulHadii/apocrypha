@@ -120,6 +120,35 @@ export const Icon = {
   check: make(<path d="m5 13 4 4L19 7" />),
   /** The "some, but not all" half of a select-all checkbox. */
   minus: make(<path d="M5 12h14" />),
+  /* A shackle and a body, drawn open or closed by moving the shackle's left leg
+     rather than by adding a second shape, so the two read as one control in two
+     states and the padlock does not appear to change size when it is toggled. */
+  lock: make(
+    <>
+      <rect x="4" y="10.5" width="16" height="10" rx="2" />
+      <path d="M8 10.5V7a4 4 0 0 1 8 0v3.5" />
+    </>,
+  ),
+  unlock: make(
+    <>
+      <rect x="4" y="10.5" width="16" height="10" rx="2" />
+      <path d="M8 10.5V7a4 4 0 0 1 7.5-2" />
+    </>,
+  ),
+  /* Conflict direction. Up is "this mod takes the file", down is "this mod
+     loses it", matching the list, where later rows sit lower and win. */
+  arrowUp: make(
+    <>
+      <path d="M12 19V5" />
+      <path d="m6 11 6-6 6 6" />
+    </>,
+  ),
+  arrowDown: make(
+    <>
+      <path d="M12 5v14" />
+      <path d="m6 13 6 6 6-6" />
+    </>,
+  ),
   /* Outlined like the rest of the set rather than a solid triangle, so it sits
      beside Add mod as a sibling and not as a media control. */
   play: make(<path d="M8 5.5v13l11-6.5-11-6.5Z" />),
@@ -165,10 +194,18 @@ export const Icon = {
       <path d="M10 11v6M14 11v6" />
     </>,
   ),
+  /* Two bars, not six dots.
+
+     The dots version drew zero-length segments and relied on the round cap to
+     make them visible, so each one came out at exactly the stroke width: 1.5 on
+     a 24 grid is 1 physical pixel at the 16px this is actually rendered at. The
+     one control that says "this row can be moved" was invisible on every screen
+     that used it. Bars carry the same meaning at the same weight as the rest of
+     the set, and they survive being small. */
   grip: make(
     <>
-      <path d="M9 6h.01M9 12h.01M9 18h.01" />
-      <path d="M15 6h.01M15 12h.01M15 18h.01" />
+      <path d="M9 5v14" />
+      <path d="M15 5v14" />
     </>,
   ),
 

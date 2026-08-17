@@ -254,3 +254,182 @@
 .order-row .mod-name {
   min-width: 0;
 }
+
+/* ===========================================================================
+   The merged list: groups, conflict marks, and the compact row.
+
+   Written here rather than in app.css because it is all one screen's
+   vocabulary, and because app.css already owns `.mod-row` and `.mod-group`,
+   which this extends rather than replaces.
+   ========================================================================= */
+
+:root {
+  /* Colour tokens a group can be painted in. Named for their role in the
+     palette rather than for a hue, so a retheme moves them together and no
+     group can end up invisible against a background it did not expect. */
+  --group-default: var(--border-strong);
+  --group-accent: var(--accent);
+  --group-warning: var(--warning);
+  --group-info: var(--info);
+  --group-success: var(--success);
+}
+
+/* --------------------------------------------------------- group header --- */
+
+/* The colour is a stripe on the leading edge rather than a fill. A filled
+   header competes with the rows it introduces; a stripe is findable while
+   scrolling and costs the content nothing. */
+.mod-group {
+  border-left: 3px solid var(--group-default);
+}
+
+.mod-group[data-color="accent"] { border-left-color: var(--group-accent); }
+.mod-group[data-color="warning"] { border-left-color: var(--group-warning); }
+.mod-group[data-color="info"] { border-left-color: var(--group-info); }
+.mod-group[data-color="success"] { border-left-color: var(--group-success); }
+
+.mod-group[data-locked="true"] .mod-group-head {
+  background: var(--bg-active);
+}
+
+.mod-group-toggle,
+button.mod-group-name {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+
+button.mod-group-name {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Kept out of the way until the group is pointed at: a header carrying six
+   buttons at all times reads as a toolbar rather than as a label. They stay
+   reachable from the keyboard whether or not they are visible. */
+.mod-group-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+  margin-left: auto;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+
+.mod-group-head:hover .mod-group-actions,
+.mod-group-actions:focus-within {
+  opacity: 1;
+}
+
+.mod-group[data-locked="true"] .mod-group-actions {
+  opacity: 1;
+}
+
+/* ---------------------------------------------------------- compact row --- */
+
+/* Denser than the library row it replaces: this list is read by scanning down
+   a column, so the vertical rhythm matters more than the breathing room. */
+.mod-row {
+  padding: var(--sp-2) var(--sp-3);
+  gap: var(--sp-3);
+}
+
+.mod-main {
+  min-width: 0;
+  flex: 1;
+}
+
+/* Fixed width and tabular figures so the ids form a column that can be read
+   down rather than a ragged edge that has to be read across. */
+.mod-id {
+  flex-shrink: 0;
+  min-width: 7ch;
+  text-align: right;
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-tertiary);
+}
+
+.mod-conflicts {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  flex-shrink: 0;
+  /* Reserved whether or not there is anything to draw, so a row does not
+     reflow when a reorder changes who wins. */
+  min-width: 9ch;
+  justify-content: flex-end;
+}
+
+.mod-conflict {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 var(--sp-2);
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  cursor: help;
+}
+
+/* Winning is not good news and losing is not bad news: both are ordinary, and
+   colouring them as success and danger would tell people to go and fix
+   something that is working. Direction carries the meaning, weight carries the
+   emphasis. */
+.mod-conflict.over {
+  color: var(--text-secondary);
+  background: var(--bg-hover);
+}
+
+.mod-conflict.under {
+  color: var(--warning);
+  background: var(--warning-bg);
+}
+
+/* The grip has to read as a grip. Six dots at a tertiary colour disappear
+   against a raised row, which makes the one control that says "this row moves"
+   the least visible thing on it. Secondary by default, primary under the
+   pointer, and a hit area larger than the dots it draws. */
+.order-list .mod-row .drag-handle {
+  color: var(--text-secondary);
+  padding: var(--sp-2) var(--sp-1);
+  margin: 0;
+}
+
+.order-list .mod-row:hover .drag-handle {
+  color: var(--text-primary);
+}
+
+/* The row is a drag surface, so the text on it must not be selectable: a drag
+   that starts on a mod's name would otherwise sweep a selection across the
+   list instead of moving anything. */
+.order-list .mod-row {
+  user-select: none;
+  touch-action: pan-y;
+}
+
+.order-list .mod-row .drag-handle[data-fixed="true"] {
+  opacity: 0.3;
+  cursor: default;
+}
+
+/* Sorted by anything but load order there is nothing a drop could write, so
+   the note says why rather than the grips pretending otherwise. */
+.order-note {
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-sunken);
+  color: var(--text-tertiary);
+}

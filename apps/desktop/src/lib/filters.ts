@@ -25,12 +25,23 @@
 
 export type SortKey = "order" | "name" | "size" | "added";
 export type StatusFilter = "all" | "enabled" | "disabled";
+/**
+ * Whether a mod is taking files from another, losing them to one, or neither.
+ *
+ * "Which of these is burying my textures" is the question this list is opened
+ * with most often, and answering it by reading arrows down four hundred rows is
+ * not answering it.
+ */
+export type ConflictFilter = "all" | "overwriting" | "overwritten" | "clean";
 
 export interface Criteria {
   query: string;
   status: StatusFilter;
   category: string;
   sort: SortKey;
+  /** A group id as a string, `"none"` for ungrouped, or `"all"`. */
+  group: string;
+  conflicts: ConflictFilter;
 }
 
 export interface SavedFilter {
@@ -43,6 +54,8 @@ export const DEFAULT_CRITERIA: Criteria = {
   status: "all",
   category: "all",
   sort: "order",
+  group: "all",
+  conflicts: "all",
 };
 
 /** Whether anything is actually being filtered, for a "clear" affordance. */
@@ -51,7 +64,9 @@ export function isDefault(c: Criteria): boolean {
     c.query.trim() === "" &&
     c.status === DEFAULT_CRITERIA.status &&
     c.category === DEFAULT_CRITERIA.category &&
-    c.sort === DEFAULT_CRITERIA.sort
+    c.sort === DEFAULT_CRITERIA.sort &&
+    c.group === DEFAULT_CRITERIA.group &&
+    c.conflicts === DEFAULT_CRITERIA.conflicts
   );
 }
 
@@ -60,7 +75,9 @@ export function sameCriteria(a: Criteria, b: Criteria): boolean {
     a.query === b.query &&
     a.status === b.status &&
     a.category === b.category &&
-    a.sort === b.sort
+    a.sort === b.sort &&
+    a.group === b.group &&
+    a.conflicts === b.conflicts
   );
 }
 
@@ -117,6 +134,12 @@ function coerce(value: unknown): Criteria {
   const c = (value ?? {}) as Partial<Criteria>;
   const sorts: SortKey[] = ["order", "name", "size", "added"];
   const states: StatusFilter[] = ["all", "enabled", "disabled"];
+  const conflicts: ConflictFilter[] = [
+    "all",
+    "overwriting",
+    "overwritten",
+    "clean",
+  ];
   return {
     query: typeof c.query === "string" ? c.query : DEFAULT_CRITERIA.query,
     status:
@@ -129,6 +152,16 @@ function coerce(value: unknown): Criteria {
       typeof c.sort === "string" && sorts.includes(c.sort as SortKey)
         ? (c.sort as SortKey)
         : DEFAULT_CRITERIA.sort,
+    // Not checked against the groups that exist, because this is read before
+    // they are known and a group can be deleted between two launches. A filter
+    // naming a group that has gone shows nothing, which the empty state already
+    // explains and a clear button already fixes.
+    group: typeof c.group === "string" ? c.group : DEFAULT_CRITERIA.group,
+    conflicts:
+      typeof c.conflicts === "string" &&
+      conflicts.includes(c.conflicts as ConflictFilter)
+        ? (c.conflicts as ConflictFilter)
+        : DEFAULT_CRITERIA.conflicts,
   };
 }
 

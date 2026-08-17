@@ -67,6 +67,57 @@ export interface ModView {
    * leaves the list empty.
    */
   warnings?: string[];
+  /** The mod's Nexus page id, when it came from there. */
+  nexusModId: number | null;
+  /**
+   * The load-order group this mod sits in.
+   *
+   * Nothing to do with `groups` above, which are the option groups a FOMOD
+   * installer declares. Two unrelated things wear the word "group" in this
+   * application and this is the one about load order.
+   */
+  groupId: number | null;
+}
+
+/** A named block of mods in the load order. */
+export interface ModGroupView {
+  id: number;
+  name: string;
+  /** A colour token, resolved against the stylesheet when it is painted. */
+  color: string;
+  locked: boolean;
+  collapsed: boolean;
+}
+
+/** Where a dragged thing landed, named against a row rather than an index. */
+export type Placement =
+  | { at: "start" }
+  | { at: "end" }
+  | { at: "before"; anchor: string }
+  | { at: "after"; anchor: string };
+
+export type MoveSubject =
+  | { kind: "mod"; id: string }
+  | { kind: "group"; id: number };
+
+/** What the drag does to the moved mod's group. */
+export type Belonging =
+  | { kind: "keep" }
+  | { kind: "join"; groupId: number }
+  | { kind: "leave" };
+
+/**
+ * One drag, sent as what the person did rather than as the order it produced.
+ *
+ * The list can be searched, filtered and collapsed, so the row above a drop
+ * point is very often not the entry above it in the true order. An anchor id
+ * means the same thing in every one of those views, and the backend replays it
+ * against the order it currently holds rather than the one this client last saw.
+ */
+export interface OrderMove {
+  subject: MoveSubject;
+  placement: Placement;
+  belonging: Belonging;
 }
 
 /**
@@ -643,6 +694,33 @@ export const api = {
     call<string[]>("set_mod_selection", { gameId, modId, selection }),
   setModOrder: (gameId: string, orderedIds: string[]) =>
     call<void>("set_mod_order", { gameId, orderedIds }),
+
+  /** Replay one drag. Returns the whole order as it then stands. */
+  moveInOrder: (gameId: string, move: OrderMove) =>
+    call<string[]>("move_in_order", { gameId, move }),
+  modGroups: (gameId: string) =>
+    call<ModGroupView[]>("list_mod_groups", { gameId }),
+  createModGroup: (gameId: string, name: string, color: string) =>
+    call<number>("create_mod_group", { gameId, name, color }),
+  updateModGroup: (
+    groupId: number,
+    patch: { name?: string; color?: string; collapsed?: boolean },
+  ) =>
+    call<void>("update_mod_group", {
+      groupId,
+      name: patch.name ?? null,
+      color: patch.color ?? null,
+      collapsed: patch.collapsed ?? null,
+    }),
+  setModGroupLocked: (gameId: string, groupId: number, locked: boolean) =>
+    call<void>("set_mod_group_locked", { gameId, groupId, locked }),
+  deleteModGroup: (gameId: string, groupId: number) =>
+    call<void>("delete_mod_group", { gameId, groupId }),
+  assignToModGroup: (
+    gameId: string,
+    groupId: number | null,
+    modIds: string[],
+  ) => call<void>("assign_to_mod_group", { gameId, groupId, modIds }),
 
   /**
    * The game's plugin list, or null for a game that has no such concept.

@@ -1,21 +1,38 @@
 /**
- * Mod list.
+ * The mod list, which is also the load order.
  *
- * Built for large libraries: mods group into collapsible categories, can be
- * searched and filtered, and carry an explicit applied/pending badge so it is
- * obvious what is actually in the game right now.
+ * These were two screens. The library searched, filtered and grouped but could
+ * not be rearranged; the load order could be rearranged but showed nothing but
+ * a name, and only the mods that were switched on. The split was deliberate and
+ * its reasoning is worth writing down because it was not wrong: an unfiltered
+ * list is always draggable, so keeping the order flat meant never having to say
+ * "clear your filters before you can drag".
  *
- * Two decisions keep a few hundred mods smooth here.
+ * What changed is the answer to that problem. A drop no longer means "put this
+ * at row seven", which is meaningless when eleven rows between six and seven are
+ * filtered out. It means "put this after that mod", which means the same thing
+ * in every view, so the list can be filtered and draggable at once. With that
+ * gone the split was costing two places to look for one mod and two
+ * implementations of the same search.
  *
- * 1. Load order is not edited on this screen. It has its own screen now, so
- *    this one never mounts drag machinery. Rows still show their position,
- *    because knowing where a mod sits is useful even where you cannot move it.
+ * Four things keep a few hundred mods smooth and legible here.
  *
- * 2. Past a threshold each category body is windowed: only the rows near the
- *    scroll viewport are in the DOM and a plain spacer stands in for the rest.
- *    Row height is measured from a real row rather than written down here,
- *    because spacing and text size are user settings and any baked in number
- *    would be wrong the moment somebody changes them.
+ * 1. **Sections are groups, not categories.** A category is a fact about a mod
+ *    and belongs in the filter, where it now lives. A section is a decision
+ *    somebody made about their order, so it can be named, coloured, locked, and
+ *    dragged as a block.
+ *
+ * 2. **A locked group refuses the drag before it starts**, and the store refuses
+ *    it again if anything gets past. The second refusal is the real one.
+ *
+ * 3. **Dragging needs load order sort.** Sorted by name, a drop has nothing to
+ *    write, so the grips go away and say why rather than lying about it.
+ *
+ * 4. Past a threshold the rows are windowed: only those near the viewport are in
+ *    the DOM and a plain spacer stands in for the rest. Row height is measured
+ *    from a real row rather than written down here, because spacing and text
+ *    size are user settings and any baked in number would be wrong the moment
+ *    somebody changes them.
  *
  * Archives can also be dropped straight onto this screen. The zone is drawn
  * only while a drag is actually over the window, so a full library is not
@@ -24,7 +41,13 @@
  * do next. A dropped archive takes exactly the same path as Add mod.
  */
 
-import { AnimatePresence, motion } from "framer-motion";
+import {
+  AnimatePresence,
+  motion,
+  Reorder,
+  useDragControls,
+  useReducedMotion,
+} from "framer-motion";
 import {
   useCallback,
   useEffect,
@@ -33,7 +56,20 @@ import {
   useRef,
   useState,
 } from "react";
-import { formatBytes, type ModView } from "../lib/api";
+import {
+  formatBytes,
+  truncatePath,
+  type ConflictView,
+  type ModGroupView,
+  type ModView,
+  type OrderMove,
+} from "../lib/api";
+import {
+  conflictTallies,
+  lossCount,
+  winCount,
+  type Tally,
+} from "../lib/conflicts";
 import { useFileDrop } from "../lib/drop";
 import {
   DEFAULT_CRITERIA,
@@ -55,18 +91,35 @@ export type { SortKey };
 
 export interface ModsScreenProps {
   mods: ModView[];
+  /** The groups in this profile, in the order their blocks appear. */
+  groups: ModGroupView[];
+  /** Recomputed after every reorder: who claims each contested file. */
+  conflicts: ConflictView[];
+  /** Game-relative path to the mod id pinned to win it. */
+  overrides: Record<string, string>;
   /** Ids of mods whose files are currently in the game folder. */
   appliedIds: Set<string>;
   /** True when enabled mods differ from what is deployed. */
   dirty: boolean;
   /** Which game's filters to remember. Null before one is chosen. */
   gameId: string | null;
+  busy?: boolean;
   onToggle: (mod: ModView, enabled: boolean) => void;
   /** Enable or disable a selection in one transaction. */
   onToggleMany: (ids: string[], enabled: boolean) => void;
   onConfigure: (mod: ModView) => void;
   onRemove: (mod: ModView) => void;
   onImport: () => void;
+  /** One drag, anchored to the row it landed against. */
+  onMove: (move: OrderMove) => void;
+  onCreateGroup: (name: string) => void;
+  onRenameGroup: (groupId: number, name: string) => void;
+  onCollapseGroup: (groupId: number, collapsed: boolean) => void;
+  onLockGroup: (groupId: number, locked: boolean) => void;
+  onDeleteGroup: (groupId: number) => void;
+  onAssignToGroup: (groupId: number | null, modIds: string[]) => void;
+  onOverride: (path: string, modId: string) => void;
+  onClearOverride: (path: string) => void;
   /**
    * An archive dropped on the window, by path. Given every dropped path in the
    * order the OS listed them; what to do with more than one is decided there,
@@ -75,8 +128,6 @@ export interface ModsScreenProps {
   onDropArchives?: (paths: string[]) => void;
   /** False while something else already owns the install flow. */
   canDrop?: boolean;
-  /** Takes the user to the Load order screen, where the order is editable. */
-  onOpenLoadOrder?: () => void;
 }
 
 /** Below this many rows, windowing costs more than it saves. */
@@ -316,17 +367,29 @@ function useRowWindow(count: number, enabled: boolean) {
 
 export function ModsScreen({
   mods,
+  groups,
+  conflicts,
+  overrides,
   appliedIds,
   dirty,
   gameId,
+  busy = false,
   onToggle,
   onToggleMany,
   onConfigure,
   onRemove,
   onImport,
+  onMove,
+  onCreateGroup,
+  onRenameGroup,
+  onCollapseGroup,
+  onLockGroup,
+  onDeleteGroup,
+  onAssignToGroup,
+  onOverride,
+  onClearOverride,
   onDropArchives,
   canDrop = true,
-  onOpenLoadOrder,
 }: ModsScreenProps) {
   /**
    * The criteria, and the game they were loaded for, as one value.
@@ -349,15 +412,24 @@ export function ModsScreen({
   const [saved, setSaved] = useState<SavedFilter[]>(() => loadSaved(gameId));
   const [naming, setNaming] = useState(false);
   const [draftName, setDraftName] = useState("");
-  const { query, sort, status, category } = criteria;
+  const {
+    query,
+    sort,
+    status,
+    category,
+    group,
+    conflicts: conflictFilter,
+  } = criteria;
 
   const setCriteria = useCallback(
     (next: Criteria) => setFilters((prev) => ({ ...prev, criteria: next })),
     [],
   );
 
-  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  /** Read out after a keyboard move, which is otherwise silent. */
+  const [announcement, setAnnouncement] = useState("");
+  const reduceMotion = useReducedMotion();
   /** Where the last checkbox click landed, so shift-click has a range to span. */
   const anchorRef = useRef<string | null>(null);
   /** Set by Escape, so a commit-on-blur knows the naming was abandoned. */
@@ -398,17 +470,36 @@ export function ModsScreen({
     return ["all", ...[...set].sort((a, b) => a.localeCompare(b))];
   }, [mods]);
 
+  /** Who overwrites whom, from the conflicts already fetched for this order. */
+  const tallies = useMemo(
+    () => conflictTallies(conflicts, overrides),
+    [conflicts, overrides],
+  );
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     let list = mods.filter((m) => {
       if (status === "enabled" && !m.enabled) return false;
       if (status === "disabled" && m.enabled) return false;
       if (category !== "all" && categoryOf(m) !== category) return false;
+      if (group !== "all") {
+        const want = group === "none" ? null : Number(group);
+        if ((m.groupId ?? null) !== want) return false;
+      }
+      if (conflictFilter !== "all") {
+        const t = tallies.get(m.id);
+        const wins = (t?.overwrites.size ?? 0) > 0;
+        const loses = (t?.overwrittenBy.size ?? 0) > 0;
+        if (conflictFilter === "overwriting" && !wins) return false;
+        if (conflictFilter === "overwritten" && !loses) return false;
+        if (conflictFilter === "clean" && (wins || loses)) return false;
+      }
       if (!q) return true;
       return (
         m.name.toLowerCase().includes(q) ||
         (m.author ?? "").toLowerCase().includes(q) ||
         (m.category ?? "").toLowerCase().includes(q) ||
+        String(m.nexusModId ?? "").includes(q) ||
         m.installerModel.toLowerCase().includes(q)
       );
     });
@@ -420,20 +511,44 @@ export function ModsScreen({
     } else if (sort === "added") {
       list = [...list].sort((a, b) => b.addedAt - a.addedAt);
     } else {
-      list = [...list].sort((a, b) => a.priority - b.priority);
+      // Ties broken by id, which is how the store breaks them too. It sorts by
+      // `priority, mod_id` while the rows arrive ordered by import date, so
+      // where priorities are equal the two disagreed about what the order even
+      // was, and the first drag on such a profile rearranged everything rather
+      // than the one mod that was dragged. Equal priorities are the normal
+      // state of a library nobody has ordered yet.
+      list = [...list].sort(
+        (a, b) => a.priority - b.priority || a.id.localeCompare(b.id),
+      );
     }
     return list;
-  }, [mods, query, sort, status, category]);
+  }, [mods, query, sort, status, category, group, conflictFilter, tallies]);
 
-  const grouped = useMemo(() => {
-    const map = new Map<string, ModView[]>();
+  /**
+   * Only load order is an order. Any other sort is a view of the same mods, and
+   * a drop in it would have no position to write.
+   */
+  const canDrag = sort === "order" && !busy;
+
+  /**
+   * The list as sections: a run of mods with no group, then a group with its
+   * members, and so on, in the order the mods themselves are in.
+   *
+   * Built from the filtered list rather than from `groups`, so a group whose
+   * every member is filtered out simply is not drawn, and a group is never shown
+   * as empty when it is only hidden.
+   */
+  const sections = useMemo(() => {
+    const byId = new Map(groups.map((g) => [g.id, g]));
+    const out: { group: ModGroupView | null; items: ModView[] }[] = [];
     for (const m of filtered) {
-      const c = categoryOf(m);
-      if (!map.has(c)) map.set(c, []);
-      map.get(c)!.push(m);
+      const g = m.groupId != null ? (byId.get(m.groupId) ?? null) : null;
+      const last = out[out.length - 1];
+      if (last && (last.group?.id ?? null) === (g?.id ?? null)) last.items.push(m);
+      else out.push({ group: g, items: [m] });
     }
-    return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
-  }, [filtered]);
+    return out;
+  }, [filtered, groups]);
 
   /**
    * Windowing is decided on the whole visible list, not per category. What
@@ -500,6 +615,112 @@ export function ModsScreen({
     anchorRef.current = null;
   }, []);
 
+  const nameById = useMemo(
+    () => new Map(mods.map((m) => [m.id, m.name])),
+    [mods],
+  );
+
+  /** A mod's index in the visible list, which is what the arrows move within. */
+  const indexOf = useCallback(
+    (id: string) => filtered.findIndex((m) => m.id === id),
+    [filtered],
+  );
+
+  /**
+   * Turn what the list looks like after a drag into what the person did.
+   *
+   * Reorder hands back the whole visible sequence, which is not what gets sent:
+   * the visible sequence is a subset when anything is filtered, so a position in
+   * it names nothing on the other side. What is sent is the mod that moved and
+   * the row it came to rest under, both of which mean the same thing in a
+   * filtered list as in a whole one.
+   *
+   * Group membership is read from the rows either side of where it landed. A mod
+   * that comes to rest strictly between two members of one group has been put in
+   * that group; anywhere else, it has been taken out of whatever it was in.
+   * Dropping *onto* the boundary is deliberately "out": joining is the change
+   * that surprises people, so it takes the unambiguous gesture.
+   */
+  const onDrop = useCallback(
+    (nextVisible: string[]) => {
+      const before = filtered.map((m) => m.id);
+      const at = nextVisible.findIndex((id, i) => id !== before[i]);
+      if (at < 0) return;
+
+      // Two rows differ after any swap. The one that moved is whichever of them
+      // is not simply the other one displaced.
+      const candidate = nextVisible[at];
+      const moved =
+        before.indexOf(candidate) === at + 1 ? before[at] : candidate;
+      const to = nextVisible.indexOf(moved);
+      if (to < 0) return;
+
+      const byId = new Map(mods.map((m) => [m.id, m]));
+      const subject = byId.get(moved);
+      if (!subject) return;
+
+      const above = to > 0 ? byId.get(nextVisible[to - 1]) : undefined;
+      const below =
+        to + 1 < nextVisible.length ? byId.get(nextVisible[to + 1]) : undefined;
+      const inside =
+        above?.groupId != null && above.groupId === below?.groupId
+          ? above.groupId
+          : null;
+
+      const belonging: OrderMove["belonging"] =
+        inside != null
+          ? subject.groupId === inside
+            ? { kind: "keep" }
+            : { kind: "join", groupId: inside }
+          : subject.groupId != null
+            ? { kind: "leave" }
+            : { kind: "keep" };
+
+      onMove({
+        subject: { kind: "mod", id: moved },
+        placement: above
+          ? { at: "after", anchor: above.id }
+          : { at: "start" },
+        belonging,
+      });
+      setAnnouncement(
+        `${subject.name} moved to position ${to + 1} of ${nextVisible.length}.`,
+      );
+    },
+    [filtered, mods, onMove],
+  );
+
+  /** Move one mod one place, for anybody who cannot drag. */
+  const nudge = useCallback(
+    (index: number, delta: number) => {
+      const target = index + delta;
+      if (target < 0 || target >= filtered.length) return;
+      const next = filtered.map((m) => m.id);
+      const [held] = next.splice(index, 1);
+      next.splice(target, 0, held);
+      onDrop(next);
+    },
+    [filtered, onDrop],
+  );
+
+  /** Move a whole group above or below the section next to it. */
+  const nudgeGroup = useCallback(
+    (groupId: number, delta: number) => {
+      const index = sections.findIndex((s) => s.group?.id === groupId);
+      const neighbour = sections[index + delta];
+      if (index < 0 || !neighbour) return;
+      onMove({
+        subject: { kind: "group", id: groupId },
+        placement:
+          delta < 0
+            ? { at: "before", anchor: neighbour.items[0].id }
+            : { at: "after", anchor: neighbour.items[neighbour.items.length - 1].id },
+        belonging: { kind: "keep" },
+      });
+    },
+    [sections, onMove],
+  );
+
   function applyBulk(enabled: boolean) {
     onToggleMany(selectedIds, enabled);
     clearSelection();
@@ -533,13 +754,9 @@ export function ModsScreen({
     setNaming(false);
   }
 
-  function toggleCategory(name: string) {
-    setCollapsed((prev) => {
-      const next = new Set(prev);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
+  function assignSelection(groupId: number | null) {
+    onAssignToGroup(groupId, selectedIds);
+    clearSelection();
   }
 
   if (mods.length === 0) {
@@ -603,6 +820,35 @@ export function ModsScreen({
 
         <select
           className="select"
+          value={group}
+          onChange={(e) => patch({ group: e.target.value })}
+          aria-label="Filter by group"
+        >
+          <option value="all">All groups</option>
+          <option value="none">Ungrouped</option>
+          {groups.map((g) => (
+            <option key={g.id} value={String(g.id)}>
+              {g.name}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="select"
+          value={conflictFilter}
+          onChange={(e) =>
+            patch({ conflicts: e.target.value as Criteria["conflicts"] })
+          }
+          aria-label="Filter by file conflicts"
+        >
+          <option value="all">Any conflicts</option>
+          <option value="overwriting">Overwriting something</option>
+          <option value="overwritten">Being overwritten</option>
+          <option value="clean">Sharing no files</option>
+        </select>
+
+        <select
+          className="select"
           value={sort}
           onChange={(e) => patch({ sort: e.target.value as SortKey })}
           aria-label="Sort mods"
@@ -612,6 +858,14 @@ export function ModsScreen({
           <option value="size">Size</option>
           <option value="added">Recently added</option>
         </select>
+
+        <button
+          className="btn sm"
+          onClick={() => onCreateGroup("New group")}
+          title="Make a new group at the end of the order"
+        >
+          <Icon.plus size={14} /> Group
+        </button>
       </div>
 
       {/* Saved filters. Hidden entirely when there is nothing saved and nothing
@@ -707,6 +961,25 @@ export function ModsScreen({
           <button className="btn sm" onClick={() => applyBulk(false)}>
             Disable
           </button>
+          <select
+            className="select sm"
+            value=""
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "") return;
+              assignSelection(v === "none" ? null : Number(v));
+            }}
+            aria-label="Put the selected mods in a group"
+          >
+            <option value="">Move to group…</option>
+            <option value="none">No group</option>
+            {groups.map((g) => (
+              <option key={g.id} value={String(g.id)} disabled={g.locked}>
+                {g.name}
+                {g.locked ? " (locked)" : ""}
+              </option>
+            ))}
+          </select>
           <button
             className="btn sm ghost"
             style={{ marginLeft: "auto" }}
@@ -717,19 +990,20 @@ export function ModsScreen({
         </div>
       )}
 
-      {sort === "order" && onOpenLoadOrder && (
-        <div className="row">
+      {sort !== "order" && (
+        <div className="row order-note">
+          <Icon.info size={14} />
           <span className="card-hint">
-            The number on each row is the position the game loads that mod in.
-            You set the order on its own screen, where searching and filtering
-            here cannot get in the way.
+            Sorted by {sort === "added" ? "date added" : sort}, so there is
+            nowhere for a drag to put anything. Switch back to load order to
+            rearrange.
           </span>
           <button
-            className="btn sm"
-            onClick={onOpenLoadOrder}
+            className="btn sm ghost"
             style={{ marginLeft: "auto", flexShrink: 0 }}
+            onClick={() => patch({ sort: "order" })}
           >
-            <Icon.grip size={14} /> Open load order
+            Sort by load order
           </button>
         </div>
       )}
@@ -743,25 +1017,67 @@ export function ModsScreen({
           <div>Try a different search or clear the filters.</div>
         </div>
       ) : (
-        grouped.map(([name, items]) => (
-          <ModGroup
-            key={name}
-            name={name}
-            items={items}
-            open={!collapsed.has(name)}
-            virtualise={virtualise}
-            duration={duration}
-            appliedIds={appliedIds}
-            dirty={dirty}
-            selected={selected}
-            onHeadClick={() => toggleCategory(name)}
-            onToggle={onToggle}
-            onSelect={selectRow}
-            onConfigure={onConfigure}
-            onRemove={onRemove}
-          />
-        ))
+        <>
+          <div className="order-edge">Loads first</div>
+          <Reorder.Group
+            axis="y"
+            // Ids, not mod objects: Reorder matches values by identity and
+            // every state update rebuilds the mod objects, so objects break
+            // mid drag.
+            values={filtered.map((m) => m.id)}
+            onReorder={onDrop}
+            className="order-list"
+            data-busy={busy}
+            as="div"
+          >
+            {sections.map((section, index) => (
+              <GroupSection
+                key={section.group?.id ?? `loose-${section.items[0].id}`}
+                first={index === 0}
+                last={index === sections.length - 1}
+                onNudge={nudge}
+                onNudgeGroup={nudgeGroup}
+                indexOf={indexOf}
+                group={section.group}
+                items={section.items}
+                virtualise={virtualise}
+                duration={duration}
+                appliedIds={appliedIds}
+                dirty={dirty}
+                selected={selected}
+                tallies={tallies}
+                nameById={nameById}
+                canDrag={canDrag}
+                busy={busy}
+                reduceMotion={!!reduceMotion}
+                onToggle={onToggle}
+                onSelect={selectRow}
+                onConfigure={onConfigure}
+                onRemove={onRemove}
+                onCollapseGroup={onCollapseGroup}
+                onRenameGroup={onRenameGroup}
+                onLockGroup={onLockGroup}
+                onDeleteGroup={onDeleteGroup}
+                onUngroup={(ids) => onAssignToGroup(null, ids)}
+              />
+            ))}
+          </Reorder.Group>
+          <div className="order-edge">Loads last, wins shared files</div>
+        </>
       )}
+
+      <ClaimsPanel
+        conflicts={conflicts}
+        overrides={overrides}
+        nameById={nameById}
+        busy={busy}
+        onOverride={onOverride}
+        onClearOverride={onClearOverride}
+      />
+
+      <div className="visually-hidden" role="status" aria-live="polite">
+        {announcement}
+      </div>
 
       {/* Drawn over the whole window rather than inside the list, because a
           drag lands wherever the pointer happens to be and the list may well be
@@ -790,56 +1106,242 @@ export function ModsScreen({
   );
 }
 
-/* ------------------------------------------------------------ one group --- */
+/* ---------------------------------------------------------- one section --- */
 
-function ModGroup({
-  name,
+const DRAG_SPRING = { type: "spring", stiffness: 600, damping: 40 } as const;
+
+/**
+ * One run of the list: either a named group with its members, or the mods that
+ * are in no group at all.
+ *
+ * A section is drawn from the mods, not from the group, so a group whose members
+ * are all filtered out is simply absent rather than shown as empty. The header
+ * is not a `Reorder.Item`: two nested reorder contexts would fight over the same
+ * pointer, so a block moves by its arrows, which also gives it the keyboard.
+ */
+function GroupSection({
+  group,
   items,
-  open,
   virtualise,
   duration,
   appliedIds,
   dirty,
   selected,
-  onHeadClick,
+  tallies,
+  nameById,
+  canDrag,
+  busy,
+  reduceMotion,
+  first,
+  last,
   onToggle,
   onSelect,
   onConfigure,
   onRemove,
+  onCollapseGroup,
+  onRenameGroup,
+  onLockGroup,
+  onDeleteGroup,
+  onUngroup,
+  onNudge,
+  onNudgeGroup,
+  indexOf,
 }: {
-  name: string;
+  group: ModGroupView | null;
   items: ModView[];
-  open: boolean;
   virtualise: boolean;
   duration: number;
   appliedIds: Set<string>;
   dirty: boolean;
   selected: Set<string>;
-  onHeadClick: () => void;
+  tallies: Map<string, Tally>;
+  nameById: Map<string, string>;
+  canDrag: boolean;
+  busy: boolean;
+  reduceMotion: boolean;
+  first: boolean;
+  last: boolean;
   onToggle: (m: ModView, enabled: boolean) => void;
   onSelect: (m: ModView, on: boolean, shiftKey: boolean) => void;
   onConfigure: (m: ModView) => void;
   onRemove: (m: ModView) => void;
+  onCollapseGroup: (groupId: number, collapsed: boolean) => void;
+  onRenameGroup: (groupId: number, name: string) => void;
+  onLockGroup: (groupId: number, locked: boolean) => void;
+  onDeleteGroup: (groupId: number) => void;
+  onUngroup: (ids: string[]) => void;
+  onNudge: (index: number, delta: number) => void;
+  onNudgeGroup: (groupId: number, delta: number) => void;
+  indexOf: (id: string) => number;
 }) {
+  const open = !group?.collapsed;
   const { setBodyEl, win } = useRowWindow(items.length, virtualise);
+  const slice = virtualise && open ? items.slice(win.start, win.end) : items;
   const enabledCount = items.filter((m) => m.enabled).length;
-  const slice = virtualise ? items.slice(win.start, win.end) : items;
+  const [renaming, setRenaming] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  const rows = (
+    <div className="mod-group-body" ref={setBodyEl}>
+      {open && win.padTop > 0 && (
+        <div
+          className="mod-rows-spacer"
+          style={{ height: win.padTop, flexShrink: 0 }}
+          aria-hidden="true"
+        />
+      )}
+
+      {(open ? slice : []).map((m) => (
+        <ModRow
+          key={m.id}
+          mod={m}
+          applied={appliedIds.has(m.id)}
+          dirty={dirty}
+          selected={selected.has(m.id)}
+          tally={tallies.get(m.id)}
+          nameById={nameById}
+          // A locked group's members are not draggable at all. The store
+          // refuses the move as well; this is so nobody spends a gesture
+          // finding that out.
+          canDrag={canDrag && !group?.locked}
+          lockedBy={group?.locked ? group.name : null}
+          busy={busy}
+          reduceMotion={reduceMotion}
+          onToggle={onToggle}
+          onSelect={onSelect}
+          onConfigure={onConfigure}
+          onRemove={onRemove}
+          onMoveUp={() => onNudge(indexOf(m.id), -1)}
+          onMoveDown={() => onNudge(indexOf(m.id), 1)}
+        />
+      ))}
+
+      {open && win.padBottom > 0 && (
+        <div
+          className="mod-rows-spacer"
+          style={{ height: win.padBottom, flexShrink: 0 }}
+          aria-hidden="true"
+        />
+      )}
+    </div>
+  );
+
+  if (!group) return rows;
 
   return (
-    <section className="mod-group">
-      <button
-        className="mod-group-head"
-        onClick={onHeadClick}
-        aria-expanded={open}
-      >
-        <span className={`chevron ${open ? "open" : ""}`}>
-          <Icon.chevronRight size={14} />
-        </span>
-        <span className="mod-group-name">{name}</span>
+    <section
+      className="mod-group"
+      data-color={group.color}
+      data-locked={group.locked}
+    >
+      <div className="mod-group-head">
+        <button
+          className="mod-group-toggle"
+          onClick={() => onCollapseGroup(group.id, open)}
+          aria-expanded={open}
+          title={open ? "Collapse this group" : "Expand this group"}
+        >
+          <span className={`chevron ${open ? "open" : ""}`}>
+            <Icon.chevronRight size={14} />
+          </span>
+        </button>
+
+        {renaming ? (
+          <input
+            className="input sm"
+            autoFocus
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => {
+              const name = draft.trim();
+              if (name) onRenameGroup(group.id, name);
+              setRenaming(false);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") e.currentTarget.blur();
+              if (e.key === "Escape") setRenaming(false);
+            }}
+            aria-label={`Rename ${group.name}`}
+          />
+        ) : (
+          <button
+            className="mod-group-name"
+            onDoubleClick={() => {
+              setDraft(group.name);
+              setRenaming(true);
+            }}
+            onClick={() => onCollapseGroup(group.id, open)}
+            title="Double click to rename"
+          >
+            {group.name}
+          </button>
+        )}
+
         <span className="mod-group-count">
           {enabledCount} of {items.length} enabled
         </span>
-      </button>
+
+        {group.locked && <Chip kind="accent">Locked</Chip>}
+
+        <div className="mod-group-actions">
+          <button
+            className="btn sm icon ghost"
+            onClick={() => onNudgeGroup(group.id, -1)}
+            disabled={first || busy}
+            aria-label={`Move ${group.name} up`}
+            title="Move this whole group up"
+          >
+            <span className="order-chev up">
+              <Icon.chevronDown size={14} />
+            </span>
+          </button>
+          <button
+            className="btn sm icon ghost"
+            onClick={() => onNudgeGroup(group.id, 1)}
+            disabled={last || busy}
+            aria-label={`Move ${group.name} down`}
+            title="Move this whole group down"
+          >
+            <span className="order-chev">
+              <Icon.chevronDown size={14} />
+            </span>
+          </button>
+          <button
+            className="btn sm icon ghost"
+            onClick={() => onLockGroup(group.id, !group.locked)}
+            aria-pressed={group.locked}
+            disabled={busy}
+            aria-label={
+              group.locked ? `Unlock ${group.name}` : `Lock ${group.name}`
+            }
+            title={
+              group.locked
+                ? "Unlock: these mods can be rearranged again"
+                : "Lock: keep these mods together, in this order"
+            }
+          >
+            {group.locked ? <Icon.lock size={14} /> : <Icon.unlock size={14} />}
+          </button>
+          <button
+            className="btn sm icon ghost"
+            onClick={() => onUngroup(items.map((m) => m.id))}
+            disabled={busy || group.locked}
+            aria-label={`Empty ${group.name}`}
+            title="Take every mod out of this group, leaving the order alone"
+          >
+            <Icon.minus size={14} />
+          </button>
+          <button
+            className="btn sm icon ghost"
+            onClick={() => onDeleteGroup(group.id)}
+            disabled={busy || group.locked}
+            aria-label={`Delete ${group.name}`}
+            title="Delete the group. Its mods stay where they are."
+          >
+            <Icon.trash size={14} />
+          </button>
+        </div>
+      </div>
 
       <AnimatePresence initial={false}>
         {open && (
@@ -850,40 +1352,7 @@ function ModGroup({
             transition={{ duration, ease: [0.16, 1, 0.3, 1] }}
             style={{ overflow: "hidden" }}
           >
-            {/* The spacers give the body the height it would have had with
-                every row mounted, so the height animation and the scrollbar
-                both behave exactly as they did before windowing. */}
-            <div className="mod-group-body" ref={setBodyEl}>
-              {win.padTop > 0 && (
-                <div
-                  className="mod-rows-spacer"
-                  style={{ height: win.padTop, flexShrink: 0 }}
-                  aria-hidden="true"
-                />
-              )}
-
-              {slice.map((m) => (
-                <ModRow
-                  key={m.id}
-                  mod={m}
-                  applied={appliedIds.has(m.id)}
-                  dirty={dirty}
-                  selected={selected.has(m.id)}
-                  onToggle={onToggle}
-                  onSelect={onSelect}
-                  onConfigure={onConfigure}
-                  onRemove={onRemove}
-                />
-              ))}
-
-              {win.padBottom > 0 && (
-                <div
-                  className="mod-rows-spacer"
-                  style={{ height: win.padBottom, flexShrink: 0 }}
-                  aria-hidden="true"
-                />
-              )}
-            </div>
+            {rows}
           </motion.div>
         )}
       </AnimatePresence>
@@ -906,33 +1375,155 @@ function StatusChip({ mod, applied }: { mod: ModView; applied: boolean }) {
   );
 }
 
+/**
+ * What this mod takes from the others, and what they take from it.
+ *
+ * Two directional arrows rather than one number, because "wins 3, loses 2" reads
+ * as a score and the question people actually arrive with is directional: is
+ * anything I installed being buried, and by what. The names are in the tooltip
+ * because a row cannot hold five of them, and because the count is what gets
+ * scanned while the names are what get checked.
+ */
+function ConflictMarks({
+  tally,
+  nameById,
+}: {
+  tally: Tally | undefined;
+  nameById: Map<string, string>;
+}) {
+  const wins = winCount(tally);
+  const losses = lossCount(tally);
+  if (!tally || (wins === 0 && losses === 0)) {
+    return <span className="mod-conflicts" aria-hidden="true" />;
+  }
+  const names = (m: Map<string, number>) =>
+    [...m.entries()]
+      .map(([id, n]) => `${nameById.get(id) ?? id} (${n})`)
+      .join(", ");
+
+  return (
+    <span className="mod-conflicts">
+      {wins > 0 && (
+        <span
+          className="mod-conflict over"
+          title={`Overwrites ${names(tally.overwrites)}`}
+          aria-label={`Overwrites ${wins} files`}
+        >
+          <Icon.arrowUp size={12} />
+          {wins}
+        </span>
+      )}
+      {losses > 0 && (
+        <span
+          className="mod-conflict under"
+          title={`Overwritten by ${names(tally.overwrittenBy)}`}
+          aria-label={`Overwritten in ${losses} files`}
+        >
+          <Icon.arrowDown size={12} />
+          {losses}
+        </span>
+      )}
+    </span>
+  );
+}
+
 function ModRow({
   mod,
   applied,
   selected,
+  tally,
+  nameById,
+  canDrag,
+  lockedBy,
+  busy,
+  reduceMotion,
   onToggle,
   onSelect,
   onConfigure,
   onRemove,
+  onMoveUp,
+  onMoveDown,
 }: {
   mod: ModView;
   applied: boolean;
   dirty: boolean;
   selected: boolean;
+  tally: Tally | undefined;
+  nameById: Map<string, string>;
+  canDrag: boolean;
+  lockedBy: string | null;
+  busy: boolean;
+  reduceMotion: boolean;
   onToggle: (m: ModView, enabled: boolean) => void;
   onSelect: (m: ModView, on: boolean, shiftKey: boolean) => void;
   onConfigure: (m: ModView) => void;
   onRemove: (m: ModView) => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
 }) {
+  const controls = useDragControls();
+
+  /**
+   * Start a drag from anywhere on the card that is not something you can press.
+   *
+   * The grip stays, because a grip is how a row says it can be moved at all, and
+   * on a row carrying a checkbox, a switch and four buttons it is the only part
+   * guaranteed safe to grab. This makes the rest of the card work too, without
+   * stealing the clicks that belong to the controls sitting on it.
+   */
+  const startDrag = (e: React.PointerEvent) => {
+    if (!canDrag || busy) return;
+    if (
+      (e.target as HTMLElement).closest(
+        "button, input, select, a, label, [role=switch], [role=checkbox]",
+      )
+    ) {
+      return;
+    }
+    e.preventDefault();
+    controls.start(e);
+  };
+
   // The `mod-row` class stays on this element and the row keeps its height:
   // `useRowWindow` measures a live `.mod-row` to derive the windowing pitch, so
   // moving the class or making rows differ in height breaks scrolling for
   // everyone, not just for anyone using selection.
   return (
-    <div
+    <Reorder.Item
+      value={mod.id}
+      dragListener={false}
+      dragControls={canDrag ? controls : undefined}
+      drag={canDrag ? undefined : false}
       className={`mod-row ${mod.enabled ? "" : "disabled"}`}
       data-selected={selected}
+      whileDrag={{ scale: 1.01, zIndex: 2 }}
+      transition={reduceMotion ? { duration: 0 } : DRAG_SPRING}
+      onPointerDown={startDrag}
+      as="div"
     >
+      <span
+        className="drag-handle"
+        // touch-action is none in CSS so the browser cannot claim the gesture
+        // for scrolling before the drag starts.
+        onPointerDown={(e) => {
+          if (!canDrag || busy) return;
+          e.preventDefault();
+          controls.start(e);
+        }}
+        role="presentation"
+        aria-hidden="true"
+        data-fixed={!canDrag}
+        title={
+          lockedBy
+            ? `"${lockedBy}" is locked. Unlock it to move this mod.`
+            : canDrag
+              ? `Drag to move ${mod.name}`
+              : "Sort by load order to rearrange"
+        }
+      >
+        <Icon.grip size={16} />
+      </span>
+
       <Checkbox
         checked={selected}
         onChange={(on, ev) => onSelect(mod, on, ev.shiftKey)}
@@ -949,7 +1540,7 @@ function ModRow({
         label={`Enable ${mod.name}`}
       />
 
-      <div style={{ minWidth: 0, flex: 1 }}>
+      <div className="mod-main">
         <div className="row" style={{ gap: "var(--sp-3)" }}>
           <span className="mod-name truncate">{mod.name}</span>
           {mod.version && <Chip>{mod.version}</Chip>}
@@ -966,6 +1557,37 @@ function ModRow({
         </div>
       </div>
 
+      <ConflictMarks tally={tally} nameById={nameById} />
+
+      <span className="mod-id mono" title="Nexus mod id">
+        {mod.nexusModId != null ? `#${mod.nexusModId}` : ""}
+      </span>
+
+      <div className="order-move">
+        <button
+          className="btn sm icon ghost"
+          onClick={onMoveUp}
+          disabled={!canDrag}
+          aria-label={`Move ${mod.name} up`}
+          title="Move up, loads earlier"
+        >
+          <span className="order-chev up">
+            <Icon.chevronDown size={14} />
+          </span>
+        </button>
+        <button
+          className="btn sm icon ghost"
+          onClick={onMoveDown}
+          disabled={!canDrag}
+          aria-label={`Move ${mod.name} down`}
+          title="Move down, wins more files"
+        >
+          <span className="order-chev">
+            <Icon.chevronDown size={14} />
+          </span>
+        </button>
+      </div>
+
       <button className="btn sm" onClick={() => onConfigure(mod)}>
         Configure
       </button>
@@ -977,6 +1599,124 @@ function ModRow({
       >
         <Icon.trash size={14} />
       </button>
-    </div>
+    </Reorder.Item>
+  );
+}
+
+/* ------------------------------------------------------- contested files --- */
+
+/**
+ * The files more than one mod claims, and the pin that settles one.
+ *
+ * Kept on this screen rather than left behind with the load order screen it came
+ * from: load order already decides every one of these, so the place to see the
+ * exceptions is the place the order is arranged. Pinning changes who wins one
+ * file and nothing else, which is why it is a separate act from moving the mod.
+ */
+function ClaimsPanel({
+  conflicts,
+  overrides,
+  nameById,
+  busy,
+  onOverride,
+  onClearOverride,
+}: {
+  conflicts: ConflictView[];
+  overrides: Record<string, string>;
+  nameById: Map<string, string>;
+  busy: boolean;
+  onOverride: (path: string, modId: string) => void;
+  onClearOverride: (path: string) => void;
+}) {
+  if (conflicts.length === 0) return null;
+  const nameOf = (id: string) => nameById.get(id) ?? id;
+
+  return (
+    <section className="card stack">
+      <div className="row order-head">
+        <div className="order-head-main">
+          <div className="card-title">Files claimed by more than one mod</div>
+          <div className="card-hint">
+            Load order already decides each of these. Pin a different mod to win
+            one file: that changes who wins the file and nothing else, and the
+            mod itself stays where it is in the order.
+          </div>
+        </div>
+        <Chip>{conflicts.length}</Chip>
+      </div>
+
+      <div className="order-claims">
+        {conflicts.map((c) => {
+          const pinned: string | undefined = overrides[c.path];
+          const winner = pinned ?? c.winner;
+          // A pin can outlive the mod it names. Keep it in the list so it can
+          // be seen and cleared rather than silently disappearing.
+          const choices =
+            pinned && !c.contenders.includes(pinned)
+              ? [...c.contenders, pinned]
+              : c.contenders;
+          const stale = !!pinned && !nameById.has(pinned);
+
+          return (
+            <div className="order-claim" key={c.path}>
+              <div className="order-claim-head">
+                <span className="mono order-path" title={c.path}>
+                  {truncatePath(c.path, 72)}
+                </span>
+                {pinned && <Chip kind="accent">Pinned</Chip>}
+                {stale && <Chip kind="warn">Not in your library</Chip>}
+              </div>
+
+              {stale && (
+                <div className="order-stale">
+                  The pinned mod is no longer installed. Unpin the file to hand
+                  it back to load order.
+                </div>
+              )}
+
+              <div
+                className="order-choices"
+                role="group"
+                aria-label={`Choose which mod wins ${c.path}`}
+              >
+                {choices.map((id) => {
+                  const active = id === winner;
+                  return (
+                    <button
+                      key={id}
+                      type="button"
+                      className={`order-choice ${active ? "active" : ""}`}
+                      aria-pressed={active}
+                      disabled={busy}
+                      onClick={() => onOverride(c.path, id)}
+                    >
+                      <span className="order-choice-name truncate">
+                        {nameOf(id)}
+                      </span>
+                      {active && (
+                        <span className="order-choice-why">
+                          {pinned ? "pinned" : "by load order"}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+
+                {pinned && (
+                  <button
+                    type="button"
+                    className="btn sm ghost"
+                    disabled={busy}
+                    onClick={() => onClearOverride(c.path)}
+                  >
+                    Unpin
+                  </button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }

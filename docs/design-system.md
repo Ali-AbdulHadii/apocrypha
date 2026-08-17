@@ -1069,7 +1069,7 @@ because the toolbar has no visible labels.
 
 ---
 
-### 6.11 Mod group (collapsible category)
+### 6.11 Mod group (a named block of the load order)
 
 **Class:** `.mod-group`, `.mod-group-head`, `.mod-group-name`, `.mod-group-count`,
 `.mod-group-body`, `.chevron`, `.chevron.open`
@@ -1087,9 +1087,24 @@ with `--ease-out`; the body animates `height: 0 -> auto` and `opacity: 0 -> 1` o
 with `overflow: hidden`. Collapsed state is per-category and held in a `Set` in component
 state.
 
-**Rule.** Categories come from mod metadata; anything without one lands in
-"Uncategorised". Groups are always sorted alphabetically, so the list does not reshuffle
-when a mod is toggled.
+**Colour and lock.** The group's colour is a 3px stripe on the leading edge, never a
+fill: a filled header competes with the rows it introduces, while a stripe is findable
+while scrolling and costs the content nothing. `data-color` selects a token
+(`--group-accent`, `--group-warning`, `--group-info`, `--group-success`), never a stored
+hex value, so a retheme moves every group with it. `data-locked="true"` darkens the header
+to `--bg-active` and pins the action row visible.
+
+**Actions.** The header's six controls live in `.mod-group-actions`, hidden at rest and
+revealed on hover or focus-within: a header carrying six buttons at all times reads as a
+toolbar rather than as a label. They stay keyboard reachable whether or not they are
+drawn. A locked group keeps them visible, because the lock is the thing you most need to
+be able to undo.
+
+**Rule.** A section is a *group*, not a category. Categories are a fact about a mod and
+belong in the filter; a group is a decision somebody made about their order, so it can be
+named, coloured, collapsed, locked and dragged as a block. Sections are built from the
+mods in order, so a group whose members are all filtered out is simply absent rather than
+drawn empty.
 
 ---
 
@@ -1101,16 +1116,35 @@ when a mod is toggled.
 
 **Anatomy.** Left to right, gap `--sp-4`:
 
-1. `.drag-handle` (grip icon, 14px) when reordering is possible, otherwise `.mod-order`, a
-   right-aligned tabular priority number with `min-width: 24px`.
-2. The `Switch`.
-3. A flexible text block with `min-width: 0`: a row of `.mod-name` (14px / 600 /
-   `-0.01em`, `.truncate`), an optional version `Chip`, and a status chip; then
+1. `.drag-handle` (grip, 16px, `--text-secondary`, `--text-primary` on row hover).
+2. The selection `Checkbox`.
+3. `.mod-order`, a right-aligned tabular priority number with `min-width: 24px`.
+4. The `Switch`.
+5. `.mod-main`, a flexible text block with `min-width: 0`: a row of `.mod-name` (14px /
+   600 / `-0.01em`, `.truncate`), an optional version `Chip`, and a status chip; then
    `.mod-meta` at 13px `--text-tertiary` with author, selected options out of total,
    file count and size, separated by middots.
-4. A `.btn.sm` (Configure).
+6. `.mod-conflicts`, two optional directional marks. `.over` (`Icon.arrowUp`, count) is
+   files this mod takes; `.under` (`Icon.arrowDown`, count) is files it loses. Width is
+   reserved whether or not there is anything to draw, so a row does not reflow when a
+   reorder changes who wins. Winning is not good news and losing is not bad news, so
+   `.over` is `--text-secondary` on `--bg-hover` and only `.under` carries `--warning`:
+   colouring both as success and danger would tell people to fix something that works.
+7. `.mod-id`, the Nexus id as `#12604`, tabular, `min-width: 7ch`, right aligned, so the
+   ids form a column that can be read down rather than a ragged edge read across.
+8. `.order-move`, the up and down buttons, which are how the order is reachable from a
+   keyboard.
+9. A `.btn.sm` (Configure) and a `.btn.sm.icon.ghost` (remove).
 
-Container: `--bg-raised`, 1px `--border`, `--radius-sm`, padding `--sp-4`.
+Container: `--bg-raised`, 1px `--border`, `--radius-sm`, padding `--sp-2 --sp-3`. Denser
+than a browsing row on purpose: this list is read by scanning down a column, so the
+vertical rhythm matters more than the breathing room.
+
+**The whole card is a drag surface.** `onPointerDown` on the row starts the drag unless
+the event began inside a `button, input, select, a, label, [role=switch], [role=checkbox]`,
+so the controls on the row keep their clicks. The grip stays regardless, because a grip is
+how a row says it can be moved at all. `user-select: none` on the row is not optional: a
+drag starting on a mod's name would otherwise sweep a text selection across the list.
 
 **Status chip logic:**
 
@@ -1130,9 +1164,12 @@ strength. Dragging sets `--accent-border` plus `--bg-hover` and lifts to `z-inde
 with `whileDrag={{ scale: 1.01 }}`. Enter and exit are springs (stiffness 420, damping 34)
 with `layout` so neighbours slide rather than jump.
 
-**Drag handle.** `cursor: grab`, `:active` becomes `grabbing`, `touch-action: none`,
-padding `--sp-2` with `margin: calc(var(--sp-2) * -1)` so the hit target grows without
-changing layout. Hover fills `--bg-hover` at `--radius-xs`. Reordering uses framer-motion
+**Drag handle.** Two vertical bars, not six dots. The dots version drew zero-length
+segments and relied on the round cap to render them, so each came out at exactly the
+stroke width: 1.5 on a 24 grid is one physical pixel at 16px. The control that says "this
+row moves" was invisible on every screen that used it. `cursor: grab`, `:active` becomes
+`grabbing`, `touch-action: none`, and the hit target is padded beyond the bars it draws.
+Hover fills `--bg-hover` at `--radius-xs`. Reordering uses framer-motion
 `Reorder.Group` / `Reorder.Item` with `dragListener={false}` and explicit `dragControls`,
 so only the grip starts a drag. Dragging is disabled unless the list is in load order with
 no search and no filters, and a `.card-hint` says so when it is unavailable.

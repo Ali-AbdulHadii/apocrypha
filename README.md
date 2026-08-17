@@ -15,7 +15,7 @@ MIT licence. Linux (x86_64), Steam and Proton.
 
 **Early development.** Version 0.2, Phase 3. Six game profiles ship today, and the deployment engine has been exercised end to end against real segmented installers but not yet against a wide spread of community mods. Expect rough edges, expect the UI to change, and keep a backup of anything you cannot re-download. The safety machinery (vault, journal, hash-guarded rollback) is the part that has had the most attention, because it is the part that can ruin your day if it is wrong.
 
-Phase 2 added the things a library needs once it stops being small: applying is interruptible and reports real progress, the game folder can be checked against the change log and repaired, load order has its own screen with per-file overrides, and the mod list windows itself so a few hundred mods stay smooth.
+Phase 2 added the things a library needs once it stops being small: applying is interruptible and reports real progress, the game folder can be checked against the change log and repaired, load order and the library are one searchable list with per-file overrides, and it windows itself so a few hundred mods stay smooth.
 
 Known gaps today:
 
@@ -37,7 +37,8 @@ What works today:
 - **Install wizard for segmented installers.** Options, roles and radio sets are derived from the mod's own payload and metadata, not from a hardcoded list. Independent choices stay independent instead of collapsing into one giant radio group.
 - **Profiles.** Separate selections per profile, so a "clean run" profile and a "everything on" profile can coexist over the same installed mods.
 - **Enable and disable without deleting.** Staged payloads live in Apocrypha's own directory. Turning a mod off removes its deployed files, not your download.
-- **Load order on its own screen.** A flat, always-draggable list with keyboard move controls, showing how many contested files each mod wins and loses. Mods stays a library you browse; ordering is its own job.
+- **One list that is both the library and the load order.** Search, filter and rearrange in the same place: drag a mod by its card or its grip, or move it with the keyboard. Each row carries its position, its Nexus id, and arrows saying how many files it takes from other mods and how many it loses to them, so "what is burying my textures" is answered by looking rather than by opening anything. Dragging works while the list is filtered, because a drop says "after this mod" rather than "at row seven", which means the same thing whatever is hidden.
+- **Groups, and locks that hold.** Name a block of mods, colour it, collapse it, and lock it. A locked group keeps its mods together and in the order you put them: nothing can be dropped between them and none of them can be pulled out until you unlock it. The refusal lives in the database rather than in the screen, so it holds for the command line and for anything that rearranges the list later.
 - **Plugin order on its own screen**, for Creation Engine games. A game's plugin list is a named list of files rather than a priority per mod, so it gets its own screen: drag or use the arrows, switch a plugin on or off, and see the master block the engine loads first drawn as the boundary it is. What a plugin depends on is read out of the file's own header, so it can tell you when one loads before something it needs and offer the single move that fixes it. Every change is written to the game's list straight away — vaulted and journaled first, like everything else that writes.
 - **Conflict detection, and per-file overrides.** Before anything is written, you get the list of files two mods both want and which one wins. You can pin a single file to a different mod without reordering anything, so you can take one mod's mesh and another's texture.
 - **Dry run preview.** The full plan (every file, every destination, the placement method chosen) without touching the game directory.
@@ -56,8 +57,7 @@ What works today:
 | Screen | What it is for |
 | --- | --- |
 | Library | Detected games, the Steam root and Proton prefix found for each, and the mod loader setup. |
-| Mods | The library you browse: search, filter by state or category, enable, disable, reconfigure, remove. |
-| Load order | The sequence you arrange. Flat, always draggable, keyboard reachable, and it shows which contested files each mod wins and loses. |
+| Mods | The library and the load order, in one list. Search, filter, enable, disable, reconfigure, remove, group, lock, and drag to rearrange. Shows each mod's position, Nexus id, and which contested files it wins and loses. |
 | Downloads | Transfers in progress, files ready to install, and anything already sitting in your downloads folder. |
 | Profiles | Independent sets of mods, options and order over the same installed library. |
 | Changes | The dry run before you apply, and the check that your game folder still matches what was written. |
@@ -295,7 +295,7 @@ game, with the safety machinery built first.
 
 - **Phase 2, trustworthy at scale.** Mostly done. Apply progress and
   cancellation, verify-and-repair against the journal, per-file conflict
-  overrides, a dedicated load order screen, and a mod list that stays usable at
+  overrides, groups that can be locked, and a mod list that stays usable at
   two hundred mods have all landed. Mod updates from Nexus are the remaining
   piece: the database records which Nexus mod and file each install came from,
   but nothing checks for a newer one yet.
