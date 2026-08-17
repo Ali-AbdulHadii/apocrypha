@@ -301,6 +301,7 @@ mod tests {
             loader: Some(LoaderSpec {
                 name: "REFramework".into(),
                 kind: LoaderKind::DllProxy,
+                executable: None,
                 proxy_dll: Some("dinput8.dll".into()),
                 also_provides: vec![],
                 data_dirs: vec![],

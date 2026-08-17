@@ -333,6 +333,12 @@ fn validate(profile: &GameProfile) -> Result<(), String> {
         for dir in &l.data_dirs {
             paths.push(("a loader data directory", dir));
         }
+        if let Some(exe) = &l.executable {
+            // Joined onto the game directory and handed to a process, which
+            // makes it the most consequential single string a published profile
+            // can carry.
+            paths.push(("the loader executable", exe));
+        }
     }
     if let Some(chain) = &profile.pak_chain {
         // A filename rather than a path, and it is built from by formatting, so
@@ -530,6 +536,8 @@ struct WireLoader {
     name: String,
     kind: String,
     #[serde(default)]
+    executable: Option<String>,
+    #[serde(default)]
     proxy_dll: Option<String>,
     #[serde(default)]
     also_provides: Vec<String>,
@@ -650,8 +658,16 @@ impl WireProfile {
                 name: l.name,
                 kind: match l.kind.as_str() {
                     "dll-proxy" => LoaderKind::DllProxy,
+                    "launcher" => LoaderKind::Launcher,
+                    // A kind this build has never heard of reads as no loader
+                    // rather than as the nearest one. Guessing would mean
+                    // provisioning something for a loader whose mechanism is
+                    // unknown; reading it as absent means the game installs
+                    // mods exactly as before and says nothing about a loader,
+                    // which is the same answer an older build already gives.
                     _ => LoaderKind::None,
                 },
+                executable: l.executable,
                 proxy_dll: l.proxy_dll,
                 also_provides: l.also_provides,
                 data_dirs: l.data_dirs,
@@ -990,6 +1006,61 @@ mod tests {
                 "the refusal should say what was wrong: {refused}"
             );
         }
+    }
+
+    /// A launcher is a published profile naming an executable this application
+    /// will start. Worth pinning field by field for that reason alone.
+    #[test]
+    fn a_published_launcher_arrives_as_one() {
+        use apoc_domain::LoaderKind;
+
+        let document = WILDS.replace(
+            r#""kind": "dll-proxy""#,
+            r#""kind": "launcher", "executable": "skse64_loader.exe""#,
+        );
+        assert_ne!(document, WILDS, "the fixture no longer has the kind");
+
+        let loader = parse(&document).loader.expect("a loader");
+        assert_eq!(loader.kind, LoaderKind::Launcher);
+        assert_eq!(loader.launcher_executable(), Some("skse64_loader.exe"));
+    }
+
+    /// The executable is joined onto the game directory and handed to a
+    /// process, which makes it the most consequential single string a published
+    /// profile carries.
+    #[test]
+    fn a_published_launcher_cannot_choose_what_gets_executed() {
+        // The backslash is doubled twice over: once for Rust, once more so the
+        // JSON document carries a single escaped backslash rather than an
+        // invalid escape sequence.
+        for escape in ["../../../../bin/sh", "/bin/sh", "sub\\\\dir.exe"] {
+            let document = WILDS.replace(
+                r#""kind": "dll-proxy""#,
+                &format!(r#""kind": "launcher", "executable": "{escape}""#),
+            );
+            let refused = parse_document(&document)
+                .expect_err(&format!("{escape} should be refused"))
+                .to_string();
+            assert!(
+                refused.contains("leaves the directory"),
+                "the refusal should say what was wrong: {refused}"
+            );
+        }
+    }
+
+    /// An older build meeting a kind it has never heard of.
+    #[test]
+    fn an_unknown_loader_kind_reads_as_no_loader_rather_than_the_nearest_one() {
+        use apoc_domain::LoaderKind;
+
+        let document = WILDS.replace(r#""kind": "dll-proxy""#, r#""kind": "vfs-overlay""#);
+        let loader = parse(&document).loader.expect("the section still parses");
+
+        assert_eq!(
+            loader.kind,
+            LoaderKind::None,
+            "guessing would mean provisioning for a mechanism this build does not know"
+        );
     }
 
     /// A plugin list names a directory inside the user's Proton prefix and the

@@ -139,6 +139,7 @@ pub fn run() {
             commands::detect_game,
             commands::game_art,
             commands::launch_game,
+            commands::launch_with_loader,
             commands::game_for_domain,
             commands::set_game_path,
             commands::game_db_status,

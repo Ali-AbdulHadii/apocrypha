@@ -70,6 +70,15 @@ pub enum LoaderKind {
     None,
     /// A DLL proxy loader (e.g. REFramework via `dinput8.dll`).
     DllProxy,
+    /// A separate executable the user runs *instead of* the game, which starts
+    /// the game itself once its own hooks are in place — a script extender, as
+    /// SKSE is for Creation Engine.
+    ///
+    /// Different from [`Self::DllProxy`] in the one way that matters: nothing
+    /// needs provisioning. There is no DLL for Wine to prefer and no registry
+    /// value to write. The extender is installed like any other mod and then
+    /// has to be *started*, which is the whole of what this kind adds.
+    Launcher,
 }
 
 /// Proton-specific loader provisioning knobs. These are the crux of Linux
@@ -93,6 +102,13 @@ pub struct ProtonLoaderSpec {
 pub struct LoaderSpec {
     pub name: String,
     pub kind: LoaderKind,
+    /// The executable a [`LoaderKind::Launcher`] ships, e.g. `skse64_loader.exe`.
+    ///
+    /// Game-relative, and in practice a bare filename: a script extender sits
+    /// beside the game binary because that is where the game's own launcher
+    /// looks for it.
+    #[serde(default)]
+    pub executable: Option<String>,
     /// The proxy DLL that must exist for the loader to run (real copy, never
     /// linked). Game-relative, so it may name a subdirectory: REFramework wants
     /// `dinput8.dll` in the game root, RED4ext wants `bin/x64/winmm.dll`.
@@ -122,6 +138,19 @@ pub struct LoaderSpec {
 }
 
 impl LoaderSpec {
+    /// The executable to run instead of the game, for a launcher.
+    ///
+    /// `None` for every other kind, so a caller cannot read a launcher path off
+    /// a DLL-proxy profile that happens to carry the field. A profile declaring
+    /// `launcher` without one is refused when it is parsed, so a launcher that
+    /// reaches this always answers.
+    pub fn launcher_executable(&self) -> Option<&str> {
+        match self.kind {
+            LoaderKind::Launcher => self.executable.as_deref(),
+            _ => None,
+        }
+    }
+
     /// The registry key name for the proxy DLL: its file stem, never its path.
     /// Wine's `DllOverrides` are keyed by module name, so `bin/x64/winmm.dll`
     /// registers as `winmm`.
@@ -445,6 +474,7 @@ mod tests {
         LoaderSpec {
             name: "L".into(),
             kind: LoaderKind::DllProxy,
+            executable: None,
             proxy_dll: Some(dll.into()),
             also_provides: vec![],
             data_dirs: vec![],

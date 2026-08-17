@@ -119,6 +119,14 @@ export interface GameView {
   detected: boolean;
   loaderName: string | null;
   loaderDll: string | null;
+  /** How the loader works, as the profile spells it: "dll-proxy", "launcher"
+   * or "none". A launcher is run instead of the game; a proxy is registered in
+   * the Proton prefix. */
+  loaderKind: string | null;
+  /** The executable a launcher runs, e.g. "skse64_loader.exe". */
+  loaderExecutable: string | null;
+  /** Whether the loader would actually run: the override registered for a
+   * proxy, the executable present on disk for a launcher. */
   loaderOverrideActive: boolean;
   steamLaunchOptions: string | null;
   nexusDomain: string | null;
@@ -568,6 +576,10 @@ export const api = {
    * because Steam's own answer to an unknown app id is to open a store page.
    */
   launchGame: (gameId: string) => call<void>("launch_game", { gameId }),
+  /** Start the game's script extender instead of the game. Steam's own launch
+   * cannot reach it: `rungameid` starts the executable Steam registered. */
+  launchWithLoader: (gameId: string) =>
+    call<void>("launch_with_loader", { gameId }),
   // Which game a Nexus domain belongs to, so a download lands under the right
   // one instead of whichever game happens to be on screen.
   gameForDomain: (domain: string) =>

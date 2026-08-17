@@ -73,6 +73,84 @@ impl GameInstall {
             .and_then(|p| p.parent().map(|pfx_parent| pfx_parent.join("pfx/user.reg")))
             .or_else(|| self.proton_prefix.as_ref().map(|p| p.join("user.reg")))
     }
+
+    /// `compatdata/<appid>`, the **parent** of the prefix.
+    ///
+    /// The distinction is not cosmetic and is easy to get wrong in one
+    /// direction only: `STEAM_COMPAT_DATA_PATH` names this directory, while
+    /// [`Self::proton_prefix`] names `pfx` inside it. Passing the prefix leaves
+    /// Proton building a second prefix one level down, in a game's compatdata,
+    /// which looks like the game losing its save data.
+    pub fn compat_data_dir(&self) -> Option<PathBuf> {
+        self.proton_prefix
+            .as_ref()
+            .and_then(|p| p.parent())
+            .map(Path::to_path_buf)
+    }
+}
+
+/// A Proton build's name as Steam records it, reduced to something comparable.
+///
+/// `config.vdf` stores the mapping as an internal name (`proton_experimental`)
+/// while the build lives in a directory named for people (`Proton - Experimental`).
+/// Neither is derivable from the other by rule, so both are folded: lowercased,
+/// with every run of non-alphanumerics becoming one `_`.
+fn normalized_tool_name(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut underscore = false;
+    for c in s.chars() {
+        if c.is_ascii_alphanumeric() {
+            out.push(c.to_ascii_lowercase());
+            underscore = false;
+        } else if !underscore && !out.is_empty() {
+            out.push('_');
+            underscore = true;
+        }
+    }
+    out.trim_end_matches('_').to_string()
+}
+
+/// The `proton` script for a build Steam has mapped to a game.
+///
+/// Two places hold them and they are named differently in each. A custom build
+/// dropped into `compatibilitytools.d` is stored under a directory that *is*
+/// its name, and Valve's own builds live in `steamapps/common` under a display
+/// name that has to be matched loosely.
+///
+/// Returns `None` rather than a guess: running the wrong Proton build against
+/// an existing prefix is how a prefix gets upgraded in place and stops working
+/// with the build the game actually uses. The caller reports the name it could
+/// not resolve, which is the one piece of information that makes it fixable.
+pub fn proton_binary(steam_root: &Path, tool_name: &str) -> Option<PathBuf> {
+    let direct = steam_root
+        .join("compatibilitytools.d")
+        .join(tool_name)
+        .join("proton");
+    if direct.is_file() {
+        return Some(direct);
+    }
+
+    let wanted = normalized_tool_name(tool_name);
+    if wanted.is_empty() {
+        return None;
+    }
+    for dir in ["compatibilitytools.d", "steamapps/common"] {
+        let Ok(entries) = std::fs::read_dir(steam_root.join(dir)) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            if normalized_tool_name(name) != wanted {
+                continue;
+            }
+            let candidate = entry.path().join("proton");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
 }
 
 fn home() -> PathBuf {
@@ -330,6 +408,82 @@ pub fn find_game(app_id: u32) -> Option<GameInstall> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a Steam root holding both shapes of Proton install.
+    fn steam_root_with_proton() -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        for (parent, name) in [
+            ("compatibilitytools.d", "GE-Proton11-3"),
+            ("steamapps/common", "Proton - Experimental"),
+            ("steamapps/common", "Proton Hotfix"),
+        ] {
+            let tool = dir.path().join(parent).join(name);
+            std::fs::create_dir_all(&tool).unwrap();
+            std::fs::write(tool.join("proton"), b"#!/usr/bin/env python3\n").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn a_custom_build_is_found_under_the_name_it_is_stored_as() {
+        let root = steam_root_with_proton();
+        let found = proton_binary(root.path(), "GE-Proton11-3").expect("the directory is the name");
+        assert!(found.ends_with("compatibilitytools.d/GE-Proton11-3/proton"));
+    }
+
+    /// The case the whole function exists for: `config.vdf` says
+    /// `proton_experimental` and the directory is called `Proton - Experimental`.
+    #[test]
+    fn a_valve_build_is_found_despite_being_named_differently() {
+        let root = steam_root_with_proton();
+        let found = proton_binary(root.path(), "proton_experimental").expect("matched loosely");
+        assert!(found.ends_with("steamapps/common/Proton - Experimental/proton"));
+
+        let hotfix = proton_binary(root.path(), "proton_hotfix").expect("matched loosely");
+        assert!(hotfix.ends_with("steamapps/common/Proton Hotfix/proton"));
+    }
+
+    /// Never a guess. Running the wrong build against an existing prefix can
+    /// upgrade it in place, and the caller can only report what it cannot find
+    /// if this declines to invent an answer.
+    #[test]
+    fn an_unknown_or_empty_build_resolves_to_nothing() {
+        let root = steam_root_with_proton();
+        assert!(proton_binary(root.path(), "proton_9").is_none());
+        assert!(proton_binary(root.path(), "").is_none());
+        assert!(proton_binary(root.path(), "   ").is_none());
+    }
+
+    /// A directory with the right name but no `proton` script is not a build.
+    #[test]
+    fn a_directory_without_the_script_is_not_a_build() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join("steamapps/common/Proton - Experimental")).unwrap();
+        assert!(proton_binary(dir.path(), "proton_experimental").is_none());
+    }
+
+    #[test]
+    fn the_compat_data_dir_is_the_parent_of_the_prefix() {
+        let install = GameInstall {
+            app_id: 489830,
+            name: None,
+            install_dir: PathBuf::from("/games/Skyrim"),
+            library: PathBuf::from("/games"),
+            proton_prefix: Some(PathBuf::from("/games/steamapps/compatdata/489830/pfx")),
+            proton_tool: None,
+        };
+        assert_eq!(
+            install.compat_data_dir(),
+            Some(PathBuf::from("/games/steamapps/compatdata/489830")),
+            "STEAM_COMPAT_DATA_PATH names compatdata/<appid>, not the pfx inside it"
+        );
+
+        let none = GameInstall {
+            proton_prefix: None,
+            ..install
+        };
+        assert!(none.compat_data_dir().is_none());
+    }
 
     #[test]
     fn discovery_never_panics_and_returns_existing_dirs_only() {

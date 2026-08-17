@@ -185,6 +185,145 @@ pub fn launch_game(app: tauri::AppHandle, game_id: String) -> CmdResult<()> {
         .map_err(err)
 }
 
+/// Everything needed to start a script extender, decided but not yet run.
+///
+/// Separated from the spawning so the decision is testable: every refusal below
+/// is a branch worth proving, and none of them should need a Steam install, a
+/// Proton build or a game to reach.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LoaderLaunch {
+    /// The `proton` script for the build Steam has mapped to this game.
+    pub program: PathBuf,
+    /// `["run", "<game dir>/<executable>"]`.
+    pub args: Vec<String>,
+    /// The two variables Proton needs to find the prefix it already built.
+    pub env: Vec<(String, String)>,
+}
+
+/// Work out how to start a game's script extender, or say why it cannot be.
+///
+/// Takes what it needs rather than reading the world, so a test can hand it a
+/// temporary directory. `steam_root` is the Steam installation root and
+/// `install` is what detection found.
+pub(crate) fn loader_launch(
+    profile: &GameProfile,
+    install: &apoc_steam::GameInstall,
+    steam_root: &Path,
+) -> CmdResult<LoaderLaunch> {
+    let loader = profile
+        .loader
+        .as_ref()
+        .ok_or_else(|| format!("{} has no script extender to start.", profile.name))?;
+    let executable = loader.launcher_executable().ok_or_else(|| {
+        format!(
+            "{}'s loader is not something this can start on its own.",
+            profile.name
+        )
+    })?;
+
+    // Installed as a mod, like everything else. Being absent is the ordinary
+    // case before the first Apply, so it is named rather than reported as a
+    // failure of the launcher.
+    let exe = install.install_dir.join(executable);
+    if !exe.is_file() {
+        return Err(format!(
+            "{} is not installed. Add it as a mod and press Apply first.",
+            loader.name
+        ));
+    }
+
+    // Proton builds its prefix the first time Steam runs the game. Without one
+    // there is nothing to run inside, and building it here would mean guessing
+    // at the settings Steam is about to choose.
+    let compat_data = install.compat_data_dir().ok_or_else(|| {
+        format!(
+            "Start {} through Steam once first, so it creates the Proton prefix {} runs inside.",
+            profile.name, loader.name
+        )
+    })?;
+
+    let tool = install.proton_tool.as_deref().ok_or_else(|| {
+        format!(
+            "Steam has not recorded which Proton build {} uses. Set one in the game's compatibility settings.",
+            profile.name
+        )
+    })?;
+    let program = apoc_steam::proton_binary(steam_root, tool).ok_or_else(|| {
+        format!(
+            "The Proton build Steam maps to {} ({tool}) could not be found.",
+            profile.name
+        )
+    })?;
+
+    Ok(LoaderLaunch {
+        args: vec!["run".to_string(), exe.to_string_lossy().into_owned()],
+        env: vec![
+            (
+                "STEAM_COMPAT_DATA_PATH".to_string(),
+                compat_data.to_string_lossy().into_owned(),
+            ),
+            (
+                "STEAM_COMPAT_CLIENT_INSTALL_PATH".to_string(),
+                steam_root.to_string_lossy().into_owned(),
+            ),
+        ],
+        program,
+    })
+}
+
+/// Start the game's script extender instead of the game.
+///
+/// The counterpart to [`launch_game`], and the reason it needed one: Steam's
+/// `rungameid` URL starts the executable Steam has registered and nothing else,
+/// so a script extender — which is a *different* executable the user runs
+/// instead of the game — is unreachable through it.
+///
+/// This does spawn a process, which [`launch_game`]'s reasoning argues against.
+/// The distinction is that it chooses nothing: the Proton build is the one
+/// Steam already mapped to this game, the prefix is the one Steam already
+/// built, and the process is started and forgotten rather than supervised. What
+/// it avoids is the alternative that was on the table — swapping the game's
+/// executable on disk, as Mod Organizer does — which would put a file this
+/// application wrote in the path of every ordinary launch.
+#[tauri::command(async)]
+pub fn launch_with_loader(state: State<AppState>, game_id: String) -> CmdResult<()> {
+    let profile = effective_profile(&state, &game_id)?;
+    let app_id = profile.detection.steam_app_id;
+
+    let install = apoc_steam::find_game(app_id).ok_or_else(|| {
+        format!(
+            "{} does not look installed. Use Find game if Steam has it somewhere unusual.",
+            profile.name
+        )
+    })?;
+    let steam_root = apoc_steam::discover_steam_roots()
+        .into_iter()
+        .next()
+        .ok_or_else(|| "No Steam installation was found.".to_string())?;
+
+    let launch = loader_launch(&profile, &install, &steam_root.path)?;
+
+    let mut command = std::process::Command::new(&launch.program);
+    command.args(&launch.args).current_dir(&install.install_dir);
+    for (key, value) in &launch.env {
+        command.env(key, value);
+    }
+    // Started and forgotten. Waiting would block this command for as long as
+    // somebody plays, and the app has nothing useful to do with the exit code
+    // of a game it did not configure.
+    command.spawn().map_err(|e| {
+        format!(
+            "{} could not be started: {e}",
+            profile
+                .loader
+                .as_ref()
+                .map(|l| l.name.as_str())
+                .unwrap_or("The script extender")
+        )
+    })?;
+    Ok(())
+}
+
 /// List all known games, merged with detection and stored configuration.
 #[tauri::command(async)]
 pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
@@ -218,20 +357,36 @@ pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
         let user_reg = proton_prefix
             .as_ref()
             .map(|p| PathBuf::from(p).join("user.reg"));
-        // "Ready" means every override the loader declares is registered, not
-        // just the first: Cyberpunk needs both RED4ext's and CET's, and half a
-        // stack reported as ready is worse than reported as missing.
-        let loader_override_active = match (loader, &user_reg) {
-            (Some(l), Some(reg)) => {
-                let wanted = l.dll_overrides();
-                !wanted.is_empty()
-                    && wanted.iter().all(|(name, _)| {
-                        apoc_deploy::loader::read_override(reg, name)
-                            .map(|s| s.value.is_some())
-                            .unwrap_or(false)
-                    })
-            }
-            _ => false,
+        // "Ready" means the loader would actually run, and the two kinds are
+        // ready for different reasons.
+        //
+        // A DLL proxy is ready when every override it declares is registered,
+        // not just the first: Cyberpunk needs both RED4ext's and CET's, and half
+        // a stack reported as ready is worse than reported as missing.
+        //
+        // A launcher registers nothing — there is no DLL for Wine to prefer — so
+        // asking the registry would answer "never ready" for ever, and the
+        // Library's set-up button would offer to write an override for a DLL
+        // that does not exist. It is ready when its executable is on disk, which
+        // is what installing it as a mod puts there.
+        let loader_override_active = match loader {
+            Some(l) if l.kind == apoc_domain::LoaderKind::Launcher => l
+                .launcher_executable()
+                .zip(install_dir.as_ref())
+                .is_some_and(|(exe, dir)| PathBuf::from(dir).join(exe).is_file()),
+            Some(l) => match &user_reg {
+                Some(reg) => {
+                    let wanted = l.dll_overrides();
+                    !wanted.is_empty()
+                        && wanted.iter().all(|(name, _)| {
+                            apoc_deploy::loader::read_override(reg, name)
+                                .map(|s| s.value.is_some())
+                                .unwrap_or(false)
+                        })
+                }
+                None => false,
+            },
+            None => false,
         };
 
         out.push(GameView {
@@ -246,6 +401,17 @@ pub fn list_games(state: State<AppState>) -> CmdResult<Vec<GameView>> {
             proton_tool: detected.as_ref().and_then(|d| d.proton_tool.clone()),
             loader_name: loader.map(|l| l.name.clone()),
             loader_dll: loader.and_then(|l| l.proxy_dll.clone()),
+            // Kebab-case, matching the profile's own spelling, so the interface
+            // compares against the string a reader of the TOML would expect.
+            loader_kind: loader.map(|l| {
+                match l.kind {
+                    apoc_domain::LoaderKind::None => "none",
+                    apoc_domain::LoaderKind::DllProxy => "dll-proxy",
+                    apoc_domain::LoaderKind::Launcher => "launcher",
+                }
+                .to_string()
+            }),
+            loader_executable: loader.and_then(|l| l.launcher_executable().map(str::to_string)),
             loader_override_active,
             steam_launch_options: loader.and_then(|l| l.proton.steam_launch_options.clone()),
             nexus_domain: p.nexus_domain.clone(),
@@ -2191,6 +2357,137 @@ mod tests {
         // links use; `run` exists but does not cover non-Steam shortcuts.
         assert_eq!(steam_run_url(1091500), "steam://rungameid/1091500");
         assert_eq!(steam_run_url(2246340), "steam://rungameid/2246340");
+    }
+
+    /// A Steam install and a game laid out the way detection would find them.
+    fn skse_world() -> (tempfile::TempDir, apoc_steam::GameInstall) {
+        let dir = tempfile::tempdir().unwrap();
+        let steam_root = dir.path().join("Steam");
+        let game_dir = steam_root.join("steamapps/common/Skyrim Special Edition");
+        let compat = steam_root.join("steamapps/compatdata/489830");
+
+        std::fs::create_dir_all(&game_dir).unwrap();
+        std::fs::create_dir_all(compat.join("pfx")).unwrap();
+        std::fs::create_dir_all(steam_root.join("steamapps/common/Proton - Experimental")).unwrap();
+        std::fs::write(
+            steam_root.join("steamapps/common/Proton - Experimental/proton"),
+            b"#!/usr/bin/env python3\n",
+        )
+        .unwrap();
+        std::fs::write(game_dir.join("skse64_loader.exe"), b"MZ").unwrap();
+
+        let install = apoc_steam::GameInstall {
+            app_id: 489830,
+            name: Some("Skyrim".into()),
+            install_dir: game_dir,
+            library: steam_root.join("steamapps"),
+            proton_prefix: Some(compat.join("pfx")),
+            proton_tool: Some("proton_experimental".into()),
+        };
+        (dir, install)
+    }
+
+    fn skyrim() -> GameProfile {
+        LocalBuiltin::new()
+            .get("skyrim-special-edition")
+            .expect("skyrim ships")
+    }
+
+    #[test]
+    fn starting_a_script_extender_runs_it_inside_the_prefix_steam_already_built() {
+        let (dir, install) = skse_world();
+        let steam_root = dir.path().join("Steam");
+
+        let launch = loader_launch(&skyrim(), &install, &steam_root).expect("everything is here");
+
+        assert!(launch.program.ends_with("Proton - Experimental/proton"));
+        assert_eq!(launch.args[0], "run", "the verb Proton takes");
+        assert!(
+            launch.args[1].ends_with("Skyrim Special Edition/skse64_loader.exe"),
+            "{}",
+            launch.args[1]
+        );
+
+        let env: std::collections::HashMap<_, _> = launch.env.into_iter().collect();
+        assert_eq!(
+            env["STEAM_COMPAT_DATA_PATH"],
+            steam_root
+                .join("steamapps/compatdata/489830")
+                .to_string_lossy(),
+            "names compatdata/<appid>, never the pfx inside it: pointing at pfx \
+             makes Proton build a second prefix one level down"
+        );
+        assert_eq!(
+            env["STEAM_COMPAT_CLIENT_INSTALL_PATH"],
+            steam_root.to_string_lossy()
+        );
+    }
+
+    #[test]
+    fn an_extender_that_is_not_installed_yet_says_to_install_it() {
+        let (dir, install) = skse_world();
+        std::fs::remove_file(install.install_dir.join("skse64_loader.exe")).unwrap();
+
+        let err = loader_launch(&skyrim(), &install, &dir.path().join("Steam"))
+            .expect_err("nothing to run");
+        assert!(err.contains("SKSE"), "{err}");
+        assert!(err.contains("Apply"), "it names the way out: {err}");
+    }
+
+    /// Proton builds the prefix the first time Steam runs the game. Building one
+    /// here would mean guessing at settings Steam is about to choose.
+    #[test]
+    fn a_game_never_launched_under_proton_is_told_to_start_once_first() {
+        let (dir, install) = skse_world();
+        let install = apoc_steam::GameInstall {
+            proton_prefix: None,
+            ..install
+        };
+
+        let err = loader_launch(&skyrim(), &install, &dir.path().join("Steam"))
+            .expect_err("no prefix to run inside");
+        assert!(err.contains("through Steam once first"), "{err}");
+    }
+
+    #[test]
+    fn a_proton_build_that_cannot_be_found_is_named_rather_than_guessed_at() {
+        let (dir, install) = skse_world();
+        let install = apoc_steam::GameInstall {
+            proton_tool: Some("proton_9".into()),
+            ..install
+        };
+
+        let err = loader_launch(&skyrim(), &install, &dir.path().join("Steam"))
+            .expect_err("no such build");
+        assert!(err.contains("proton_9"), "{err}");
+    }
+
+    /// The button exists for launchers. A DLL-proxy game has nothing to start
+    /// this way, and saying so beats starting the wrong thing.
+    #[test]
+    fn a_dll_proxy_game_has_no_script_extender_to_start() {
+        let (dir, install) = skse_world();
+        let cyberpunk = LocalBuiltin::new().get("cyberpunk-2077").unwrap();
+
+        let err = loader_launch(&cyberpunk, &install, &dir.path().join("Steam"))
+            .expect_err("REFramework is not a launcher");
+        assert!(err.contains("not something this can start"), "{err}");
+    }
+
+    #[test]
+    fn a_game_with_no_loader_at_all_is_refused_plainly() {
+        let (dir, install) = skse_world();
+        // Built by removing the loader rather than by naming a game that has
+        // none: which games declare one is a fact about the profiles, and this
+        // test is about the branch, not about the shipped set.
+        let bare = GameProfile {
+            loader: None,
+            ..skyrim()
+        };
+
+        let err = loader_launch(&bare, &install, &dir.path().join("Steam"))
+            .expect_err("no loader declared");
+        assert!(err.contains("no script extender"), "{err}");
     }
 
     #[test]
