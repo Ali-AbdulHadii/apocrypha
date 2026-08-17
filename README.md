@@ -21,7 +21,7 @@ Known gaps today:
 
 | Gap | Detail |
 | --- | --- |
-| Archive formats | ZIP, 7z and RAR. Encrypted and multi-volume archives are not handled. |
+| Archive formats | ZIP, 7z and RAR. A zip is read whichever codec its author picked — deflate, deflate64, LZMA, XZ, bzip2, zstd, PPMd, and the implode/shrink methods old archives still use. Encrypted and multi-volume archives are not handled. |
 | Plugin sorting | The plugin list is managed and editable, but Apocrypha has no opinion about what a good order is. There is no LOOT-style automatic sort: it tells you when a plugin loads before something it depends on and offers the move that fixes it, and the arranging is yours. |
 | Loader binary | Apocrypha configures REFramework for Proton but does not redistribute `dinput8.dll`. You supply it. SKSE installs correctly but nothing reports whether it is set up, because the profile schema has no launcher concept yet — only "no loader" and "DLL proxy". |
 | Platform | Linux is the supported target and the only one that ships a build. The engine compiles for Windows, finds Steam games there, and registers `nxm://` in the registry, but nothing else has been tested and there is no installer. macOS is untouched. |
