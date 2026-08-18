@@ -71,6 +71,7 @@ import {
   type Tally,
 } from "../lib/conflicts";
 import { useFileDrop } from "../lib/drop";
+import { moveFromReorder } from "../lib/reorder";
 import {
   DEFAULT_CRITERIA,
   isDefault,
@@ -627,6 +628,16 @@ export function ModsScreen({
   );
 
   /**
+   * The row currently under the pointer's grip, so a drop can say what moved.
+   *
+   * Reorder reports the sequence, and a sequence cannot tell a row dragged down
+   * past its neighbour from that neighbour dragged up past it — both produce the
+   * same array. Only the gesture knows, so the gesture records it. See
+   * `lib/reorder.ts` for what reading it wrong did to the top of the list.
+   */
+  const draggingId = useRef<string | null>(null);
+
+  /**
    * Turn what the list looks like after a drag into what the person did.
    *
    * Reorder hands back the whole visible sequence, which is not what gets sent:
@@ -634,58 +645,31 @@ export function ModsScreen({
    * it names nothing on the other side. What is sent is the mod that moved and
    * the row it came to rest under, both of which mean the same thing in a
    * filtered list as in a whole one.
-   *
-   * Group membership is read from the rows either side of where it landed. A mod
-   * that comes to rest strictly between two members of one group has been put in
-   * that group; anywhere else, it has been taken out of whatever it was in.
-   * Dropping *onto* the boundary is deliberately "out": joining is the change
-   * that surprises people, so it takes the unambiguous gesture.
    */
   const onDrop = useCallback(
-    (nextVisible: string[]) => {
+    (nextVisible: string[], subjectId?: string) => {
       const before = filtered.map((m) => m.id);
-      const at = nextVisible.findIndex((id, i) => id !== before[i]);
-      if (at < 0) return;
-
-      // Two rows differ after any swap. The one that moved is whichever of them
-      // is not simply the other one displaced.
-      const candidate = nextVisible[at];
-      const moved =
-        before.indexOf(candidate) === at + 1 ? before[at] : candidate;
-      const to = nextVisible.indexOf(moved);
-      if (to < 0) return;
-
-      const byId = new Map(mods.map((m) => [m.id, m]));
-      const subject = byId.get(moved);
-      if (!subject) return;
-
-      const above = to > 0 ? byId.get(nextVisible[to - 1]) : undefined;
-      const below =
-        to + 1 < nextVisible.length ? byId.get(nextVisible[to + 1]) : undefined;
-      const inside =
-        above?.groupId != null && above.groupId === below?.groupId
-          ? above.groupId
-          : null;
-
-      const belonging: OrderMove["belonging"] =
-        inside != null
-          ? subject.groupId === inside
-            ? { kind: "keep" }
-            : { kind: "join", groupId: inside }
-          : subject.groupId != null
-            ? { kind: "leave" }
-            : { kind: "keep" };
-
-      onMove({
-        subject: { kind: "mod", id: moved },
-        placement: above
-          ? { at: "after", anchor: above.id }
-          : { at: "start" },
-        belonging,
-      });
-      setAnnouncement(
-        `${subject.name} moved to position ${to + 1} of ${nextVisible.length}.`,
+      const rows = new Map(mods.map((m) => [m.id, m]));
+      const move = moveFromReorder(
+        before,
+        nextVisible,
+        rows,
+        subjectId ?? draggingId.current ?? undefined,
       );
+      if (!move) return;
+
+      onMove(move);
+
+      // Always a mod: a group is only ever moved by the group controls, which
+      // call onMove themselves.
+      const moved = String(move.subject.id);
+      const name = rows.get(moved)?.name;
+      if (name) {
+        const to = nextVisible.indexOf(moved);
+        setAnnouncement(
+          `${name} moved to position ${to + 1} of ${nextVisible.length}.`,
+        );
+      }
     },
     [filtered, mods, onMove],
   );
@@ -698,7 +682,9 @@ export function ModsScreen({
       const next = filtered.map((m) => m.id);
       const [held] = next.splice(index, 1);
       next.splice(target, 0, held);
-      onDrop(next);
+      // Named outright: there is no drag behind this, and a one-place nudge is
+      // exactly the swap the sequence cannot describe on its own.
+      onDrop(next, held);
     },
     [filtered, onDrop],
   );
@@ -1025,7 +1011,7 @@ export function ModsScreen({
             // every state update rebuilds the mod objects, so objects break
             // mid drag.
             values={filtered.map((m) => m.id)}
-            onReorder={onDrop}
+            onReorder={(next: string[]) => onDrop(next)}
             className="order-list"
             data-busy={busy}
             as="div"
@@ -1037,6 +1023,7 @@ export function ModsScreen({
                 last={index === sections.length - 1}
                 onNudge={nudge}
                 onNudgeGroup={nudgeGroup}
+                onGrab={(id) => (draggingId.current = id)}
                 indexOf={indexOf}
                 group={section.group}
                 items={section.items}
@@ -1145,6 +1132,7 @@ function GroupSection({
   onUngroup,
   onNudge,
   onNudgeGroup,
+  onGrab,
   indexOf,
 }: {
   group: ModGroupView | null;
@@ -1172,6 +1160,7 @@ function GroupSection({
   onUngroup: (ids: string[]) => void;
   onNudge: (index: number, delta: number) => void;
   onNudgeGroup: (groupId: number, delta: number) => void;
+  onGrab: (id: string | null) => void;
   indexOf: (id: string) => number;
 }) {
   const open = !group?.collapsed;
@@ -1204,6 +1193,7 @@ function GroupSection({
           // refuses the move as well; this is so nobody spends a gesture
           // finding that out.
           canDrag={canDrag && !group?.locked}
+          onGrab={onGrab}
           lockedBy={group?.locked ? group.name : null}
           busy={busy}
           reduceMotion={reduceMotion}
@@ -1443,6 +1433,7 @@ function ModRow({
   onRemove,
   onMoveUp,
   onMoveDown,
+  onGrab,
 }: {
   mod: ModView;
   applied: boolean;
@@ -1460,6 +1451,7 @@ function ModRow({
   onRemove: (m: ModView) => void;
   onMoveUp: () => void;
   onMoveDown: () => void;
+  onGrab: (id: string | null) => void;
 }) {
   const controls = useDragControls();
 
@@ -1485,6 +1477,7 @@ function ModRow({
       return;
     }
     e.preventDefault();
+    onGrab(mod.id);
     controls.start(e);
   };
 
@@ -1505,6 +1498,11 @@ function ModRow({
       className={`mod-row ${mod.enabled ? "" : "disabled"}`}
       data-selected={selected}
       whileDrag={{ scale: 1.01, zIndex: 2 }}
+      // Cleared here rather than in the drop handler: Reorder reports the
+      // sequence while the pointer is still down and can report it more than
+      // once, so the grip has to outlive every one of those and end with the
+      // gesture.
+      onDragEnd={() => onGrab(null)}
       transition={reduceMotion ? { duration: 0 } : DRAG_SPRING}
       onPointerDown={startDrag}
       as="div"
@@ -1516,6 +1514,7 @@ function ModRow({
         onPointerDown={(e) => {
           if (!canDrag || busy) return;
           e.preventDefault();
+          onGrab(mod.id);
           controls.start(e);
         }}
         role="presentation"
